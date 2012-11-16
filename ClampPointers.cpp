@@ -1,3 +1,12 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * The Original Contributor of this Source Code Form is Nokia Research
+ * Center Tampere (http://webcl.nokiaresearch.com).
+ */
+
 #include "llvm/Pass.h"
 #include "llvm/Function.h"
 #include "llvm/Module.h"
@@ -21,21 +30,36 @@
 
 using namespace llvm;
 
-namespace Vincit
+namespace WebCL
 {
 
-	/// Module pass that implements algorithm for restricting memory accesses to locally reserved addresses.
-	/// This is done dynamically by tracking minimum and maximum addresses of each memory allocation.
-	/// The address is clamped to a valid memory region before the pointer is dereferenced.
-	/// When memory allocation goes out of scope, both upper and lower limits are set to null preventing any attempt to access memory at such addresses.
-	/// The algorithm itself consists of several IR-transforming phases, first of which is to find static memory allocations.
-	/// For this purpose, an instance of smart pointer struct is created after every llvm::AllocaInst instruction that contains the dynamic information about
-	/// the current address of the pointer along its minimum and maximum addresses.
-	/// In the next phase, algorithm iterates over the def-use chain of the each previously found memory allocation and replaces all of its uses with a smart pointer.
-	/// A third phase is needed for transforming the function arguments and call sites.
-	/// At first, each function declaration is inspected and pointer parameters are replaced with smart pointers and corresponding transformation is done on the function body.
-	/// Then, each llvm::CallInst checked and if it was previously transformed, its arguments are replaced by corresponding smart pointers.
-	/// Finally, a software implementation of a clamp function is inserted if the platform does not support it on the hardware and call for it is added for each pointer dereferencing operation (identified by llvm::GetElementPtrInst).
+	/// Module pass that implements algorithm for restricting memory
+	/// accesses to locally reserved addresses.  This is done
+	/// dynamically by tracking minimum and maximum addresses of each
+	/// memory allocation.  The address is clamped to a valid memory
+	/// region before the pointer is dereferenced.  When memory
+	/// allocation goes out of scope, both upper and lower limits are
+	/// set to null preventing any attempt to access memory at such
+	/// addresses.  The algorithm itself consists of several
+	/// IR-transforming phases, first of which is to find static memory
+	/// allocations.  For this purpose, an instance of smart pointer
+	/// struct is created after every llvm::AllocaInst instruction that
+	/// contains the dynamic information about the current address of
+	/// the pointer along its minimum and maximum addresses.  In the
+	/// next phase, algorithm iterates over the def-use chain of the
+	/// each previously found memory allocation and replaces all of its
+	/// uses with a smart pointer.  A third phase is needed for
+	/// transforming the function arguments and call sites.  At first,
+	/// each function declaration is inspected and pointer parameters
+	/// are replaced with smart pointers and corresponding
+	/// transformation is done on the function body.  Then, each
+	/// llvm::CallInst checked and if it was previously transformed, its
+	/// arguments are replaced by corresponding smart pointers.
+	/// Finally, a software implementation of a clamp function is
+	/// inserted if the platform does not support it on the hardware and
+	/// call for it is added for each pointer dereferencing operation
+	/// (identified by llvm::GetElementPtrInst).
+
   struct ClampPointers :
 		public ModulePass
 	{
@@ -1112,5 +1136,5 @@ namespace Vincit
   };
 }
   
-char Vincit::ClampPointers::ID = 0;
-static RegisterPass<Vincit::ClampPointers> X("clamp-pointers", "Safe array accesses using clamp.", false, false);
+char WebCL::ClampPointers::ID = 0;
+static RegisterPass<WebCL::ClampPointers> X("clamp-pointers", "Safe array accesses using clamp.", false, false);
