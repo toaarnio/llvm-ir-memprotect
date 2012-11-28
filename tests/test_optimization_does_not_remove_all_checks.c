@@ -2,10 +2,10 @@
  * Test program to see if checks stays correctly in code after pass.
  */
 
-// RUN: clang -c $TEST_SRC -Os -emit-llvm -o $OUT_FILE.optimized.bc &&
+// RUN: clang -c $TEST_SRC -Oz -emit-llvm -o $OUT_FILE.optimized.bc &&
 // RUN: llvm-dis $OUT_FILE.optimized.bc &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.optimized.bc -o $OUT_FILE.clamped.ll &&
-// RUN: opt -Os -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll &&
+// RUN: opt -Oz -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll &&
 // RUN: echo "-- extracting main functions from .ll code" &&
 // RUN: sed -e ':a' -e 'N' -e '$!ba' -Ee 's/.*(define i32 @main[^}]*).*/\1/g' $OUT_FILE.clamped.optimized.ll > $OUT_FILE.clamped.main.ll &&
 // RUN: sed -e ':a' -e 'N' -e '$!ba' -Ee 's/.*(define i32 @main[^}]*).*/\1/g' $OUT_FILE.optimized.ll > $OUT_FILE.main.ll &&
