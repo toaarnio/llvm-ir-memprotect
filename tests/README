@@ -1,0 +1,34 @@
+= Ad-hoc test framework inspired by llvm testsuite =
+
+== Running tests ==
+
+./run_tests.sh [<test_file.(c|ll)>]
+
+If test_file is not given, runner finds all tests from current directory and runs them.
+
+== Writing new tests ==
+
+All test file names must be either:
+
+test_*.c
+
+or
+
+test_*.ll
+
+Each test file has execution instructions in the test file's comments. 
+
+For C code test comment can be e.g. 
+
+// RUN: clang -O3 $TEST_SRC -c -o -emit-llvm $OUT_FILE.bc && 
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers $OUT_FILE.bc -S -o $OUT_FILE.clamped.ll &&
+// RUN: grep "this must be found" $OUT_FILE.camped.ll
+
+Before running tests CLAMP_PLUGIN variable must be set.
+
+Variables that can be used in tests are:
+
+CLAMP_PLUGIN Absolute path to clamp_pointers plugin module
+TEST_SRC Source file of the test
+OUT_FILE File name which points to run_temp directory to prevent trashing test directory
+

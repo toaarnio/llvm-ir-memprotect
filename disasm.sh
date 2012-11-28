@@ -1,1 +1,0 @@
-llvm-dis < output.bc
