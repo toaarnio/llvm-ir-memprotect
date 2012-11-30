@@ -160,83 +160,99 @@ namespace WebCL {
       Value* index_a = args++;
       index_a->setName( "index" );
 
+      // new deref implementation written based on .ll from compiling and optimizing C
+      // struct SmartPointer { int32_t cur; int32_t* first; int32_t* last; };
+      // int32_t* deref(int32_t *ptr, struct SmartPointer *range, int32_t index) {
+      //  int32_t *ptr_index = ptr + index;
+      //  if (ptr_index > range->last) return range->last;
+      //  if (ptr_index < range->first) return range->first;
+      //  return ptr_index;
+      //}
+      //
+      // ---- >
+      //
+      // define i32* @deref(i32* %ptr, %struct.SmartPointer* nocapture %range, i32 %index) nounwind uwtable readonly optsize ssp minsize {
+      // entry:
+      //   %add.ptr = getelementptr inbounds i32* %ptr, i32 %index
+      //   %last = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 2
+      //   %0 = load i32** %last, align 4
+      //   %cmp = icmp ugt i32* %add.ptr, %0
+      //   br i1 %cmp, label %return, label %if.end
+      // if.end:                                           ; preds = %entry
+      //   %first = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 1
+      //   %1 = load i32** %first, align 4
+      //   %cmp2 = icmp ult i32* %add.ptr, %1
+      //   %.add.ptr = select i1 %cmp2, i32* %1, i32* %add.ptr
+      //   br label %return
+      // return:                                           ; preds = %if.end, %entry
+      //   %retval.0 = phi i32* [ %0, %entry ], [ %.add.ptr, %if.end ]
+      //   ret i32* %retval.0
+      // }
+
+
       BasicBlock* entry_block = BasicBlock::Create( c, "entry", deref );
-      BasicBlock* continue_block = BasicBlock::Create( c, "continue", deref );
+      BasicBlock* if_end_block = BasicBlock::Create( c, "if.end", deref );
+      BasicBlock* return_block = BasicBlock::Create( c, "return", deref );
       IRBuilder<> entry_builder( entry_block );
+      IRBuilder<> if_end_builder( if_end_block );
+      IRBuilder<> return_builder( return_block );
 
-      BasicBlock* min_block = BasicBlock::Create( c, "clamp_to_min", deref );
-      BasicBlock* max_block = BasicBlock::Create( c, "clamp_to_max", deref );
+      // dummy instructions to be able to create GEPs with helpers 
+      // (didn't wan't to overload generateGEP more to support adding to basic block)
+      // will be removed after function is ready
+      Twine name_ifend_start = "ifend_dummy";
+      AllocaInst* ifend_start = new AllocaInst( i32, 0, name_ifend_start, if_end_block );
 
-      BasicBlock* exit_block = BasicBlock::Create( c, "exit", deref );
-      IRBuilder<> exit_builder( exit_block );
+      // entry:
+      //   %add.ptr = getelementptr inbounds i32* %ptr, i32 %index
+      std::vector< Value* > values;
+      values.push_back( index_a );
+      ArrayRef< Value* > ref( values );
+      GetElementPtrInst* add_ptr_gep = GetElementPtrInst::Create( pointer_a, ref, "add.ptr", entry_block );
 
-      // in
-      Twine name_data = "smart_alloca";
-      AllocaInst* smart_alloca = new AllocaInst( smart, 0, name_data, entry_block );
-      StoreInst* smart_store = new StoreInst( range_a, smart_alloca, entry_block );
+      //   %last = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 2
+      GetElementPtrInst* last_gep = this->generateGEP( c,  range_a, 0, 2, add_ptr_gep, "last" );
 
-      UNUSED( smart_store );
+      //   %0 = load i32** %last, align 4
+      LoadInst* last_ptr_load = new LoadInst( last_gep, "last.prt.load", entry_block );
+      
+      //   %cmp = icmp ugt i32* %add.ptr, %0
+      ICmpInst* cmp = new ICmpInst( *entry_block, CmpInst::ICMP_UGT, add_ptr_gep, last_ptr_load, "cmp" );
 
-      Twine name_index = "smart_index";
-      AllocaInst* index_alloca = new AllocaInst( i32, 0, name_index, entry_block );
-      StoreInst* index_store = new StoreInst( index_a, index_alloca, entry_block );
-      LoadInst* index_load = new LoadInst( index_alloca, "store", entry_block );
+      //   br i1 %cmp, label %return, label %if.end
+      BranchInst* if_gt_bra = BranchInst::Create( return_block, if_end_block, cmp, entry_block );
 
-      UNUSED( index_store );
-      UNUSED( index_load );
+      // if.end:                                           ; preds = %entry
+      //   %first = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 1
+      GetElementPtrInst* first_gep = this->generateGEP( c,  range_a, 0, 1, ifend_start, "first" );
 
-      Twine name_ptr = "smart_ptr";
-      AllocaInst* ptr_alloca = new AllocaInst( i32p, 0, name_ptr, entry_block );
-      StoreInst* ptr_store = new StoreInst( pointer_a, ptr_alloca, entry_block );
+      //   %1 = load i32** %first, align 4
+      LoadInst* first_ptr_load = new LoadInst( first_gep, "first.ptr.load", if_end_block );
 
-      UNUSED( ptr_store );
+      //   %cmp2 = icmp ult i32* %add.ptr, %1
+      ICmpInst* cmp2 = new ICmpInst( *if_end_block, CmpInst::ICMP_ULT, add_ptr_gep, first_ptr_load, "cmp2" );
 
-      // out
-      Twine name_ret_alloca = "clamped_ptr";
-      AllocaInst* ret_alloca = new AllocaInst( i32p, 0, name_ret_alloca, entry_block );
+      //   %.add.ptr = select i1 %cmp2, i32* %1, i32* %add.ptr
+      SelectInst* _add_ptr = SelectInst::Create(cmp2, first_ptr_load, add_ptr_gep, ".add.ptr", if_end_block);
 
-      Twine name_ret_load = "ret_load";
-      LoadInst* ret_load = new LoadInst( ret_alloca, name_ret_load, exit_block );
+      //   br label %return
+      BranchInst* br_end = BranchInst::Create( return_block, if_end_block );
 
-      StoreInst* cur_store = new StoreInst( pointer_a, ret_alloca, entry_block );
+      // return:                                           ; preds = %if.end, %entry
+      //   %retval.0 = phi i32* [ %0, %entry ], [ %.add.ptr, %if.end ]
+      PHINode* retval_0 = PHINode::Create(_add_ptr->getType(), 2, "retval.0", return_block);
+      retval_0->addIncoming(last_ptr_load, entry_block);
+      retval_0->addIncoming(_add_ptr, if_end_block);
 
-      UNUSED( cur_store );
+      //   ret i32* %retval.0
+      ReturnInst* ret = ReturnInst::Create( c, retval_0, return_block );
 
-      GetElementPtrInst* min_gep = this->generateGEP( c, range_a, 0, 1, ret_alloca, "min_gep" );
-      Twine name_load_min = "min";
-      LoadInst* min_load = new LoadInst( min_gep, name_load_min );
-      min_load->insertAfter( min_gep );
+      // remove dummy place holder
+      ifend_start->eraseFromParent();
 
-      GetElementPtrInst* max_gep = this->generateGEP( c, range_a, 0, 2, ret_alloca, "max_gep" );
-      Twine name_load_max = "max";
-      LoadInst* max_load = new LoadInst( max_gep, name_load_max );
-      max_load->insertAfter( max_gep );
-
-      ReturnInst* ret = ReturnInst::Create( c, ret_load, exit_block );
-
+      UNUSED( if_gt_bra );
+      UNUSED( br_end );
       UNUSED( ret );
-
-      StoreInst* min_store = new StoreInst( min_load, ret_alloca, min_block );
-      StoreInst* max_store = new StoreInst( max_load, ret_alloca, max_block );
-
-      UNUSED( min_store );
-      UNUSED( max_store );
-
-      BranchInst* min_exit_bra = BranchInst::Create( exit_block, min_block );
-      BranchInst* max_exit_bra = BranchInst::Create( exit_block, max_block );
-
-      UNUSED( min_exit_bra );
-      UNUSED( max_exit_bra );
-
-      ICmpInst* min_cmp = new ICmpInst( *entry_block, CmpInst::ICMP_ULT, pointer_a, min_load, "less_than" );
-      ICmpInst* max_cmp = new ICmpInst( *entry_block, CmpInst::ICMP_UGT, pointer_a, max_load, "greater_than" );
-
-      BranchInst* min_bra = BranchInst::Create( min_block, continue_block, min_cmp, entry_block );
-      BranchInst* max_bra = BranchInst::Create( max_block, exit_block, max_cmp, continue_block );
-
-      UNUSED( min_bra );
-      UNUSED( max_bra );
-
     }
 
     void generateClamp( Module* module ) {
@@ -750,10 +766,6 @@ namespace WebCL {
       
       LLVMContext& c = F->getContext();
      
-      BasicBlock& block = F->getEntryBlock();
- 
-      BasicBlock::iterator i;
-
       // convert function signature
       std::vector< Type* > param_types;
       for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
@@ -837,7 +849,8 @@ namespace WebCL {
       }
 
       // find all array/pointer allocations and convert them to smart arrays
-      for( i = block.begin(); i != block.end(); ++i ) {
+      BasicBlock& block = F->getEntryBlock(); 
+      for( BasicBlock::iterator i = block.begin(); i != block.end(); ++i ) {
         if( llvm::AllocaInst* alloca = dyn_cast< llvm::AllocaInst >(i) ) {
           AllocaSet::iterator bl = mBlackList.find( alloca );
           if( bl != mBlackList.end() ) {
