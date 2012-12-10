@@ -31,7 +31,7 @@ Instructions
 
    cd ~/llvm
    
-   git clone https://github.com/toaarnio/llvm-ir-memprotect.git
+   git clone https://github.com/toaarnio/llvm-ir-memprotect.git passes/ClampPointers
 
 5. Build LLVM-IR-MemProtect:
 
