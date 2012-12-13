@@ -17,6 +17,7 @@
 
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include "llvm/IRBuilder.h"
@@ -201,42 +202,42 @@ namespace WebCL {
       // Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
         if (i->isIntrinsic()) {
-          errs() << "Skipping: " << i->getName() << " which is intrinsic\n";
+          DEBUG(dbgs() << "Skipping: " << i->getName() << " which is intrinsic\n");
           continue;
         }
         // actually this should not touch functions yet at all, just collect data which functions needs to be changed
         // now it still creates new function signatures and steals old function's name
-        errs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n";
+        DEBUG(dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n");
         createNewFunctionSignature( i, replacedFunctions, replacedArguments, safeFunctions, safeArguments );
-        errs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n";
+        DEBUG(dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n");
         sortInstructions( i,  calls, allocas, stores, loads );
       }
 
       // add smart allocas and generate initial smart pointer data
-      errs() << "\n --------------- CREATING SMART ALLOCAS FOR EVERYONE --------------\n";
+      DEBUG(dbgs() << "\n --------------- CREATING SMART ALLOCAS FOR EVERYONE --------------\n");
       createSmartAllocas(allocas, smartPointers);
 
       // some extra hint of debug...
       /*
       for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
         // loop through arguments and if type has changed, then create label to access original arg 
-        i->first->print(errs());
-        errs() << "\n";
+        i->first->print(dbgs());
+        dbgs() << "\n";
       }
       */
 
       // TODO: create smart pointer initializations for main function where we expect (int count, int8* argv[]) input
       // TODO: create smart pointer initializations for kernel function where we expect (int*, int) input
 
-      errs() << "\n --------------- FIXING SMART POINTER STORE OPERATIONS TO ALSO KEEP .Cur, .First and .Last UP-TO-DATE --------------\n";
+      DEBUG(dbgs() << "\n --------------- FIXING SMART POINTER STORE OPERATIONS TO ALSO KEEP .Cur, .First and .Last UP-TO-DATE --------------\n");
       fixStoreInstructions(stores, smartPointers);
 
-      errs() << "\n --------------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  --------------\n";
+      DEBUG(dbgs() << "\n --------------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  --------------\n");
       // gets rid of old functions, replaces calls to old functions and fix call arguments to 
       // use smart pointers in call parameters 
       fixCodeToUseReplacedFunctions(replacedFunctions, replacedArguments, calls, smartPointers);
 
-      // errs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n";
+      // dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n";
       // split last part of fixCodeToUseReplacedFunctions(replacedFunctions, replacedArguments, calls, smartPointers);
       // to be separate step
 
@@ -246,17 +247,17 @@ namespace WebCL {
       // ##########################################################################################
 
       // expand smart pointers to be able to find limits for uses of smart pointers (loads and geps mostly)
-      errs() << "\n --------------- EXPANDING SMARTPOINTER MAP TO ALSO CONTAIN LIMITS FOR USES OF ORIGINAL POINTERS --------------\n";
+      DEBUG(dbgs() << "\n --------------- EXPANDING SMARTPOINTER MAP TO ALSO CONTAIN LIMITS FOR USES OF ORIGINAL POINTERS --------------\n");
       expandSmartPointersResolvingToCoverUses(smartPointers);
 
-      errs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n";
+      DEBUG(dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n");
       addBoundaryChecks(stores, loads, smartPointers);
 
       /*
       for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
         // loop through arguments and if type has changed, then create label to access original arg 
-        i->second->print(errs());
-        errs() << "\n";
+        i->second->print(dbgs());
+        dbgs() << "\n";
       }
       */
 
@@ -283,16 +284,16 @@ namespace WebCL {
      */
     void addChecks(Value *ptrOperand, Instruction *inst, SmartPointerByValueMap &smartPointers) {
       if ( dyn_cast<AllocaInst>(ptrOperand) ) {
-        errs() << "Skipping direct alloca op: "; inst->print(errs()); errs() << "\n";
+        DEBUG(dbgs() << "Skipping direct alloca op: "; inst->print(dbgs()); dbgs() << "\n");
         return;
       } else if ( dyn_cast<GlobalValue>(ptrOperand) ) {
-        errs() << "Skipping direct load from global value: "; inst->print(errs()); errs() << "\n";
+        DEBUG(dbgs() << "Skipping direct load from global value: "; inst->print(dbgs()); dbgs() << "\n");
         return;
       }
 
       // find out which limits load has to respect and add boundary checks
       if ( smartPointers.count(ptrOperand) == 0 ) {
-        errs() << "When verifying: "; inst->print(errs()); errs() << "\n";
+        dbgs() << "When verifying: "; inst->print(dbgs()); dbgs() << "\n";
         assert(false && "Could not find limits to create protection!");
       }
       SmartPointer *limits = smartPointers[ptrOperand];
@@ -349,7 +350,7 @@ namespace WebCL {
       
       // fail block not created yet... create it
       if (!boundary_fail_block) {
-        errs() << "Creating fail block to function: " << F->getName() << "\n";
+        DEBUG(dbgs() << "Creating fail block to function: " << F->getName() << "\n");
         boundary_fail_block = BasicBlock::Create( c, boundary_fail_name, F );
         IRBuilder<> boundary_fail_builder( boundary_fail_block );
         Function *trapFn = Intrinsic::getDeclaration(F->getParent(), Intrinsic::trap);
@@ -386,8 +387,7 @@ namespace WebCL {
       // *   br i1 %4, label %boundary.check.failed, label %if.end
       BranchInst::Create( boundary_fail_block, end_block, cmp2, check_first_block );
 
-      errs() << "Created boundary check for: "; before->print(errs()); errs() << "\n";
-      F->print(errs());
+      DEBUG(dbgs() << "Created boundary check for: "; before->print(dbgs()); dbgs() << "\n");
     }
     
     void expandSmartPointersResolvingToCoverUses(SmartPointerByValueMap &smartPointers) {
@@ -422,11 +422,11 @@ namespace WebCL {
           continue;
         } else { 
           // notify about unexpected cannot be resolved cases for debug
-          errs() << "Cannot resolve limit for: "; use->print(errs()); errs() << "\n";
+          DEBUG(dbgs() << "Cannot resolve limit for: "; use->print(dbgs()); dbgs() << "\n");
           continue;
         }
 
-        errs() << "Use: "; use->print(errs()); errs() << " respects limits of: "; limits->smart->print(errs()); errs() << "\n";        
+        DEBUG(dbgs() << "Use: "; use->print(dbgs()); dbgs() << " respects limits of: "; limits->smart->print(dbgs()); dbgs() << "\n");
         derivedUses[use] = limits;
         resolveUses(use, limits, derivedUses);                
       }
@@ -456,11 +456,8 @@ namespace WebCL {
         return findLimitingFactor(newInst, trashcan);
 
       } else {
-        errs() << "Handling value: ";
-        op->print(errs());
-        errs() << "\n";
-        dyn_cast<Constant>(op)->print(errs());
-        errs() << "\n";
+        dbgs() << "Handling value: "; op->print(dbgs()); dbgs() << "\n";
+        dyn_cast<Constant>(op)->print(dbgs()); dbgs() << "\n";
         assert(false && "Don't know how to trace limiting operand for this structure.");
       }
     }
@@ -479,10 +476,8 @@ namespace WebCL {
         
         if ( dest->getType()->isPointerTy() && dyn_cast<PointerType>(dest->getType())->getElementType()->isPointerTy() ) {
 
-          errs() << "Found store to fix: ";
-          store->print(errs()); errs() << "\n";
-          src->print(errs());
-          errs() << "\n";
+          DEBUG(dbgs() << "Found store to fix: "; store->print(dbgs()); dbgs() << "\n");
+          DEBUG(src->print(dbgs()); dbgs() << "\n");
 
           assert (smartPointers.count(dest) > 0 && "Cannot find smart pointer for destination");
           SmartPointer *smartDest = smartPointers[dest];
@@ -522,9 +517,9 @@ namespace WebCL {
           }
           
           // fix limits and cur in smart pointer assignment
-          errs() << "#### FOUND LIMITS:\n";
-          first->print(errs()); errs() << "\n";
-          last->print(errs()); errs() << "\n";
+          DEBUG(dbgs() << "#### FOUND LIMITS:\n");
+          DEBUG(first->print(dbgs()); dbgs() << "\n");
+          DEBUG(last->print(dbgs()); dbgs() << "\n");
           
           StoreInst* firstStore = new StoreInst(first, smartDest->min);
           StoreInst* lastStore = new StoreInst(last, smartDest->max);
@@ -534,11 +529,11 @@ namespace WebCL {
           firstStore->insertAfter(store);
           curStore->insertAfter(store);
 
-          errs() << "-- Created smart store:\n";
-          store->print(errs()); errs() << "\n";
-          curStore->print(errs()); errs() << "\n";
-          firstStore->print(errs()); errs() << "\n";
-          lastStore->print(errs()); errs() << "\n";
+          DEBUG(dbgs() << "-- Created smart store:\n");
+          DEBUG(store->print(dbgs()); dbgs() << "\n");
+          DEBUG(curStore->print(dbgs()); dbgs() << "\n");
+          DEBUG(firstStore->print(dbgs()); dbgs() << "\n");
+          DEBUG(lastStore->print(dbgs()); dbgs() << "\n");
         }
       }
     }
@@ -634,9 +629,7 @@ namespace WebCL {
         
         Type* t = alloca->getAllocatedType();
 
-        errs() << "Creating smart pointer structures for: ";
-        alloca->print(errs());
-        errs() << " ---- ";
+        DEBUG(dbgs() << "Creating smart pointer structures for: "; alloca->print(dbgs()); dbgs() << " ---- ");
 
         // Treat array alloca special way, otherwise just treat pointer allocas.....
         Type *ptrType = NULL;
@@ -644,7 +637,7 @@ namespace WebCL {
         Instruction *last = NULL;
 
         if( ArrayType* a = dyn_cast< ArrayType >( t ) ) {
-          errs() << "It's an array!\n";
+          DEBUG(dbgs() << "It's an array!\n");
 
           Type* element_type = a->getElementType();
           assert(element_type->isIntegerTy(32) && "Currently pass supports only i32 type of alloca arrays.");
@@ -659,7 +652,7 @@ namespace WebCL {
 
         } else if (t->isPointerTy()) {
 
-          errs() << "It's a pointer!\n";
+          DEBUG(dbgs() << "It's a pointer!\n");
           LoadInst *alloca_load = new LoadInst(alloca);
           alloca_load->insertAfter(alloca);
           ptrType = t;
@@ -668,13 +661,13 @@ namespace WebCL {
 
         } else if (t->isIntegerTy()) {
 
-          errs() << "It's an integer!\n";
+          DEBUG(dbgs() << "It's an integer!\n");
           ptrType = PointerType::getUnqual( t );
           first = alloca;
           last = alloca;
           
         } else {
-          errs() << "It is an unhandled type, some day we need to implement this to make system work correctly!\n";
+          DEBUG(dbgs() << "It is an unhandled type, some day we need to implement this to make system work correctly!\n");
         }
 
         if (ptrType) {
@@ -820,34 +813,23 @@ namespace WebCL {
             initCurStore->insertAfter(newStore);
               
           } else {
-            errs() << "\n";
-            oldArg->use_begin()->print(errs());
-            errs() << "\n";
+            dbgs() << "\n"; oldArg->use_begin()->print(dbgs()); dbgs() << "\n";
             assert(false && 
                    "Unknown construct where pointer argument's use is not StoreInst");
           }
                 
         } // -- end arguments for loop
-
-        /*
-        errs() << "-------- Fixed function parameters and uses of original arguments ------------\n";
-        errs() << "-------- now only rerferences to old functions should be old calls ------------\n";
-        newFun->print(errs());
-        errs() << "------------------------------------------------------------------------------\n";        
-        */
       }  
       
       
       // --------- FIXING CALLS FROM OLD STYLE TO USE NEW FUNCTIONS -----------
       // ---------- basically all arguments etc. needs to be fixed ------------
-      errs() << "------------- FIXING CALLS TO USE NEW SIGNATURES ------------------\n";        
+      DEBUG(dbgs() << "------------- FIXING CALLS TO USE NEW SIGNATURES ------------------\n");
 
       for (CallInstrSet::iterator i = callInstructions.begin(); i != callInstructions.end(); i++) {
         CallInst *call = *i;
 
-        errs() << "---- Started fixing:";
-        call->print(errs());
-        errs() << "\n";
+        DEBUG(dbgs() << "---- Started fixing:"; call->print(dbgs()); dbgs() << "\n");
 
         Function* oldFun = call->getCalledFunction();
         Function* newFun = replacedFunctions[oldFun];
@@ -864,9 +846,7 @@ namespace WebCL {
           if (oldArg->getType() != newArg->getType()) {            
             Value* operand = call->getArgOperand(op);
 
-            errs() << "- op #" << op << " needs fixing: ";
-            operand->print(errs());
-            errs() << "\n";
+            DEBUG(dbgs() << "- op #" << op << " needs fixing: "; operand->print(dbgs()); dbgs() << "\n");
 
             // !!! TODO !!! We probably should traverse SSA tree further up to find smart pointer
             // in that case we should also update .Cur to oldParam to have calculated 
@@ -884,13 +864,13 @@ namespace WebCL {
               if (smartPointers.count(oldParam) > 0) {
                 call->setOperand( op, smartPointers[oldParam]->smart );
               } else {
-                errs() << "In function: ---- \n";
-                call->getParent()->print(errs());
-                errs() << "\n\nError while converting call:\n";
-                loadToFix->print(errs());
-                errs() << "\n";
-                call->print(errs());
-                errs() << " cannot find smart pointer for op: " << op << "\n"; 
+                dbgs() << "In function: ---- \n";
+                call->getParent()->print(dbgs());
+                dbgs() << "\n\nError while converting call:\n";
+                loadToFix->print(dbgs());
+                dbgs() << "\n";
+                call->print(dbgs());
+                dbgs() << " cannot find smart pointer for op: " << op << "\n"; 
                 assert(false && "Cannot find smart pointer for the call operand. Maybe you tried to pass extern variable?");
               }
               
@@ -908,8 +888,8 @@ namespace WebCL {
                 }
 
                 if (!sourcePointer) {
-                  errs() << "In BB:\n"; gepToFix->getParent()->print(errs());
-                  errs() << "\nConverting: "; gepToFix->getPointerOperand()->print(errs()); errs() << "\n";
+                  dbgs() << "In BB:\n"; gepToFix->getParent()->print(dbgs());
+                  dbgs() << "\nConverting: "; gepToFix->getPointerOperand()->print(dbgs()); dbgs() << "\n";
                   assert(false && "Could not find smart pointer for GEP, which should have smart pointer..");
                 }
               }
@@ -928,41 +908,40 @@ namespace WebCL {
                 call->setOperand(op, smartPtr->smart);
               } else {
                 // check if alloca is not integer type lets fail
-                errs() << "\n\nIn BB:\n";
-                call->getParent()->print(errs());
-                errs() << "\n\nError while converting call:\n";
-                allocaSrc->print(errs());
-                errs() << "\n";
-                call->print(errs());
-                errs() << "\nOld argument type:::\n";
-                oldArg->print(errs());
-                errs() << "\nNew argument type:::\n";
-                newArg->print(errs());
-                errs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
+                dbgs() << "\n\nIn BB:\n";
+                call->getParent()->print(dbgs());
+                dbgs() << "\n\nError while converting call:\n";
+                allocaSrc->print(dbgs());
+                dbgs() << "\n";
+                call->print(dbgs());
+                dbgs() << "\nOld argument type:::\n";
+                oldArg->print(dbgs());
+                dbgs() << "\nNew argument type:::\n";
+                newArg->print(dbgs());
+                dbgs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
                 assert(false && "Could not find smart pointer for alloca");
               }
               
             } else {
+
               // NOTE: if we find lots of cases where earlier does not work we could think of adding 
               // normalizing pass which would fix constructs to be suitable for this pass. 
               // In llvm there might be already passes, which may work for doing it.
-              errs() << "In BB:\n";
-              call->getParent()->print(errs());
-              errs() << "\n\nError while converting call:\n";
-              call->print(errs());
-              errs() << " not able to find smart pointer for call operand: " << op << "  argument op: ";
-              call->getArgOperand(op)->print(errs());
-              errs() << "\n";
-
+              dbgs() << "In BB:\n";
+              call->getParent()->print(dbgs());
+              dbgs() << "\n\nError while converting call:\n";
+              call->print(dbgs());
+              dbgs() << " not able to find smart pointer for call operand: " << op << "  argument op: ";
+              call->getArgOperand(op)->print(dbgs());
+              dbgs() << "\n";
               assert(false && "Could not find smart pointer for op for converting call.");
+
             }
           }
           op++;
         }
 
-        errs() << "-- Converted call to : ";
-        call->print(errs());
-        errs() << "\n";
+        DEBUG(dbgs() << "-- Converted call to : "; call->print(dbgs()); dbgs() << "\n");
       }
     }
     
@@ -1025,12 +1004,8 @@ namespace WebCL {
       // add new function to book keepig to show what was replaced
       functionMapping.insert( std::pair< Function*, Function* >( F, new_function ) );
 
-        // TODO: add if debug check
-      errs() << "-- Created new signature for: " << F->getName() << " ";
-      F->getType()->print(errs());
-      errs() << "\nnew signature: " << new_function->getName() << " " ;
-      new_function->getType()->print(errs());
-      errs() << "\n";
+      DEBUG(dbgs() << "-- Created new signature for: " << F->getName() << " "; F->getType()->print(dbgs()));
+      DEBUG(dbgs() << "\nnew signature: " << new_function->getName() << " "; new_function->getType()->print(dbgs()); dbgs() << "\n");
 
       // map arguments of original function to new replacements
       for( Function::arg_iterator 
@@ -1038,14 +1013,8 @@ namespace WebCL {
              E = F->arg_end(), 
              a_new = new_function->arg_begin(); a != E; ++a, ++a_new ) {     
         
-        argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) );
-
-        // TODO: add if debug check
-        errs() << "Mapped orig arg: ";
-        a->print(errs());
-        errs() << " -----> ";
-        a_new->print(errs());
-        errs() << "\n";
+        argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) ); 
+        DEBUG(dbgs() << "Mapped orig arg: "; a->print(dbgs()); dbgs() << " -----> "; a_new->print(dbgs()); dbgs() << "\n");
       }
 
       return new_function;
@@ -1057,7 +1026,7 @@ namespace WebCL {
                                    StoreInstrSet &stores,
                                    LoadInstrSet &loads) {
       
-      errs() << "-- Finding interesting instructions from: " << F->getName() << "\n";
+      DEBUG(dbgs() << "-- Finding interesting instructions from: " << F->getName() << "\n");
 
       // find all instructions which should be handled afterwards
       for ( Function::iterator bb = F->begin(); bb != F->end(); bb++) {
@@ -1067,11 +1036,9 @@ namespace WebCL {
           if ( CallInst *call = dyn_cast< CallInst >(&inst) ) {
             if (!call->getCalledFunction()->isIntrinsic()) {
               calls.insert(call);
-              errs() << "Found call: ";
-              call->print(errs());
-              errs() << "\n";
+              DEBUG(dbgs() << "Found call: "; call->print(dbgs()); dbgs() << "\n");
             } else {
-              errs() << "Ignored call to intrinsic\n";
+              DEBUG(dbgs() << "Ignored call to intrinsic\n");
             }
 
           } else if ( AllocaInst *alloca = dyn_cast< AllocaInst >(&inst) ) {
@@ -1081,38 +1048,26 @@ namespace WebCL {
             //  but initialize them from sp read from argument )
             
             allocas.insert(alloca);
-            errs() << "Found alloca: ";
-            alloca->print(errs());
-            errs() << "\n";
+            DEBUG(dbgs() << "Found alloca: "; alloca->print(dbgs()); dbgs() << "\n");
             
           } else if ( StoreInst *store = dyn_cast< StoreInst >(&inst) ) {
             
             if (dyn_cast<Argument>(store->getValueOperand())) {
-              errs() << "Skipping store which reads function argument: ";
-              store->print(errs());
-              errs() << "\n";
+              DEBUG(dbgs() << "Skipping store which reads function argument: "; store->print(dbgs()); dbgs() << "\n");
               continue;
             } 
             
             stores.insert(store);
-            errs() << "Found store: ";
-            store->print(errs());
-            errs() << "\n";
+            DEBUG(dbgs() << "Found store: "; store->print(dbgs()); dbgs() << "\n");
             
-          } else if ( LoadInst *load = dyn_cast< LoadInst >(&inst) ) {
+          } else if ( LoadInst *load = dyn_cast< LoadInst >(&inst) ) {            
             
             loads.insert(load);
-            errs() << "Found load: ";
-            load->print(errs());
-            errs() << "\n";
-
-          }
+            DEBUG(dbgs() << "Found load: "; load->print(dbgs()); dbgs() << "\n");
+          } 
           
-          //    TODO: find all alloca, load, store, gep and function call instructions
-          //    TODO: for each parameters trace original alloca / function argument and add to book keeping
           //    TODO: if unsupported instruction is seen (inttoptr, fence, va_arg, cmpxchg,atomicrmw, 
           //           landingpad, memintrinsics) , abort
-          
         }
       }
     }

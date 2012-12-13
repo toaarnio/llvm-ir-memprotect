@@ -1,8 +1,8 @@
 // RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
-// RUN: llvm-dis < $OUT_FILE.bc && echo "-------- end of compiler out ----------------" &&
+// DONT RUN: llvm-dis < $OUT_FILE.bc && echo "-------- end of compiler out ----------------" &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: echo "------- Compiled fine. ---------" && 
-// RUN: cat $OUT_FILE.clamped.ll &&
+// DONT RUN: cat $OUT_FILE.clamped.ll &&
 // RUN: echo "----- clamped optimized -----" &&
 // RUN: opt -internalize -internalize-public-api-list=main -Oz -S < $OUT_FILE.clamped.ll && 
 // RUN: echo "----- original optimized -----" &&
@@ -46,18 +46,4 @@ int main(void) {
   return *(alloca_i32ptr+3);
 }
 
-/*
-int foo2(int* int_ptr_param) {
-  return *int_ptr_param + hit;
-}
 
-int foo(int* int_ptr_param) {
-  return foo2(int_ptr_param);
-}
-
-int main(void) {
-  int test = hit;
-  return foo(&test);
-}
-
-*/
