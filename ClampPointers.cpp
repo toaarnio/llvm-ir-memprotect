@@ -12,18 +12,20 @@
 #include "llvm/Module.h"
 #include "llvm/Constants.h"
 #include "llvm/Instructions.h"
+#include "llvm/Intrinsics.h"
 #include "llvm/User.h"
 
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
-#include "llvm/Support/IRBuilder.h"
+#include "llvm/IRBuilder.h"
 
 #include <vector>
 #include <map>
 #include <set>
 #include <iostream>
+#include <cstdio>
 
 #define UNUSED( x ) \
   (void)x;
@@ -33,78 +35,49 @@ using namespace llvm;
 namespace WebCL {
 
   /// Module pass that implements algorithm for restricting memory
-  /// accesses to locally reserved addresses.  This is done
-  /// dynamically by tracking minimum and maximum addresses of each
-  /// memory allocation.  The address is clamped to a valid memory
-  /// region before the pointer is dereferenced.  When memory
-  /// allocation goes out of scope, both upper and lower limits are
-  /// set to null preventing any attempt to access memory at such
-  /// addresses.  The algorithm itself consists of several
-  /// IR-transforming phases, first of which is to find static memory
-  /// allocations.  For this purpose, an instance of smart pointer
-  /// struct is created after every llvm::AllocaInst instruction that
-  /// contains the dynamic information about the current address of
-  /// the pointer along its minimum and maximum addresses.  In the
-  /// next phase, algorithm iterates over the def-use chain of the
-  /// each previously found memory allocation and replaces all of its
-  /// uses with a smart pointer.  A third phase is needed for
-  /// transforming the function arguments and call sites.  At first,
-  /// each function declaration is inspected and pointer parameters
-  /// are replaced with smart pointers and corresponding
-  /// transformation is done on the function body.  Then, each
-  /// llvm::CallInst checked and if it was previously transformed, its
-  /// arguments are replaced by corresponding smart pointers.
-  /// Finally, a software implementation of a clamp function is
-  /// inserted if the platform does not support it on the hardware and
-  /// call for it is added for each pointer dereferencing operation
-  /// (identified by llvm::GetElementPtrInst).
+  /// accesses to locally reserved addresses.  
+  ///
+  /// TODO: add detailed description what is done...
+  /// 
 
   struct ClampPointers :
     public ModulePass {
     static char ID;
 
     ClampPointers() :
-      ModulePass( ID ),
-      mClampFunction( 0 ) {
+      ModulePass( ID ) {
     }
 
     /// An allocation of contiguous array of memory.
     struct SmartPointer {
-      SmartPointer( Value* _current, Value* _min, Value* _max, Value* _ptr ) :
+      SmartPointer( Value* _current, Value* _min, Value* _max, Value* _smart, Value* _smart_ptr ) :
         cur( _current ),
         min( _min ),
         max( _max ),
-        ptr( _ptr ) {
+        smart( _smart ),
+        smart_ptr( _smart_ptr ) {
       }
 
-      Value* cur;
-      Value* min;
-      Value* max;
-      Value* ptr;
+      Value* cur; // Used only to be able to pass pointer value with limits to function call
+      Value* min; // First valid address
+      Value* max; // Last valid address (not last  valid + 1)
+      Value* smart;
+      Value* smart_ptr;
     };
+    
+    typedef std::map< Function*, Function* > FunctionMap;
+    typedef std::map< Argument*, Argument* > ArgumentMap;
+    typedef std::set< Function* > FunctionSet;
+    typedef std::set< Argument* > ArgumentSet;
+    typedef std::set< CallInst* > CallInstrSet;
+    typedef std::set< AllocaInst* > AllocaInstrSet;
+    typedef std::set< GetElementPtrInst* > GepInstrSet;
+    typedef std::set< LoadInst* > LoadInstrSet;
+    typedef std::set< StoreInst* > StoreInstrSet;
+    typedef std::map< Value*, SmartPointer* > SmartPointerByValueMap;
 
-    void indent( unsigned int depth ) {
-      for( unsigned int i = 0; i < depth; ++i )
-        errs() << "- ";
-    }
-
-    /// Create a load instruction from a value.
-    LoadInst* generateLoad( Value* from, Instruction* i, Twine name ) {
-      Twine name_load = Twine("") + name;
-      LoadInst* load_inst = new LoadInst( from, name_load );
-      load_inst->insertAfter( i );
-      return load_inst;
-    }
-
-    /// Create a store instruction from a value.
-    StoreInst* generateStore( Value* from, Value* to, Instruction* i, Twine name ) {
-      StoreInst* store_inst = new StoreInst( from, to );
-      store_inst->insertAfter( i );
-      return store_inst;
-    }
-
-    /// Create a single-index GEP instruction from a value.
-    GetElementPtrInst* generateGEP( LLVMContext& ctx, Value* ptr, int a, Instruction* i, Twine t = "gep" ) {
+    /// Helper function for generating a single-index GEP instruction from a value.
+    GetElementPtrInst* generateGEP( LLVMContext& ctx, Value* ptr, int a, Instruction* i, Twine t = "" ) {
       Twine name = t;
       ConstantInt* c_0 = ConstantInt::get( Type::getInt32Ty(ctx), a );
       std::vector< Value* > values;
@@ -114,8 +87,8 @@ namespace WebCL {
       return gep;
     }
 
-    /// Create a two-index GEP instruction from a value.
-    GetElementPtrInst* generateGEP( LLVMContext& c, Value* ptr, int a, int b, Instruction* i, Twine t = "gep" ) {
+    /// Helper function for generating a two-index GEP instruction from a value.
+    GetElementPtrInst* generateGEP( LLVMContext& c, Value* ptr, int a, int b, Instruction* i, Twine t = "" ) {
       Twine name = t;
       ConstantInt* c_0 = ConstantInt::get( Type::getInt32Ty(c), a );
       ConstantInt* c_1 = ConstantInt::get( Type::getInt32Ty(c), b );
@@ -127,235 +100,14 @@ namespace WebCL {
       return gep;
     }
 
-    void generateSmartPointerFree( SmartPointer* sp, Instruction* i ) {
-    }
-
-    void generateDeref( Module* module ) {
-      LLVMContext& c = module->getContext();
-
-      Type* i32 = Type::getInt32Ty(c);
-      Type* i32p = PointerType::getUnqual( Type::getInt32Ty(c) );
-      Type* smart = getSmartPointerType( c, i32p );
-
-      Constant* p = module->getOrInsertFunction( "deref",
-                                                 i32p,
-                                                 i32p,
-                                                 smart,
-                                                 i32,
-                                                 NULL );
-
-      Function* deref = cast<Function>(p);
-      deref->setCallingConv(CallingConv::C);
-			
-      mDerefFunction = deref;
-
-      Function::arg_iterator args = deref->arg_begin();
-
-      Value* pointer_a = args++;
-      pointer_a->setName( "pointer" );
-
-      Value* range_a = args++;
-      range_a->setName( "range" );
-
-      Value* index_a = args++;
-      index_a->setName( "index" );
-
-      // new deref implementation written based on .ll from compiling and optimizing C
-      // struct SmartPointer { int32_t cur; int32_t* first; int32_t* last; };
-      // int32_t* deref(int32_t *ptr, struct SmartPointer *range, int32_t index) {
-      //  int32_t *ptr_index = ptr + index;
-      //  if (ptr_index > range->last) return range->last;
-      //  if (ptr_index < range->first) return range->first;
-      //  return ptr_index;
-      //}
-      //
-      // ---- >
-      //
-      // define i32* @deref(i32* %ptr, %struct.SmartPointer* nocapture %range, i32 %index) nounwind uwtable readonly optsize ssp minsize {
-      // entry:
-      //   %add.ptr = getelementptr inbounds i32* %ptr, i32 %index
-      //   %last = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 2
-      //   %0 = load i32** %last, align 4
-      //   %cmp = icmp ugt i32* %add.ptr, %0
-      //   br i1 %cmp, label %return, label %if.end
-      // if.end:                                           ; preds = %entry
-      //   %first = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 1
-      //   %1 = load i32** %first, align 4
-      //   %cmp2 = icmp ult i32* %add.ptr, %1
-      //   %.add.ptr = select i1 %cmp2, i32* %1, i32* %add.ptr
-      //   br label %return
-      // return:                                           ; preds = %if.end, %entry
-      //   %retval.0 = phi i32* [ %0, %entry ], [ %.add.ptr, %if.end ]
-      //   ret i32* %retval.0
-      // }
-
-
-      BasicBlock* entry_block = BasicBlock::Create( c, "entry", deref );
-      BasicBlock* if_end_block = BasicBlock::Create( c, "if.end", deref );
-      BasicBlock* return_block = BasicBlock::Create( c, "return", deref );
-      IRBuilder<> entry_builder( entry_block );
-      IRBuilder<> if_end_builder( if_end_block );
-      IRBuilder<> return_builder( return_block );
-
-      // dummy instructions to be able to create GEPs with helpers 
-      // (didn't wan't to overload generateGEP more to support adding to basic block)
-      // will be removed after function is ready
-      Twine name_ifend_start = "ifend_dummy";
-      AllocaInst* ifend_start = new AllocaInst( i32, 0, name_ifend_start, if_end_block );
-
-      // entry:
-      //   %add.ptr = getelementptr inbounds i32* %ptr, i32 %index
-      std::vector< Value* > values;
-      values.push_back( index_a );
-      ArrayRef< Value* > ref( values );
-      GetElementPtrInst* add_ptr_gep = GetElementPtrInst::Create( pointer_a, ref, "add.ptr", entry_block );
-
-      //   %last = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 2
-      GetElementPtrInst* last_gep = this->generateGEP( c,  range_a, 0, 2, add_ptr_gep, "last" );
-
-      //   %0 = load i32** %last, align 4
-      LoadInst* last_ptr_load = new LoadInst( last_gep, "last.prt.load", entry_block );
-      
-      //   %cmp = icmp ugt i32* %add.ptr, %0
-      ICmpInst* cmp = new ICmpInst( *entry_block, CmpInst::ICMP_UGT, add_ptr_gep, last_ptr_load, "cmp" );
-
-      //   br i1 %cmp, label %return, label %if.end
-      BranchInst* if_gt_bra = BranchInst::Create( return_block, if_end_block, cmp, entry_block );
-
-      // if.end:                                           ; preds = %entry
-      //   %first = getelementptr inbounds %struct.SmartPointer* %range, i32 0, i32 1
-      GetElementPtrInst* first_gep = this->generateGEP( c,  range_a, 0, 1, ifend_start, "first" );
-
-      //   %1 = load i32** %first, align 4
-      LoadInst* first_ptr_load = new LoadInst( first_gep, "first.ptr.load", if_end_block );
-
-      //   %cmp2 = icmp ult i32* %add.ptr, %1
-      ICmpInst* cmp2 = new ICmpInst( *if_end_block, CmpInst::ICMP_ULT, add_ptr_gep, first_ptr_load, "cmp2" );
-
-      //   %.add.ptr = select i1 %cmp2, i32* %1, i32* %add.ptr
-      SelectInst* _add_ptr = SelectInst::Create(cmp2, first_ptr_load, add_ptr_gep, ".add.ptr", if_end_block);
-
-      //   br label %return
-      BranchInst* br_end = BranchInst::Create( return_block, if_end_block );
-
-      // return:                                           ; preds = %if.end, %entry
-      //   %retval.0 = phi i32* [ %0, %entry ], [ %.add.ptr, %if.end ]
-      PHINode* retval_0 = PHINode::Create(_add_ptr->getType(), 2, "retval.0", return_block);
-      retval_0->addIncoming(last_ptr_load, entry_block);
-      retval_0->addIncoming(_add_ptr, if_end_block);
-
-      //   ret i32* %retval.0
-      ReturnInst* ret = ReturnInst::Create( c, retval_0, return_block );
-
-      // remove dummy place holder
-      ifend_start->eraseFromParent();
-
-      UNUSED( if_gt_bra );
-      UNUSED( br_end );
-      UNUSED( ret );
-    }
-
-    void generateClamp( Module* module ) {
-      LLVMContext& c = module->getContext();
-
-      Type* i32 = Type::getInt32Ty(c);
-      Type* i32p = PointerType::getUnqual(Type::getInt32Ty(c));
-      Type* smart = getSmartPointerType( c, i32p );
-
-      mGlobalNull = new GlobalVariable( *module, i32, true, GlobalValue::ExternalLinkage, 0, "NULL_i32" );
-
-      Constant* p = module->getOrInsertFunction( "clamp",
-                                                 i32p,
-                                                 smart,
-                                                 NULL );
-
-      Function* clamp = cast< Function >(p);
-      clamp->setCallingConv( CallingConv::C );
-			
-      mClampFunction = clamp;
-
-      Function::arg_iterator args = clamp->arg_begin();
-      Value* a = args++;
-      a->setName( "smart" );
-
-      BasicBlock* entry_block = BasicBlock::Create( c, "entry", clamp );
-      BasicBlock* continue_block = BasicBlock::Create( c, "continue", clamp );
-      IRBuilder<> entry_builder( entry_block );
-
-      BasicBlock* min_block = BasicBlock::Create( c, "clamp_to_min", clamp );
-      BasicBlock* max_block = BasicBlock::Create( c, "clamp_to_max", clamp );
-
-      BasicBlock* exit_block = BasicBlock::Create( c, "exit", clamp );
-      IRBuilder<> exit_builder( exit_block );
-
-      // in
-      Twine name_data = "smart_alloca";
-      AllocaInst* smart_alloca = new AllocaInst( smart, 0, name_data, entry_block );
-      StoreInst* smart_store = new StoreInst( a, smart_alloca, entry_block );
-
-      UNUSED( smart_store );
-
-      // out
-      Twine name_ret_alloca = "clamped_ptr";
-      AllocaInst* ret_alloca = new AllocaInst( i32p, 0, name_ret_alloca, entry_block );
-
-      Twine name_ret_load = "ret_load";
-      LoadInst* ret_load = new LoadInst( ret_alloca, name_ret_load, exit_block );
-
-      GetElementPtrInst* cur_gep = this->generateGEP( c, a, 0, 0, ret_alloca, "cur_gep" );
-      Twine name_load_cur = "cur";
-      LoadInst* cur_load = new LoadInst( cur_gep, name_load_cur );
-      cur_load->insertAfter( cur_gep );
-
-      // default output
-      StoreInst* cur_store = new StoreInst( cur_load, ret_alloca, entry_block );
-
-      UNUSED( cur_store );
-
-      GetElementPtrInst* min_gep = this->generateGEP( c, a, 0, 1, ret_alloca, "min_gep" );
-      Twine name_load_min = "min";
-      LoadInst* min_load = new LoadInst( min_gep, name_load_min );
-      min_load->insertAfter( min_gep );
-
-      GetElementPtrInst* max_gep = this->generateGEP( c, a, 0, 2, ret_alloca, "max_gep" );
-      Twine name_load_max = "max";
-      LoadInst* max_load = new LoadInst( max_gep, name_load_max );
-      max_load->insertAfter( max_gep );
-
-      StoreInst* ret_store = new StoreInst( ret_load, cur_gep, exit_block );
-      ReturnInst* ret = ReturnInst::Create( c, ret_load, exit_block );
-
-      UNUSED( ret_store );
-      UNUSED( ret );
-
-      StoreInst* min_store = new StoreInst( min_load, ret_alloca, min_block );
-      StoreInst* max_store = new StoreInst( max_load, ret_alloca, max_block );
-
-      UNUSED( min_store );
-      UNUSED( max_store );
-
-      BranchInst* min_exit_bra = BranchInst::Create( exit_block, min_block );
-      BranchInst* max_exit_bra = BranchInst::Create( exit_block, max_block );
-
-      UNUSED( min_exit_bra );
-      UNUSED( max_exit_bra );
-
-      ICmpInst* min_cmp = new ICmpInst( *entry_block, CmpInst::ICMP_ULT, cur_load, min_load, "less_than" );
-      ICmpInst* max_cmp = new ICmpInst( *entry_block, CmpInst::ICMP_UGT, cur_load, max_load, "greater_than" );
-
-      BranchInst* min_bra = BranchInst::Create( min_block, continue_block, min_cmp, entry_block );
-      BranchInst* max_bra = BranchInst::Create( max_block, exit_block, max_cmp, continue_block );
-
-      UNUSED( min_bra );
-      UNUSED( max_bra );
-    }
-
+    /// Helper function for generating smart pointer struct pointer type
     Type* getSmartPointerType( LLVMContext& c, Type* t ) {
       StructType* s = this->getSmartStructType( c, t );
       Type* smart_array_pointer_type = PointerType::getUnqual( s );
       return smart_array_pointer_type;
     }
 
+    /// Helper function for generating smart pointer struct type
     StructType* getSmartStructType( LLVMContext& c, Type* t ) {
       std::vector< Type* > types;
       types.push_back( t );
@@ -369,252 +121,12 @@ namespace WebCL {
       return smart_array_struct;
     }
 
-    virtual void generateSmartPointerLoads( Function *F ) {
-      for( Function::iterator f = F->begin(), ef = F->end(); f != ef; ++f) {
-        for( BasicBlock::iterator i = f->begin(), eb = f->end(); i != eb; ++i) {
-          if( llvm::LoadInst* l = dyn_cast< llvm::LoadInst >(i) ) {
-            Value* source = l->getPointerOperand();
-
-            SmartPointerMap::iterator spi = mSmartPointers.find( source );
-            if( spi == mSmartPointers.end() ) {
-              continue;
-            }
-
-            SmartPointer* sp = spi->second;
-            //Value* ptr = sp->cur;
-
-            std::vector< Value* > values;
-            values.push_back( sp->ptr );
-            ArrayRef< Value* > vref( values );
-
-            CallInst* clamp_call = CallInst::Create( mClampFunction, vref, "clamped" );
-            clamp_call->insertBefore( l );
-
-            //source->replaceAllUsesWith( clamp_call );
-            l->replaceAllUsesWith( clamp_call );
-
-            errs() << "sp" << *(sp->cur) << "\n";
-            errs() << "load" << *l << "\n";
-            errs() << "alloca" << *source << "\n";
-          }
-        }
-      }
-    }
-
-    virtual void generateSmartPointerAssignment( SmartPointer* source, SmartPointer* target, Instruction* root ) {
-      // load source
-      LoadInst* source_min_load = this->generateLoad( source->min, root, Twine("source.First") );
-      LoadInst* source_max_load = this->generateLoad( source->max, root, Twine("source.Last") );
-      LoadInst* source_cur_load = this->generateLoad( source->cur, root, Twine("source.Current") );
-
-      root = source_min_load;
-
-      assert( mClampFunction != 0 );
-
-      // store source -> terget
-      StoreInst* target_min_store = this->generateStore( source_min_load, target->min, root, Twine("target.First") );
-      StoreInst* target_max_store = this->generateStore( source_max_load, target->max, root, Twine("target.Last") );
-      StoreInst* target_cur_store = this->generateStore( source_cur_load, target->cur, root, Twine("target.Current") );
-
-      UNUSED( target_min_store );
-      UNUSED( target_max_store );
-      UNUSED( target_cur_store );
-    }
-
-    virtual void findPointerAssignments( Value* root ) {
-      for( Value::use_iterator i = root->use_begin(), e = root->use_end(); i != e; ++i ) {
-        if( StoreInst *store = dyn_cast< StoreInst >(*i) ) {
-          Value* source = store->getValueOperand();
-          Value* target = store->getPointerOperand();
-
-          // find target registers
-          SmartPointerMap::iterator sp_target = mSmartPointers.find( target );
-
-          if( sp_target == mSmartPointers.end() ) {
-            errs() << "FATAL ERROR: Cannot find target ->" << *target << "'\n";
-            assert( false );
-          }
-
-          // if source is gep
-          if( GetElementPtrInst *gep = dyn_cast< GetElementPtrInst >( source ) ) {
-
-            Value* gep_source = gep->getPointerOperand();
-            SmartPointerMap::iterator sp_source = mSmartPointers.find( gep_source );
-
-            if( sp_source == mSmartPointers.end() ) {
-              errs() << "FATAL ERROR: Cannot find GEP source ->" << *gep_source << "'\n";
-              assert( false );
-            }
-
-            this->generateSmartPointerAssignment( sp_source->second, sp_target->second, store );
-          } else if( LoadInst* load = dyn_cast< LoadInst >( source ) ) {
-
-            Value* load_source = load->getPointerOperand();
-            SmartPointerMap::iterator sp_source = mSmartPointers.find( load_source );
-
-            if( sp_source == mSmartPointers.end() ) {
-              errs() << "FATAL ERROR: Cannot find LOAD source ->" << *load_source << "'\n";
-              continue;
-              //assert( false );
-            }
-
-            this->generateSmartPointerAssignment( sp_source->second, sp_target->second, store );
-          } else if( Argument* a = dyn_cast< Argument > ( source ) ) {
-            UNUSED( a );
-            errs() << "FATAL WARNING: is argument" << "\n";
-            //assert( false );
-          } else {
-            errs() << "WARNING: Unknown instruction type ignored ->" << *source << "\n";
-            //assert( false );
-          }
-
-        }
-      }
-    }
-
-
-    virtual void findStores( Value* root ) {
-      for( Value::use_iterator i = root->use_begin(), e = root->use_end(); i != e; ++i ) {
-        if( StoreInst *store = dyn_cast< StoreInst >(*i) ) {
-          Value* source = store->getValueOperand();
-          Value* target = store->getPointerOperand();
-
-          if( target == root ) {
-            // write to smart pointer, get source data
-            LoadInst* load = this->findLoad( source );
-            assert( load );
-
-            Value* source = load->getPointerOperand();
-            SmartPointerMap::iterator is = mSmartPointers.find( source );
-            errs() << *source;
-            assert( is != mSmartPointers.end() );
-
-            if( !load->hasName() ) {
-              Value* source = load->getPointerOperand();
-              StringRef source_name = source->getName();
-              load->setName( Twine("") + source_name + Twine(".Load") );
-            }
-
-            StringRef loadName = load->getName();
-
-            Value* cur = is->second->cur;
-            Value* min = is->second->min;
-            Value* max = is->second->max;
-
-            Twine name_min = Twine("") + loadName + Twine( ".First" );
-            LoadInst* load_min = new LoadInst( min, name_min );
-            load_min->insertAfter( load );
-
-            Twine name_max = Twine("") + loadName + Twine( ".Last" );
-            LoadInst* load_max = new LoadInst( max, name_max );
-            load_max->insertAfter( load );
-
-            Twine name_cur = Twine("") + loadName + Twine( ".Cur" );
-            LoadInst* load_cur = new LoadInst( cur, name_cur );
-            load_cur->insertAfter( load );
-
-            SmartPointerMap::iterator it = mSmartPointers.find( target );
-            assert( it != mSmartPointers.end() );
-
-            Value* tcur = it->second->cur;
-            Value* tmin = it->second->min;
-            Value* tmax = it->second->max;
-
-            StoreInst* store_max = new StoreInst( load_max, tmax );
-            store_max->insertAfter( load_max );
-
-            StoreInst* store_min = new StoreInst( load_min, tmin );
-            store_min->insertAfter( load_min );
-
-            StoreInst* store_cur = new StoreInst( load_cur, tcur );
-            store_cur->insertAfter( load_cur );
-
-          }
-        }
-      }
-    }
-
-    virtual LoadInst* findLoad( Value* root ) {
-      if( LoadInst *load = dyn_cast< LoadInst >(root) ) {
-        return load;
-      } else if( GetElementPtrInst *gep = dyn_cast< GetElementPtrInst >( root ) ) {
-        Value* source = gep->getPointerOperand();
-        return findLoad( source );
-      } else {
-        return 0;
-      }
-    }
-
-
-    virtual void modifyArrayPointers( Value* array, Value* limit ) {
-      for( User::use_iterator u = array->use_begin(), e = array->use_end(); u != e; ++u ) {
-        if( LoadInst* load = dyn_cast< llvm::LoadInst >(*u) ) {
-          modifyArrayPointers( load, limit );
-        } else if( GetElementPtrInst* gep = dyn_cast< llvm::GetElementPtrInst >(*u) ) {
-          bool mod = false;
-
-          unsigned int index = 0;
-          for( User::op_iterator o = gep->idx_begin(); o != gep->idx_end(); ++o ) {
-            Value* v2 = o->get();
-
-            index++;
-            if( index == 2 ) {
-              if( !(isa< Constant >(v2)) ) {
-                if( isa< SExtInst >(v2) ) {
-                  v2 = cast< SExtInst >(v2)->getOperand(0);
-                }
-
-                Instruction* place = dyn_cast< Instruction >(v2);
-                assert( place );
-
-                //BinaryOperator* or1 = BinaryOperator::Create( Instruction::URem, limit, limit, "safe_idx", gep );
-                BinaryOperator* or1 = BinaryOperator::Create( Instruction::URem, limit, limit, "safe_idx" );
-                or1->insertAfter( place );
-
-                v2->replaceAllUsesWith( or1 );
-                or1->setOperand( 0, v2 );
-
-                mod = true;
-              } else {
-                mod = true;
-
-                Value* idx = gep->getOperand( 2 );
-                Value* ptr = gep->getPointerOperand();
-                Type* type = gep->getPointerOperandType();
-
-                UNUSED( idx );
-                UNUSED( type );
-
-                if( llvm::AllocaInst* alloca = dyn_cast< llvm::AllocaInst >(ptr) ) {
-                  Type* t = alloca->getAllocatedType();
-
-                  if( ArrayType* a = dyn_cast< ArrayType >(t) ) {
-                    unsigned int max = a->getArrayNumElements();
-                    unsigned int req = cast< ConstantInt >(v2)->getLimitedValue();
-
-                    if( req >= max ) {
-                      Type* i32 = v2->getType();
-                      //unsigned int new_size = req % max;
-                      unsigned int new_size = max - 1;
-                      Constant* constSize = ConstantInt::get( i32, new_size );
-
-                      gep->setOperand( 2, constSize );
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          if( !mod ) {
-            Value* idx = gep->getOperand( 1 );
-            BinaryOperator* or1 = BinaryOperator::Create( Instruction::URem, idx, limit, "safe_idx", gep );
-            gep->setOperand( 1, or1 );
-          }
-        }
-      }
-    }
-
+    /**
+     * Is there really any cases where this might be needed and how this will 
+     * prevent uses after delete anyways, since pointers are passed as copies?
+     * Remember that when pointer is passed, passed value is actually copy of pointer's
+     * memory address. When smart pointer is passed, the same way copy of min, max and cur
+     * pointed pointers values are passed. 
     virtual void freeMemory( Function *F ) {
       FunctionSmartPointerList::iterator sp_source = mFunctionSmartPointers.find( F );
       //assert( sp_source != mFunctionSmartPointers.end() );
@@ -656,387 +168,956 @@ namespace WebCL {
         }
       }
     }
+     */
 
-
+    /**
+     * First analyze original code and then do transformations, 
+     * until code is again runnable with using smart pointers.
+     * 
+     * Then analyse uses of smart pointers to get limits for them and 
+     * add boundary checks.
+     */
     virtual bool runOnModule( Module &M ) {
-
-      // create smart pointers
-      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-        this->runOnFunction( i );
-      }
-
-      generateClamp( &M );
-      generateDeref( &M );
-
-      // find all pointer assigments
-      for( SmartPointerMap::iterator i = mSmartPointers.begin(); i != mSmartPointers.end(); ++i ) {
-        this->findPointerAssignments( i->first );
-      }
-
-      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-        this->generateSmartPointerLoads( i );
-      }
-
-      // modify calls
-      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-        this->modifyCalls( i );
-      }
-
-      // create nulls
-      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-        this->freeMemory( i );
-      }
-
-      return true;
-    }
-
-    virtual bool modifyCalls( Function *F ) {
-
-      std::vector< Value* > args;
-
-      while( !F->use_empty() ) {
-        FunctionMap::iterator fi = mReplacedFunctions.find( F );
-
-        if( fi == mReplacedFunctions.end() )
-          return false;
-
-        assert( fi != mReplacedFunctions.end() );
-
-        Function* new_function = fi->second;
-
-        CallSite call_site( F->use_back() );
-        Instruction *call_inst = call_site.getInstruction();
-
-        for( CallSite::arg_iterator a = call_site.arg_begin(); a != call_site.arg_end(); ++a ) {
-          Value* value = *a;
-          Type* t = value->getType();
-
-          if( t->isPointerTy() ) {
-
-            if( GetElementPtrInst *gep = dyn_cast< GetElementPtrInst >( value ) ) {
-              Value* gep_source = gep->getPointerOperand();
-              SmartPointerMap::iterator sp_source = mSmartPointers.find( gep_source );
-
-              Value* source = sp_source->second->ptr;
-
-              args.push_back( source );
-
-              /* @todo Crash?
-                 if( sp_source == mSmartPointers.end() ) {
-                 errs() << "FATAL ERROR: Cannot find GEP source ->" << *gep_source << "'\n";
-                 assert( false );
-                 }
-              */
-            } else {
-              /// @todo Handle other values.
-              assert( false );
-            }
-          } else {
-            args.push_back( *a );
-          }
-        }
-
-        AttrListPtr attributes = call_site.getAttributes();
-
-        Instruction *new_inst;
-        if( InvokeInst *invoke_inst = dyn_cast< InvokeInst >( call_inst ) ) {
-          new_inst = InvokeInst::Create( new_function, invoke_inst->getNormalDest(), invoke_inst->getUnwindDest(), args, "", call_inst );
-          cast< InvokeInst >( new_inst )->setCallingConv( call_site.getCallingConv() );
-          cast< InvokeInst >( new_inst )->setAttributes( attributes );
-        } else {
-          new_inst = CallInst::Create( new_function, args, "", call_inst );
-        }
-        new_inst->setDebugLoc( call_inst->getDebugLoc() );
-
-        args.clear();
-        if( !call_inst->use_empty() )
-          call_inst->replaceAllUsesWith( new_inst );
-
-        new_inst->takeName(call_inst);
-        call_inst->eraseFromParent();
-
-        break;
-      }
-
-      return true;
-    }
-
-    virtual bool runOnFunction( Function *F ) {
-      assert( F != 0 );
       
+      // map of functions which has been replaced with new ones
+      FunctionMap replacedFunctions;
+      // map of function arguments, which are replaced with new ones
+      ArgumentMap replacedArguments;
+      
+      // sets for functions and their arguments, whose signatures are ok, even if they contain pointers
+      FunctionSet safeFunctions;
+      ArgumentSet safeArguments;
+
+      // set of different interesting instructions in the program
+      // maybe could be just one map of sets sorted by opcode
+      CallInstrSet calls;
+      AllocaInstrSet allocas;
+      StoreInstrSet stores;
+      LoadInstrSet loads;
+      
+      // smartpointers sorted by value e.g. i32* %a ->  {i32*, i32*, i32*}* %safe_a
+      SmartPointerByValueMap smartPointers;
+
+      // Analyze all functions
+      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
+        if (i->isIntrinsic()) {
+          errs() << "Skipping: " << i->getName() << " which is intrinsic\n";
+          continue;
+        }
+        // actually this should not touch functions yet at all, just collect data which functions needs to be changed
+        // now it still creates new function signatures and steals old function's name
+        errs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n";
+        createNewFunctionSignature( i, replacedFunctions, replacedArguments, safeFunctions, safeArguments );
+        errs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n";
+        sortInstructions( i,  calls, allocas, stores, loads );
+      }
+
+      // add smart allocas and generate initial smart pointer data
+      errs() << "\n --------------- CREATING SMART ALLOCAS FOR EVERYONE --------------\n";
+      createSmartAllocas(allocas, smartPointers);
+
+      // some extra hint of debug...
+      /*
+      for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
+        // loop through arguments and if type has changed, then create label to access original arg 
+        i->first->print(errs());
+        errs() << "\n";
+      }
+      */
+
+      // TODO: create smart pointer initializations for main function where we expect (int count, int8* argv[]) input
+      // TODO: create smart pointer initializations for kernel function where we expect (int*, int) input
+
+      errs() << "\n --------------- FIXING SMART POINTER STORE OPERATIONS TO ALSO KEEP .Cur, .First and .Last UP-TO-DATE --------------\n";
+      fixStoreInstructions(stores, smartPointers);
+
+      errs() << "\n --------------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  --------------\n";
+      // gets rid of old functions, replaces calls to old functions and fix call arguments to 
+      // use smart pointers in call parameters 
+      fixCodeToUseReplacedFunctions(replacedFunctions, replacedArguments, calls, smartPointers);
+
+      // errs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n";
+      // split last part of fixCodeToUseReplacedFunctions(replacedFunctions, replacedArguments, calls, smartPointers);
+      // to be separate step
+
+      // ##########################################################################################
+      // #### At this point code should be again perfectly executable and runs with new function 
+      // #### signatures and has cahnged pointers to smart ones
+      // ##########################################################################################
+
+      // expand smart pointers to be able to find limits for uses of smart pointers (loads and geps mostly)
+      errs() << "\n --------------- EXPANDING SMARTPOINTER MAP TO ALSO CONTAIN LIMITS FOR USES OF ORIGINAL POINTERS --------------\n";
+      expandSmartPointersResolvingToCoverUses(smartPointers);
+
+      errs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n";
+      addBoundaryChecks(stores, loads, smartPointers);
+
+      /*
+      for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
+        // loop through arguments and if type has changed, then create label to access original arg 
+        i->second->print(errs());
+        errs() << "\n";
+      }
+      */
+
+      return true;
+    }
+
+
+    /**
+     * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
+     */
+    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, SmartPointerByValueMap &smartPointers) {
+      // check load instructions... 
+      for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
+        addChecks((*i)->getPointerOperand(), *i, smartPointers);
+      }   
+      // check store instructions
+      for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+        addChecks((*i)->getPointerOperand(), *i, smartPointers);
+      }
+    }
+
+    /**
+     * If val touching pointer operand needs checks, then inject boundary check code.
+     */
+    void addChecks(Value *ptrOperand, Instruction *inst, SmartPointerByValueMap &smartPointers) {
+      if ( dyn_cast<AllocaInst>(ptrOperand) ) {
+        errs() << "Skipping direct alloca op: "; inst->print(errs()); errs() << "\n";
+        return;
+      } else if ( dyn_cast<GlobalValue>(ptrOperand) ) {
+        errs() << "Skipping direct load from global value: "; inst->print(errs()); errs() << "\n";
+        return;
+      }
+
+      // find out which limits load has to respect and add boundary checks
+      if ( smartPointers.count(ptrOperand) == 0 ) {
+        errs() << "When verifying: "; inst->print(errs()); errs() << "\n";
+        assert(false && "Could not find limits to create protection!");
+      }
+      SmartPointer *limits = smartPointers[ptrOperand];
+      createLimitCheck(ptrOperand, limits, inst);
+    }
+    
+    /**
+     * Adds boundary check for given pointer
+     *
+     * ==== Changes e.g.
+     * 
+     * %0 = load i32** %some_label
+     * %1 = load i32* %0
+     *
+     * ==== To
+     *
+     *   %0 = load i32** %some_label
+     *   %1 = load i32** %some_lable.Smart.Last
+     *   %2 = icmp ugt i32* %0, %1
+     *   br i1 %2, label %boundary.check.failed, label %check.first.limit
+     * boundary.check.failed:
+     *   tail call void @llvm.trap()
+     *   unreachable
+     * check.first.limit:      
+     *   %3 = load i32** %some_label.Smart.First
+     *   %4 = icmp ult i32* %0, %3
+     *   br i1 %4, label %boundary.check.failed, label %if.end
+     * if.end:
+     *   %5 = load i32* %0
+     * 
+     */
+    void createLimitCheck(Value *ptr, SmartPointer *limits, Instruction *before) {
+      static int id = 0;
+      id++;
+      char postfix_buf[64];
+      sprintf(postfix_buf, "%d", id);
+      std::string postfix = postfix_buf;
+
+      BasicBlock *BB = before->getParent();
+      Function *F = BB->getParent();
       LLVMContext& c = F->getContext();
-     
-      // convert function signature
+
+      Twine boundary_fail_name = Twine("boundary.check.failed");
+
+      // find exit on fail block
+      BasicBlock* boundary_fail_block = NULL;
+      for (Function::iterator bbi = F->begin(); bbi != F->end(); bbi++) {
+        BasicBlock *bb = &(*bbi); // iterator seems to return reference...
+        if (bb->getName() == boundary_fail_name.getSingleStringRef()) {
+          boundary_fail_block = bb;
+          break;
+        }
+      }
+      
+      // fail block not created yet... create it
+      if (!boundary_fail_block) {
+        errs() << "Creating fail block to function: " << F->getName() << "\n";
+        boundary_fail_block = BasicBlock::Create( c, boundary_fail_name, F );
+        IRBuilder<> boundary_fail_builder( boundary_fail_block );
+        Function *trapFn = Intrinsic::getDeclaration(F->getParent(), Intrinsic::trap);
+        CallInst *trapCall = CallInst::Create(trapFn, "", boundary_fail_block);
+        trapCall->setDebugLoc(before->getDebugLoc());
+        new UnreachableInst (c, boundary_fail_block);
+      }
+ 
+      BasicBlock* check_first_block = BasicBlock::Create( c, "check.first.limit." + postfix, F );
+      IRBuilder<> check_first_builder( check_first_block );
+
+      // ------ add max boundary check code 
+
+      // *   %1 = load i32** %some_lable.Smart.Last
+      LoadInst* last_val = new LoadInst( limits->max, "", before );
+      // *   %2 = icmp ugt i32* %0, %1
+      ICmpInst* cmp = new ICmpInst( before, CmpInst::ICMP_UGT, ptr, last_val, "" );
+      // *   br i1 %2, label %boundary.check.failed, label %check.first.limit
+      BranchInst::Create( boundary_fail_block, check_first_block, cmp, before );
+
+      // ------ break current BB to 2 after branch and name later one to be if.end
+
+      BasicBlock* end_block = BB->splitBasicBlock(before, "if.end." + postfix);
+      // remove implicitly added branch..
+      BB->back().eraseFromParent();
+
+      // ------ add min boundary check code 
+
+      // * check.first.limit:      
+      // *   %3 = load i32** %some_label.Smart.First
+      LoadInst* first_val = new LoadInst( limits->min, "", check_first_block );
+      // *   %4 = icmp ult i32* %0, %3
+      ICmpInst* cmp2 = new ICmpInst( *check_first_block, CmpInst::ICMP_ULT, ptr, first_val, "" );
+      // *   br i1 %4, label %boundary.check.failed, label %if.end
+      BranchInst::Create( boundary_fail_block, end_block, cmp2, check_first_block );
+
+      errs() << "Created boundary check for: "; before->print(errs()); errs() << "\n";
+      F->print(errs());
+    }
+    
+    void expandSmartPointersResolvingToCoverUses(SmartPointerByValueMap &smartPointers) {
+      SmartPointerByValueMap derivedUses;
+      for (SmartPointerByValueMap::iterator i = smartPointers.begin(); i != smartPointers.end(); i++) {
+        resolveUses(i->first, i->second, derivedUses);
+      }
+      
+      // expand smartPointers with derivedUses
+      for (SmartPointerByValueMap::iterator i = derivedUses.begin(); i != derivedUses.end(); i++) {
+        smartPointers[i->first] = i->second;
+      }      
+    }
+    
+    /**
+     * Traverses through uses of safe pointer and adds limits to derivedUses map.
+     */
+    void resolveUses(Value *val, SmartPointer *limits, SmartPointerByValueMap &derivedUses) {
+      for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
+        Value *use = *i;
+        
+        // ----- continue to next use if cannot be sure about the limits
+        if ( dyn_cast<GetElementPtrInst>(use) ) {
+          // all good for GEPs
+        } else if ( LoadInst *load = dyn_cast<LoadInst>(use) ) {
+          // we cannot be sure about limits, if load is not directly from alloca
+          if ( ! dyn_cast<AllocaInst>(load->getPointerOperand()) ) {
+            continue;
+          }
+        } else if ( dyn_cast<StoreInst>(use) ) {
+          // never care about stores... they does not return anything
+          continue;
+        } else { 
+          // notify about unexpected cannot be resolved cases for debug
+          errs() << "Cannot resolve limit for: "; use->print(errs()); errs() << "\n";
+          continue;
+        }
+
+        errs() << "Use: "; use->print(errs()); errs() << " respects limits of: "; limits->smart->print(errs()); errs() << "\n";        
+        derivedUses[use] = limits;
+        resolveUses(use, limits, derivedUses);                
+      }
+    }
+
+    /**
+     * Traces recursively up in SSA tree until finds element, which has information about limits.
+     *
+     * Currently stops if alloca or global value is found.
+     *
+     * @param trashcan When one gets getAsInstruction from constant expression, it creates dangling
+     *   instruction. Dangling instructions will crash the pass on exit, so we add created instruction
+     *   before trashcan instruction and let later optimization passes clean these up.
+     */
+    Value* findLimitingFactor(Value *op, Instruction *trashcan) {
+      if (dyn_cast<AllocaInst>(op) || dyn_cast<GlobalValue>(op)) {
+        return op;
+
+      } else if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(op)) {
+        return findLimitingFactor(gep->getPointerOperand(), trashcan);
+
+      } else if (ConstantExpr *constExp = dyn_cast<ConstantExpr>(op)) {
+
+        constExp->isGEPWithNoNotionalOverIndexing();
+        Instruction *newInst = constExp->getAsInstruction();
+        newInst->insertBefore(trashcan);
+        return findLimitingFactor(newInst, trashcan);
+
+      } else {
+        errs() << "Handling value: ";
+        op->print(errs());
+        errs() << "\n";
+        dyn_cast<Constant>(op)->print(errs());
+        errs() << "\n";
+        assert(false && "Don't know how to trace limiting operand for this structure.");
+      }
+    }
+
+    /**
+     * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
+     */
+    void fixStoreInstructions(StoreInstrSet &stores, SmartPointerByValueMap &smartPointers) {
+      
+      for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+        StoreInst* store = *i;        
+        LLVMContext& c = store->getParent()->getContext();
+        
+        Value *src = store->getValueOperand();
+        Value *dest = store->getPointerOperand();
+        
+        if ( dest->getType()->isPointerTy() && dyn_cast<PointerType>(dest->getType())->getElementType()->isPointerTy() ) {
+
+          errs() << "Found store to fix: ";
+          store->print(errs()); errs() << "\n";
+          src->print(errs());
+          errs() << "\n";
+
+          assert (smartPointers.count(dest) > 0 && "Cannot find smart pointer for destination");
+          SmartPointer *smartDest = smartPointers[dest];
+          
+          Value* limits = findLimitingFactor(src, store->getParent()->begin());
+          Value* first = NULL;
+          Value* last = NULL;
+
+          if (smartPointers.count(limits) > 0) {
+
+            SmartPointer *smartSrc = smartPointers[limits];
+            LoadInst *firstLoad = new LoadInst(smartSrc->min);
+            LoadInst *lastLoad = new LoadInst(smartSrc->max);
+            firstLoad->insertBefore(store);
+            lastLoad->insertBefore(store);
+            last = lastLoad;
+            first = firstLoad;
+
+          } else if ( GlobalValue *globalVal = dyn_cast<GlobalValue>(limits) ) {
+
+            if (globalVal->hasExternalLinkage()) {
+              // if ext array init, get last and first from there, otherwise just use global val..
+              if (globalVal->getType()->getElementType()->isArrayTy()) {
+                int array_size = dyn_cast<ArrayType>(globalVal->getType()->getElementType())->getNumElements();
+                first = generateGEP(c, globalVal, 0, 0, store, "");
+                last = generateGEP(c, globalVal, 0, array_size-1, store, "");
+              } else {
+                first = globalVal;
+                last = globalVal;
+              }
+            } else {
+              assert(false && "Unsupported use of global value.");
+            }
+
+          } else {
+            assert(false && "Could not resolve limits from source operand, for smart pointer assignment.");
+          }
+          
+          // fix limits and cur in smart pointer assignment
+          errs() << "#### FOUND LIMITS:\n";
+          first->print(errs()); errs() << "\n";
+          last->print(errs()); errs() << "\n";
+          
+          StoreInst* firstStore = new StoreInst(first, smartDest->min);
+          StoreInst* lastStore = new StoreInst(last, smartDest->max);
+          StoreInst* curStore = new StoreInst(store->getValueOperand(), smartDest->cur);          
+
+          lastStore->insertAfter(store);
+          firstStore->insertAfter(store);
+          curStore->insertAfter(store);
+
+          errs() << "-- Created smart store:\n";
+          store->print(errs()); errs() << "\n";
+          curStore->print(errs()); errs() << "\n";
+          firstStore->print(errs()); errs() << "\n";
+          lastStore->print(errs()); errs() << "\n";
+        }
+      }
+    }
+    
+    /**
+     * Creates smart pointer, before given alloca.
+     *
+     * For e.g. an alloca: 
+     *
+     * %int_table = alloca [8 x i32]
+     *
+     * Generate smart pointer stuff:
+     * 
+     * %int_table.Smart = alloca { i32*, i32*, i32* }
+     * %int_table.SmartPtr = alloca { i32*, i32*, i32* }*
+     * store { i32*, i32*, i32* }* %int_table.Smart, { i32*, i32*, i32* }** %int_table.SmartPtr
+     * %int_table.Smart.Cur = getelementptr { i32*, i32*, i32* }* %int_table.Smart, i32 0, i32 0
+     * %int_table.Smart.First = getelementptr { i32*, i32*, i32* }* %int_table.Smart, i32 0, i32 1
+     * %int_table.Smart.Last = getelementptr { i32*, i32*, i32* }* %int_table.Smart, i32 0, i32 2
+     * %int_table = alloca [8 x i32], align 16
+     * %int_table.Last = getelementptr [8 x i32]* %int_table, i32 0, i32 7 ( this is given in parameter for function )
+     * store i32* %int_table.Last, i32** %int_table.Smart.Last
+     * %int_table.First = getelementptr [8 x i32]* %int_table, i32 0, i32 0 ( this is given in parameter for function )
+     * store i32* %int_table.First, i32** %int_table.Smart.First
+     * store i32* %int_table.First, i32** %int_table.Smart.Cur
+     * 
+     * @param elementType Type which is used to generate smart pointer internal elements.
+     */
+    SmartPointer* createSmartPointer(Type* elementType, AllocaInst* alloca, Instruction* first, Instruction* last) {
+
+          std::vector< Type* > types;
+          types.push_back( elementType );
+          types.push_back( elementType );
+          types.push_back( elementType );
+          ArrayRef< Type* > tref( types );
+
+          LLVMContext& c = alloca->getParent()->getContext();
+          StringRef allocaName = alloca->getName();
+
+          StructType *smart_ptr_struct_type = StructType::get( c, tref );
+          assert( smart_ptr_struct_type );
+          // I'm sorry.. 
+          Type* smart_ptr_struct_ptr_type = PointerType::getUnqual( smart_ptr_struct_type );
+
+          Twine name_data = allocaName + ".Smart";
+          AllocaInst* smart_ptr_struct_alloca = new AllocaInst( smart_ptr_struct_type, 0, name_data, alloca );
+          Twine name_ptr = allocaName + ".SmartPtr";
+          AllocaInst* smart_ptr_struct_ptr_alloca = new AllocaInst( smart_ptr_struct_ptr_type, 0, name_ptr, alloca );
+          StoreInst* smart_ptr_struct_ptr_store = new StoreInst( smart_ptr_struct_alloca, smart_ptr_struct_ptr_alloca );
+          smart_ptr_struct_ptr_store->insertAfter( smart_ptr_struct_ptr_alloca );
+          
+          Twine nameCur = Twine( "" ) + allocaName + ".Smart.Cur";
+          Twine nameFirst = Twine( "" ) + allocaName + ".Smart.First";
+          Twine nameLast = Twine( "" ) + allocaName + ".Smart.Last";
+          GetElementPtrInst* last_gep = generateGEP( c, smart_ptr_struct_alloca, 0, 2, alloca, nameLast );
+          GetElementPtrInst* first_gep = generateGEP( c, smart_ptr_struct_alloca, 0, 1, alloca, nameFirst );
+          GetElementPtrInst* cur_gep = generateGEP( c, smart_ptr_struct_alloca, 0, 0, alloca, nameCur );
+                    
+          SmartPointer* s = new SmartPointer( cur_gep, first_gep, last_gep, smart_ptr_struct_alloca, smart_ptr_struct_ptr_alloca );
+
+          StoreInst* init_cur_store = new StoreInst( first, cur_gep );
+          StoreInst* init_first_store = new StoreInst( first, first_gep );
+          StoreInst* init_last_store = new StoreInst( last, last_gep );
+          
+          init_last_store->insertAfter( last );
+          init_first_store->insertAfter( last );
+          init_cur_store->insertAfter( last );
+
+          return s;
+    }
+
+    /**
+     * Find all allocas that can be converted to smart pointers and add them to function
+     * 
+     * TODO: Generate safe pointers for everything
+     * 
+     * NOTE: replacing original alloca with smart.Cur everywhere is bad idea, dont do it.
+     * 
+     * e.g. 
+     *   %0 = gep %smart.Cur, 0, 4
+     *   call %0
+     *
+     * Would mean that we have to create copy of the smart pointer to pass it to function to 
+     * maintain previous functionality
+     */
+    void createSmartAllocas(AllocaInstrSet &allocas, SmartPointerByValueMap &smartPointers) {
+      
+      for (AllocaInstrSet::iterator i = allocas.begin(); i != allocas.end(); i++) {
+
+        AllocaInst* alloca = *i;
+        
+        LLVMContext& c = alloca->getParent()->getContext();
+        
+        Type* t = alloca->getAllocatedType();
+
+        errs() << "Creating smart pointer structures for: ";
+        alloca->print(errs());
+        errs() << " ---- ";
+
+        // Treat array alloca special way, otherwise just treat pointer allocas.....
+        Type *ptrType = NULL;
+        Instruction *first = NULL;
+        Instruction *last = NULL;
+
+        if( ArrayType* a = dyn_cast< ArrayType >( t ) ) {
+          errs() << "It's an array!\n";
+
+          Type* element_type = a->getElementType();
+          assert(element_type->isIntegerTy(32) && "Currently pass supports only i32 type of alloca arrays.");
+
+          unsigned int array_size = a->getArrayNumElements();
+
+          ptrType = PointerType::getUnqual( element_type );
+          first = generateGEP(c, alloca, 0, 0, 0, "");
+          last = generateGEP(c, alloca, 0, array_size - 1, 0, "");
+          last->insertAfter(alloca);
+          first->insertAfter(alloca);
+
+        } else if (t->isPointerTy()) {
+
+          errs() << "It's a pointer!\n";
+          LoadInst *alloca_load = new LoadInst(alloca);
+          alloca_load->insertAfter(alloca);
+          ptrType = t;
+          first = alloca_load;
+          last = alloca_load;
+
+        } else if (t->isIntegerTy()) {
+
+          errs() << "It's an integer!\n";
+          ptrType = PointerType::getUnqual( t );
+          first = alloca;
+          last = alloca;
+          
+        } else {
+          errs() << "It is an unhandled type, some day we need to implement this to make system work correctly!\n";
+        }
+
+        if (ptrType) {
+          SmartPointer* newSmartPointer = createSmartPointer(ptrType, alloca, first, last);
+          smartPointers.insert( std::pair< Value*, SmartPointer* >( alloca, newSmartPointer ) );
+        }
+      }
+    }
+    
+    /**
+     * Goes through all replaced functions and their arguments.
+     * 
+     * 1. For each function argument that was converted to smart pointer, fix smart pointer initialization.
+     *
+     * 2. Go through all call instructions in program. If there has been used replaced safe pointer, fix call so that 
+     *    smart pointer is passed instead of normal pointer. And make sure that SmartPtr.Cur in passed struct has updated value.
+     *
+     * result: after this, old functions and their arguments should be able to be thrown away.
+     *
+     * TODO: get some example transformation from basic calls test case and split to 2 pieces
+     *
+     * define int32 foo(i32* %a) {
+     * entry: 
+     *   %a.addr = alloca i32*
+     *   store i32* %a, i32** %a.addr
+     *   %0 = im_using %a.addr
+     *   %1 = load *i32 %a.addr
+     *   %call = tail call i32 @some_func(i32* %1, i32 %0)
+     *
+     * -- converts to something like --- >
+     * 
+     * define i32 foo({i32*, i32*, i32*}* %a.Smart) {
+     * entry:
+     *   %a.addr = alloca i32*
+     * 
+     *   ; fixing %a.addr initialization and %a.addr.Smart.Cur
+     *   %0 = getelementpointer {i32*, i32*, i32*}* %a.Smart, i32 0, i32 0
+     *   store i32* %0, i32** %a.addr
+     *   store i32* %0, i32** %a.addr.Smart.Cur
+     * 
+     *   ; fixing %a.addr.Smart.First and %a.addr.Smart.Last values
+     *   %1 = getelementpointer {i32*, i32*, i32*}* %a.Smart, i32 0, i32 1
+     *   store i32* %1, i32** %a.addr.Smart.First
+     *   %2 = getelementpointer {i32*, i32*, i32*}* %a.Smart, i32 0, i32 2
+     *   store i32* %2, i32** %a.addr.Smart.Last
+     *   
+     *   ; maybe we just could replace all uses of original a.addr with a.addr.Smart.Cur
+     *   %call = tail call i32 @some_func({i32*,i32*,i32*} %a.Smart, i32 %0)
+     * 
+     */
+    void fixCodeToUseReplacedFunctions(FunctionMap &replacedFunctions, 
+                                       ArgumentMap &replacedArguments, 
+                                       CallInstrSet &callInstructions,
+                                       SmartPointerByValueMap &smartPointers) {
+            
+      for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
+        // loop through arguments and if type has changed, then create label to access original arg 
+        Function* oldFun = i->first;
+        Function* newFun = i->second;
+        
+        LLVMContext& c = oldFun->getContext();
+        
+        // move all instructions to new function
+        newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
+        BasicBlock &entryBlock = newFun->getEntryBlock();
+        newFun->takeName(oldFun);
+   
+        for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
+          Argument* oldArg = a;
+          Argument* newArg = replacedArguments[a];
+          
+          newArg->takeName(oldArg);
+          oldArg->setName(newArg->getName() + "_replaced_arg");
+
+          // if argument types are not the same we need to find smart pointer that was generated for 
+          // argument and create initializations so that existing smart alloca will get correct values
+          if (oldArg->getType() == newArg->getType()) {
+            // argument was not tampered, just replace uses to point the new function
+            oldArg->replaceAllUsesWith(newArg);
+            continue;
+          }
+
+          // create GEPs for initializing smart pointer
+          Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
+          newArg->setName(paramName);
+            
+          // create GEPs for reading .Cur .First and .Last of parameter for initializations
+          GetElementPtrInst* paramLast = generateGEP(c, newArg, 0, 2, entryBlock.begin(), Twine("") + newArg->getName() + ".Last");
+          GetElementPtrInst* paramFirst = generateGEP(c, newArg, 0, 1, entryBlock.begin(), Twine("") + newArg->getName() + ".First");
+          GetElementPtrInst* paramCur = generateGEP(c, newArg, 0, 0, entryBlock.begin(), Twine("") + newArg->getName() + ".Cur");
+
+          LoadInst* paramLastVal = new LoadInst(paramLast, Twine("") + paramLast->getName() + ".LoadedVal");
+          paramLastVal->insertAfter(paramLast);
+          LoadInst* paramFirstVal = new LoadInst(paramFirst, Twine("") + paramFirst->getName() + ".LoadedVal");
+          paramFirstVal->insertAfter(paramFirst);
+          LoadInst* paramCurVal = new LoadInst(paramCur, Twine("") + paramCur->getName() + ".LoadedVal");
+          paramCurVal->insertAfter(paramCur);
+
+          // find smart pointer of the %param.addr alloca which was generated by compiler
+          // it should be the only use of the original argument. 
+            
+          // We need to fix construct:
+          // define i32 @foo(i32* %orig_ptr_param) {
+          // entry:
+          // %orig_ptr_param.addr = alloca i32*
+          // store i32* %orig_ptr_param, i32** %orig_ptr_param.addr
+          // 
+          // To ---------> 
+          // define i32 @foo({ i32*, i32*, i32* }* %orig_ptr_param.SmartArg) { 
+          // entry:
+          // %orig_ptr_param.SmartArg.Cur = getelementptr { i32*, i32*, i32* }* %orig_ptr_param.SmartArg, i32 0, i32 0
+          // %orig_ptr_param.SmartArg.Cur.LoadedVal = load i32** %orig_ptr_param.SmartArg.Cur
+          // %orig_ptr_param.SmartArg.First = getelementptr { i32*, i32*, i32* }* %orig_ptr_param.SmartArg, i32 0, i32 1
+          // %orig_ptr_param.SmartArg.First.LoadedVal = load i32** %orig_ptr_param.SmartArg.First
+          // %orig_ptr_param.SmartArg.Last = getelementptr { i32*, i32*, i32* }* %orig_ptr_param.SmartArg, i32 0, i32 2
+          // %orig_ptr_param.SmartArg.Last.LoadedVal = load i32** %orig_ptr_param.SmartArg.Last
+          // 
+          // ; --- some smart pointer initializations for alloca has been done here ---
+          // 
+          // %orig_ptr_param.addr = alloca i32*
+          // store i32* %orig_ptr_param.SmartArg.Cur.LoadedVal, i32** %orig_ptr_param.addr
+          // store i32* %orig_ptr_param.SmartArg.Cur.LoadedVal, i32** %orig_ptr_param.addr.Smart.Cur
+          // store i32* %orig_ptr_param.SmartArg.First.LoadedVal, i32** %orig_ptr_param.addr.Smart.First
+          // store i32* %orig_ptr_param.SmartArg.Last.LoadedVal, i32** %orig_ptr_param.addr.Smart.Last
+
+          assert(oldArg->hasOneUse() && 
+                 "Unknown construct where pointer argument has > 1 uses. (expecting just store instruction to %param.addr)");
+            
+          if (StoreInst* store = dyn_cast<StoreInst>( (*oldArg->use_begin()) )) {
+            AllocaInst *origAddrAlloca = dyn_cast<AllocaInst>(store->getPointerOperand());
+            assert(origAddrAlloca);
+
+            StoreInst* newStore = new StoreInst( paramCurVal, origAddrAlloca );
+            ReplaceInstWithInst( store, newStore );
+              
+            // find smart pointer of %param.addr and initialize .Cur, .First and .Last elements
+            SmartPointer* smartAlloca = smartPointers[origAddrAlloca];
+            StoreInst* initCurStore = new StoreInst( paramCurVal, smartAlloca->cur);
+            StoreInst* initFirstStore = new StoreInst( paramFirstVal, smartAlloca->min);
+            StoreInst* initLastStore = new StoreInst( paramLastVal, smartAlloca->max);              
+            initLastStore->insertAfter(newStore);
+            initFirstStore->insertAfter(newStore);
+            initCurStore->insertAfter(newStore);
+              
+          } else {
+            errs() << "\n";
+            oldArg->use_begin()->print(errs());
+            errs() << "\n";
+            assert(false && 
+                   "Unknown construct where pointer argument's use is not StoreInst");
+          }
+                
+        } // -- end arguments for loop
+
+        /*
+        errs() << "-------- Fixed function parameters and uses of original arguments ------------\n";
+        errs() << "-------- now only rerferences to old functions should be old calls ------------\n";
+        newFun->print(errs());
+        errs() << "------------------------------------------------------------------------------\n";        
+        */
+      }  
+      
+      
+      // --------- FIXING CALLS FROM OLD STYLE TO USE NEW FUNCTIONS -----------
+      // ---------- basically all arguments etc. needs to be fixed ------------
+      errs() << "------------- FIXING CALLS TO USE NEW SIGNATURES ------------------\n";        
+
+      for (CallInstrSet::iterator i = callInstructions.begin(); i != callInstructions.end(); i++) {
+        CallInst *call = *i;
+
+        errs() << "---- Started fixing:";
+        call->print(errs());
+        errs() << "\n";
+
+        Function* oldFun = call->getCalledFunction();
+        Function* newFun = replacedFunctions[oldFun];
+        
+        call->setCalledFunction(newFun);
+        
+        // find if function signature changed some Operands and change them to refer smart pointers instead of pointers directly
+        int op = 0;
+        for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
+          Argument* oldArg = a;
+          Argument* newArg = replacedArguments[oldArg];
+
+          // this argument type has been changed to smart pointer, find out corresponding smart
+          if (oldArg->getType() != newArg->getType()) {            
+            Value* operand = call->getArgOperand(op);
+
+            errs() << "- op #" << op << " needs fixing: ";
+            operand->print(errs());
+            errs() << "\n";
+
+            // !!! TODO !!! We probably should traverse SSA tree further up to find smart pointer
+            // in that case we should also update .Cur to oldParam to have calculated 
+            // value passed to function. This method could work universally to all cases here...
+              
+            // use findLimitingElement and it should have smart pointer
+
+            // get load, which actually loads smart pointer from the end of label
+            if ( LoadInst* loadToFix = dyn_cast<LoadInst>(operand) ) {
+              
+
+              Value* oldParam = loadToFix->getOperand(0);
+
+              // we should not load value from end of pointer, but directly pass smart pointer instead...
+              if (smartPointers.count(oldParam) > 0) {
+                call->setOperand( op, smartPointers[oldParam]->smart );
+              } else {
+                errs() << "In function: ---- \n";
+                call->getParent()->print(errs());
+                errs() << "\n\nError while converting call:\n";
+                loadToFix->print(errs());
+                errs() << "\n";
+                call->print(errs());
+                errs() << " cannot find smart pointer for op: " << op << "\n"; 
+                assert(false && "Cannot find smart pointer for the call operand. Maybe you tried to pass extern variable?");
+              }
+              
+            } else if ( GetElementPtrInst* gepToFix = dyn_cast<GetElementPtrInst>(operand) ) {
+              
+              // fixing passing parameter got from GEP e.g. passing table
+              Value *sourcePointer = gepToFix->getPointerOperand();
+              if (smartPointers.count(sourcePointer) == 0 ) {
+                // hack for one current special case should be fixed as described in start of function
+                if (LoadInst* load = dyn_cast<LoadInst>(sourcePointer)) {
+                  sourcePointer = load->getPointerOperand();
+                  if (smartPointers.count(sourcePointer) == 0) sourcePointer = NULL;
+                } else {
+                  sourcePointer = NULL;
+                }
+
+                if (!sourcePointer) {
+                  errs() << "In BB:\n"; gepToFix->getParent()->print(errs());
+                  errs() << "\nConverting: "; gepToFix->getPointerOperand()->print(errs()); errs() << "\n";
+                  assert(false && "Could not find smart pointer for GEP, which should have smart pointer..");
+                }
+              }
+              
+              SmartPointer *smartPtr = smartPointers[sourcePointer];
+              // update smartPointer .Cur to match the  
+              StoreInst *updateCur = new StoreInst(gepToFix, smartPtr->cur);
+              updateCur->insertAfter(gepToFix);
+              call->setOperand(op, smartPtr->smart);
+
+            } else if ( AllocaInst* allocaSrc = dyn_cast<AllocaInst>(operand) ) {
+              
+              // value can be also e.g. alloca, which is read from caller function's arguments %param.addr... 
+              if (smartPointers.count(allocaSrc) > 0) {
+                SmartPointer *smartPtr = smartPointers[allocaSrc];
+                call->setOperand(op, smartPtr->smart);
+              } else {
+                // check if alloca is not integer type lets fail
+                errs() << "\n\nIn BB:\n";
+                call->getParent()->print(errs());
+                errs() << "\n\nError while converting call:\n";
+                allocaSrc->print(errs());
+                errs() << "\n";
+                call->print(errs());
+                errs() << "\nOld argument type:::\n";
+                oldArg->print(errs());
+                errs() << "\nNew argument type:::\n";
+                newArg->print(errs());
+                errs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
+                assert(false && "Could not find smart pointer for alloca");
+              }
+              
+            } else {
+              // NOTE: if we find lots of cases where earlier does not work we could think of adding 
+              // normalizing pass which would fix constructs to be suitable for this pass. 
+              // In llvm there might be already passes, which may work for doing it.
+              errs() << "In BB:\n";
+              call->getParent()->print(errs());
+              errs() << "\n\nError while converting call:\n";
+              call->print(errs());
+              errs() << " not able to find smart pointer for call operand: " << op << "  argument op: ";
+              call->getArgOperand(op)->print(errs());
+              errs() << "\n";
+
+              assert(false && "Could not find smart pointer for op for converting call.");
+            }
+          }
+          op++;
+        }
+
+        errs() << "-- Converted call to : ";
+        call->print(errs());
+        errs() << "\n";
+      }
+    }
+    
+    /**
+     * Creates new function signatures and mapping between original and new.
+     *
+     * Function does not modify function yet in any manner.
+     *
+     * If kernel function is seen, we should assert (@todo needs to be implemented when llvm 3.2 is ready),
+     * until we are ready with implementing safe pointer construction from (int*, int) pairs.
+     * 
+     * If int main(int argc, char *argv[]) add to safe functions and safe arguments or assert because of those parameters for now.
+     * 
+     * @param safeFunctions Set of function, which does not need to be replaced
+     * @param safeArguments Set of arguments, which shouldn't need extra caring even if they are any pointer types etc.
+     *
+     */
+    virtual Function* createNewFunctionSignature( 
+      Function *F,  
+      FunctionMap &functionMapping, 
+      ArgumentMap &argumentMapping, 
+      FunctionSet &safeFunctions,
+      ArgumentSet &safeArguments ) {
+       
+      LLVMContext& c = F->getContext();
+
+      // currently returning pointer or array is not supported
+      assert( (!F->getFunctionType()->getReturnType()->isPointerTy()) && 
+              "Handling function returning pointer is not implemented." );
+      assert( (!F->getFunctionType()->getReturnType()->isArrayTy()) && 
+              "Handling function retruning array type is not implemented." );
+      assert( (!F->isVarArg()) && "Variable argument functions are not supported.");
+
+      // TODO: check if main or kernel and in that case do not change signature 
+
+      // convert function signature to use pointer structs instead of direct pointers
       std::vector< Type* > param_types;
       for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
         Argument* arg = a;
         Type* t = arg->getType();
-
+        
         if( t->isPointerTy() ) {
           Type* smart_array_struct = getSmartPointerType( c, t );
-          param_types.push_back( smart_array_struct );
+          param_types.push_back( smart_array_struct );          
         } else {
+          assert( (!t->isArrayTy()) && "Passing array in arguments is not implemented." );
           param_types.push_back( t );
         }
       }
 
+      // creating new function with different prototype 
       FunctionType *function_type = F->getFunctionType();
       FunctionType *new_function_type = FunctionType::get( function_type->getReturnType(), param_types, false );
 
       Function *new_function = Function::Create( new_function_type, F->getLinkage() );
-      new_function->copyAttributesFrom( F );
+      new_function->copyAttributesFrom( F );      
       F->getParent()->getFunctionList().insert( F, new_function );
-      new_function->takeName( F );
+      new_function->setName( F->getName() + "___tobe_replacement___" );
+      
+      // add new function to book keepig to show what was replaced
+      functionMapping.insert( std::pair< Function*, Function* >( F, new_function ) );
 
-      new_function->getBasicBlockList().splice( new_function->begin(), F->getBasicBlockList() );
+        // TODO: add if debug check
+      errs() << "-- Created new signature for: " << F->getName() << " ";
+      F->getType()->print(errs());
+      errs() << "\nnew signature: " << new_function->getName() << " " ;
+      new_function->getType()->print(errs());
+      errs() << "\n";
 
-      mReplacedFunctions.insert( std::pair< Function*, Function* >( F, new_function ) );
+      // map arguments of original function to new replacements
+      for( Function::arg_iterator 
+             a = F->arg_begin(), 
+             E = F->arg_end(), 
+             a_new = new_function->arg_begin(); a != E; ++a, ++a_new ) {     
+        
+        argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) );
 
-      SmartPointerList* sp_list = new SmartPointerList();
-      mFunctionSmartPointers.insert( std::pair< Function*, SmartPointerList* >( new_function, sp_list ) );
-
-      for( Function::arg_iterator a = F->arg_begin(), E = F->arg_end(), a2 = new_function->arg_begin();
-           a != E; ++a, ++a2 ) {
-        Argument* arg = a;
-        Type* t = arg->getType();
-
-        if( t->isPointerTy() ) {
-          for( Value::use_iterator u = a->use_begin(), e = a->use_end(); u != e; ++u ) {
-            Value* temp = *u;
-            assert( temp );
-
-            if( llvm::StoreInst* store = dyn_cast< llvm::StoreInst >(*u) ) {
-
-              Value* target = store->getPointerOperand();
-
-              if( llvm::AllocaInst* alloca = dyn_cast< llvm::AllocaInst >(target) ) {
-                Type* smart_array_struct = getSmartStructType( c, t );
-                StringRef allocaName = alloca->getName();
-                Twine name_data = allocaName + ".SmartPtr";
-                AllocaInst* smart_array_ptr_alloca = new AllocaInst( PointerType::getUnqual(smart_array_struct), 0, name_data, alloca );
-
-                StoreInst* smart_array_ptr_store = new StoreInst( a2, smart_array_ptr_alloca );
-                smart_array_ptr_store->insertAfter( smart_array_ptr_alloca );
-
-                GetElementPtrInst* gep = this->generateGEP( c, a2, 0, 0, 0 );
-                gep->insertAfter( smart_array_ptr_store );
-
-                Twine name_load_cur = Twine( "" ) + allocaName + ".Data";
-                LoadInst* load_cur = new LoadInst( gep, name_load_cur );
-                load_cur->insertAfter( gep );
-
-                Twine name_alloca = allocaName + ".Arg";
-                AllocaInst* arg_ptr_inst = new AllocaInst( alloca->getType()->getPointerElementType(), 0, name_alloca );
-
-                StoreInst* store_addr = new StoreInst( load_cur, arg_ptr_inst );
-                ReplaceInstWithInst( store, store_addr );
-                ReplaceInstWithInst( alloca, arg_ptr_inst );
-
-                assert( alloca );
-                mBlackList.insert( arg_ptr_inst );
-                mBlackList.insert( smart_array_ptr_alloca );
-              }
-
-            }
-          }
-
-          a2->takeName(a);
-        } else {
-          // just copy old uses
-          a->replaceAllUsesWith(a2);
-          a2->takeName(a);
-        }
+        // TODO: add if debug check
+        errs() << "Mapped orig arg: ";
+        a->print(errs());
+        errs() << " -----> ";
+        a_new->print(errs());
+        errs() << "\n";
       }
 
-      // find all array/pointer allocations and convert them to smart arrays
-      BasicBlock& block = F->getEntryBlock(); 
-      for( BasicBlock::iterator i = block.begin(); i != block.end(); ++i ) {
-        if( llvm::AllocaInst* alloca = dyn_cast< llvm::AllocaInst >(i) ) {
-          AllocaSet::iterator bl = mBlackList.find( alloca );
-          if( bl != mBlackList.end() ) {
-            continue;
-          }
+      return new_function;
+    }
 
-          // check if it is used to store parameter
-          bool isParam = false;
-          for( Value::use_iterator u = alloca->use_begin(), e = alloca->use_end(); u != e; ++u ) {
-            if( StoreInst *store = dyn_cast< StoreInst >(*u) ) {
-              Value* source = store->getValueOperand();
-              if( Argument* a = dyn_cast< Argument > ( source ) ) {
-                UNUSED( a );
+    virtual void sortInstructions( Function *F, 
+                                   CallInstrSet &calls, 
+                                   AllocaInstrSet &allocas,
+                                   StoreInstrSet &stores,
+                                   LoadInstrSet &loads) {
+      
+      errs() << "-- Finding interesting instructions from: " << F->getName() << "\n";
 
-                // skip argument
-                isParam = true;
-                break;
-              }
+      // find all instructions which should be handled afterwards
+      for ( Function::iterator bb = F->begin(); bb != F->end(); bb++) {
+        for( BasicBlock::iterator i = bb->begin(); i != bb->end(); ++i ) {      
+          Instruction &inst = *i;
+       
+          if ( CallInst *call = dyn_cast< CallInst >(&inst) ) {
+            if (!call->getCalledFunction()->isIntrinsic()) {
+              calls.insert(call);
+              errs() << "Found call: ";
+              call->print(errs());
+              errs() << "\n";
+            } else {
+              errs() << "Ignored call to intrinsic\n";
             }
-          }
 
-          // do not convert arguments
-          if( isParam )
-            continue;
-
-          Type* t = alloca->getAllocatedType();
-
-          static unsigned int id = 0;
-          StringRef allocaName = alloca->getName();
-
-          if( ArrayType* a = dyn_cast< ArrayType >( t ) ) {
-            id++;
-            Type* element_type = a->getElementType();
-
-            /// @todo: Array of pointers.
-
-            std::vector< Type* > types;
-            types.push_back( PointerType::getUnqual( element_type ) );
-            types.push_back( PointerType::getUnqual( element_type ) );
-            types.push_back( PointerType::getUnqual( element_type ) );
-            ArrayRef< Type* > tref( types );
-
-            StructType *smart_array_struct = StructType::get( c, tref );
-            assert( smart_array_struct );
-            Type* smart_array_pointer_type = PointerType::getUnqual( smart_array_struct );
-
-            Twine name_data = allocaName + ".Smart";
-            AllocaInst* smart_array_alloca = new AllocaInst( smart_array_struct, 0, name_data, alloca );
-            Twine name_ptr = allocaName + ".SmartPtr";
-            AllocaInst* smart_array_ptr_alloca = new AllocaInst( smart_array_pointer_type, 0, name_ptr, alloca );
-            StoreInst* smart_array_ptr_store = new StoreInst( smart_array_alloca, smart_array_ptr_alloca );
-            smart_array_ptr_store->insertAfter( smart_array_ptr_alloca );
-
-            Twine name_00 = Twine( "" ) + allocaName + ".Smart.Cur";
-            ConstantInt* c_0 = ConstantInt::get( Type::getInt32Ty(c), 0 );
-            std::vector< Value* > values_00;
-            values_00.push_back( c_0 );
-            values_00.push_back( c_0 );
-            ArrayRef< Value* > ref_00( values_00 );
-            GetElementPtrInst* array_gep = GetElementPtrInst::Create( smart_array_alloca, ref_00, name_00, alloca );
-
-            Twine name_01 = Twine( "" ) + allocaName + ".Smart.First";
-            ConstantInt* c_1 = ConstantInt::get( Type::getInt32Ty(c), 1 );
-            std::vector< Value* > values_01;
-            values_01.push_back( c_0 );
-            values_01.push_back( c_1 );
-            ArrayRef< Value* > ref_01( values_01 );
-            GetElementPtrInst* first_gep = GetElementPtrInst::Create( smart_array_alloca, ref_01, name_01, alloca );
-
-            Twine name_02 = Twine( "" ) + allocaName + ".Smart.Last";
-            ConstantInt* c_2 = ConstantInt::get( Type::getInt32Ty(c), 2 );
-            std::vector< Value* > values_02;
-            values_02.push_back( c_0 );
-            values_02.push_back( c_2 );
-            ArrayRef< Value* > ref_02( values_02 );
-            GetElementPtrInst* last_gep = GetElementPtrInst::Create( smart_array_alloca, ref_02, name_02, alloca );
-
-            SmartPointer* s = new SmartPointer( array_gep, first_gep, last_gep, smart_array_alloca );
-            mSmartPointers.insert( std::pair< Value*, SmartPointer* >( alloca, s ) );
-            sp_list->push_back( s );
-
-            mSmartPointerVector.push_back( alloca );
-            //errs() << "push back" << *alloca << "\n";
-
-            Twine name_first = Twine( "" ) + allocaName + ".First";
-            GetElementPtrInst* array_data_gep = GetElementPtrInst::Create( alloca, ref_00, name_first );
-            array_data_gep->insertAfter( alloca );
-            StoreInst* data_store = new StoreInst( array_data_gep, array_gep );
-            data_store->insertAfter( array_data_gep );
-            StoreInst* first_store = new StoreInst( array_data_gep, first_gep );
-            first_store->insertAfter( array_data_gep );
-
-            Twine name_last = Twine( "" ) + allocaName + ".Last";
-            unsigned int array_size = a->getArrayNumElements();
-            ConstantInt* c_last = ConstantInt::get( Type::getInt32Ty(c), array_size - 1 );
-            std::vector< Value* > values_last;
-            values_last.push_back( c_0 );
-            values_last.push_back( c_last );
-            ArrayRef< Value* > ref_last( values_last );
-            GetElementPtrInst* array_last_gep = GetElementPtrInst::Create( alloca, ref_last, name_last );
-            array_last_gep->insertAfter( alloca );
-            StoreInst* last_store = new StoreInst( array_last_gep, last_gep );
-            last_store->insertAfter( array_last_gep );
-          } else {
-            // pointers only
-            if( !t->isPointerTy() )
+          } else if ( AllocaInst *alloca = dyn_cast< AllocaInst >(&inst) ) {
+            
+            // TODO: check if alloca is from smart pointer argument. 
+            // ( for these we should no do traditional smart pointer initialization, 
+            //  but initialize them from sp read from argument )
+            
+            allocas.insert(alloca);
+            errs() << "Found alloca: ";
+            alloca->print(errs());
+            errs() << "\n";
+            
+          } else if ( StoreInst *store = dyn_cast< StoreInst >(&inst) ) {
+            
+            if (dyn_cast<Argument>(store->getValueOperand())) {
+              errs() << "Skipping store which reads function argument: ";
+              store->print(errs());
+              errs() << "\n";
               continue;
+            } 
+            
+            stores.insert(store);
+            errs() << "Found store: ";
+            store->print(errs());
+            errs() << "\n";
+            
+          } else if ( LoadInst *load = dyn_cast< LoadInst >(&inst) ) {
+            
+            loads.insert(load);
+            errs() << "Found load: ";
+            load->print(errs());
+            errs() << "\n";
 
-            id++;
-
-            std::vector< Type* > types;
-            types.push_back( t );
-            types.push_back( t );
-            types.push_back( t );
-
-            ArrayRef< Type* > tref( types );
-
-            StructType *smart_array_struct = StructType::get( c, tref );
-            assert( smart_array_struct );
-            Type* smart_array_pointer_type = PointerType::getUnqual( smart_array_struct );
-
-            Twine name_data = allocaName + ".Smart";
-            AllocaInst* smart_array_alloca = new AllocaInst( smart_array_struct, 0, name_data, alloca );
-            Twine name_ptr = allocaName + ".SmartPtr";
-            AllocaInst* smart_array_ptr_alloca = new AllocaInst( smart_array_pointer_type, 0, name_ptr, alloca );
-            StoreInst* smart_array_ptr_store = new StoreInst( smart_array_alloca, smart_array_ptr_alloca );
-            smart_array_ptr_store->insertAfter( smart_array_ptr_alloca );
-
-            Twine name_00 = Twine( "" ) + allocaName + ".Smart.Cur";
-            ConstantInt* c_0 = ConstantInt::get( Type::getInt32Ty(c), 0 );
-            std::vector< Value* > values_00;
-            values_00.push_back( c_0 );
-            values_00.push_back( c_0 );
-            ArrayRef< Value* > ref_00( values_00 );
-            GetElementPtrInst* array_gep = GetElementPtrInst::Create( smart_array_alloca, ref_00, name_00, alloca );
-
-            Twine name_01 = Twine( "" ) + allocaName + ".Smart.First";
-            ConstantInt* c_1 = ConstantInt::get( Type::getInt32Ty(c), 1 );
-            std::vector< Value* > values_01;
-            values_01.push_back( c_0 );
-            values_01.push_back( c_1 );
-            ArrayRef< Value* > ref_01( values_01 );
-            GetElementPtrInst* first_gep = GetElementPtrInst::Create( smart_array_alloca, ref_01, name_01, alloca );
-
-            Twine name_02 = Twine( "" ) + allocaName + ".Smart.Last";
-            ConstantInt* c_2 = ConstantInt::get( Type::getInt32Ty(c), 2 );
-            std::vector< Value* > values_02;
-            values_02.push_back( c_0 );
-            values_02.push_back( c_2 );
-            ArrayRef< Value* > ref_02( values_02 );
-            GetElementPtrInst* last_gep = GetElementPtrInst::Create( smart_array_alloca, ref_02, name_02, alloca );
-
-            SmartPointer* s = new SmartPointer( array_gep, first_gep, last_gep, smart_array_alloca );
-            mSmartPointers.insert( std::pair< Value*, SmartPointer* >( alloca, s ) );
-            sp_list->push_back( s );
-
-            mSmartPointerVector.push_back( alloca );
-            //errs() << "push back" << *alloca << "\n";
           }
+          
+          //    TODO: find all alloca, load, store, gep and function call instructions
+          //    TODO: for each parameters trace original alloca / function argument and add to book keeping
+          //    TODO: if unsupported instruction is seen (inttoptr, fence, va_arg, cmpxchg,atomicrmw, 
+          //           landingpad, memintrinsics) , abort
+          
         }
       }
-
-      return false;
     }
 
   private:
-    typedef std::map< Value*, SmartPointer* > SmartPointerMap;
-    SmartPointerMap mSmartPointers;
-
-    typedef std::vector< Value* > SmartPointerVector;
-    SmartPointerVector mSmartPointerVector;
-
-    typedef std::set< AllocaInst* > AllocaSet;
-    AllocaSet mBlackList;
-
-    typedef std::map< Function*, Function* > FunctionMap;
-    FunctionMap mReplacedFunctions;
-
-    typedef std::vector< SmartPointer* > SmartPointerList;
-    typedef std::map< Function*, SmartPointerList* > FunctionSmartPointerList;
-
-    FunctionSmartPointerList mFunctionSmartPointers;
-
-    Function* mClampFunction;
-    Function* mDerefFunction;
-
     GlobalVariable* mGlobalNull;
 
   };
