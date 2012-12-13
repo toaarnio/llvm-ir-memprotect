@@ -6,7 +6,8 @@
 // RUN: echo "----- clamped optimized -----" &&
 // RUN: opt -internalize -internalize-public-api-list=main -Oz -S < $OUT_FILE.clamped.ll && 
 // RUN: echo "----- original optimized -----" &&
-// RUN: opt -internalize -internalize-public-api-list=main -Oz  -S < $OUT_FILE.bc 
+// RUN: opt -internalize -internalize-public-api-list=main -Oz  -S < $OUT_FILE.bc &&
+// RUN: echo "Automatic check not implemented yet !" && false
 
 extern int hit, other;
 

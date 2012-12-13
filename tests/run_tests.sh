@@ -39,17 +39,17 @@ function get_run_command {
 }
 
 function run_test {
-    echo "------------- Running $1 ..."
+    echo "########################### ------------- Running $1 ..."
     cd $temp_dir;
     TEST_SRC=$current_dir/$1;
     OUT_FILE=$temp_dir/$1;
     test_command=$(get_run_command $TEST_SRC);
     if eval $test_command; then
-        echo "--- --- ------------- OK";
+        echo ">>>>>>>>>> OK";
     else
         echo "TEST FAILED! intermediate files should be found in run_temp directory";
         echo $test_command
-        echo "!!! !!! ------------- FAIL";
+        echo ">>>>>>>>>> !!! !!! FAIL";
     fi
 }
 
