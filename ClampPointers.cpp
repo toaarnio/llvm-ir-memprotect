@@ -199,19 +199,32 @@ namespace WebCL {
       // smartpointers sorted by value e.g. i32* %a ->  {i32*, i32*, i32*}* %safe_a
       SmartPointerByValueMap smartPointers;
 
-      // Analyze all functions
+      // we can create smart pointers only for local allocas
+      DEBUG(dbgs() << "\n --------------- NORMALIZE GLOBAL VARIABLE USES --------------\n");
+      normalizeGlobalVariableUses( M );
+
+      // ####### Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
         if (i->isIntrinsic()) {
           DEBUG(dbgs() << "Skipping: " << i->getName() << " which is intrinsic\n");
           continue;
         }
+
+        // some optimizations causes removal of passing argument %arg to %arg.addr alloca
+        // this construct is needed by later phases, so we need to make sure that arguments are fine
+        // before starting... has something to do with nocapture argument attribute...
+        DEBUG(dbgs() << "\n --------------- NORMALIZE ARGUMENT PASSING --------------\n");
+        normalizeArgumentPassing( i );
+
         // actually this should not touch functions yet at all, just collect data which functions needs to be changed
         // now it still creates new function signatures and steals old function's name
         DEBUG(dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n");
         createNewFunctionSignature( i, replacedFunctions, replacedArguments, safeFunctions, safeArguments );
+
         DEBUG(dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n");
         sortInstructions( i,  calls, allocas, stores, loads );
       }
+
 
       // add smart allocas and generate initial smart pointer data
       DEBUG(dbgs() << "\n --------------- CREATING SMART ALLOCAS FOR EVERYONE --------------\n");
@@ -263,6 +276,88 @@ namespace WebCL {
 
       return true;
     }
+    
+    /**
+     * Pass globals always through local variables.
+     *
+     * To be able to create SmartPointers with limits for global variables, we need to 
+     * pass them first through local variables.
+     * 
+     * NOTE: this is slow, hopefulle post optimizations fixes the overhead and 
+     *       avoid using globals
+     */ 
+    void normalizeGlobalVariableUses(Module &M) {
+      for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
+        DEBUG(dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n");
+        int id = 0;
+
+        for( Value::use_iterator i = g->use_begin(); i != g->use_end(); ++i ) {
+          DEBUG(dbgs() << "Found use: "; i->print(dbgs()); dbgs() << " : ");
+
+          Instruction *useAsInst = dyn_cast<Instruction>(*i);
+          
+          // skipping does not mean that stuff is always fine... it just means that
+          // we don't know how to handle the use and if it is bad, compilation will abort later
+          if (!useAsInst || dyn_cast<StoreInst>(useAsInst) ||dyn_cast<LoadInst>(useAsInst)) {
+            DEBUG(dbgs() << "## skipping\n");
+            continue;
+          }
+          
+          DEBUG(dbgs() << "## fixing\n");
+
+          id++;
+          char postfix_buf[64];
+          sprintf(postfix_buf, "%d", id);
+          std::string postfix = postfix_buf;
+
+          // before each use copy it to local variable
+          AllocaInst *alloca = new AllocaInst(g->getType(), g->getName() + ".use.alloca." + postfix, useAsInst);
+          new StoreInst(g, alloca, useAsInst);
+          LoadInst *load = new LoadInst(alloca, "", useAsInst);
+          i->replaceUsesOfWith(g, load);
+          DEBUG(dbgs() << "with: "; i->print(dbgs()); dbgs() << "\n");
+        }
+      }
+    }
+
+
+    /**
+     * Makes sure that each function argument has structure: 
+     * 
+     * NOTE: This must be run, before starting ClampPointers pass... could be 
+     * created as separate pass.
+     * 
+     * define i32 @foo(i32* %local_alloca) {
+     * entry:
+     *   %local_alloca.addr = alloca i32*, align 8* %arg.addr = alloca type
+     *   store i32* %local_alloca, i32** %local_alloca.addr
+     *   %first_use = load i32* %local_alloca.addr
+     *
+     * opt -O0 has this kind of entries already.
+     */ 
+    void normalizeArgumentPassing(Function *F) {
+      for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
+        Argument* arg = a;
+        DEBUG(dbgs() << "Checking argument: "; arg->print(dbgs()); dbgs() << " : ");
+        if ( arg->hasOneUse() ) {
+          if ( StoreInst *store = dyn_cast<StoreInst>(arg->use_back()) ) {
+            if ( AllocaInst *alloca = dyn_cast<AllocaInst>(store->getPointerOperand()) ) {
+              // ok, this argument looks fine.
+              DEBUG(dbgs() << "found alloca: "; alloca->print(dbgs()); dbgs() << "\n");
+              continue;
+            }
+          }
+        }
+        
+        DEBUG(dbgs() << "Creating entry code: ");
+        Instruction &entryPoint = arg->getParent()->getEntryBlock().front();
+        AllocaInst *argAlloca = new AllocaInst(arg->getType(), arg->getName() + ".addr", &entryPoint);
+        DEBUG(argAlloca->print(dbgs()); dbgs() << " original arg: "; arg->print(dbgs()); dbgs() << "\n");        
+        LoadInst *load = new LoadInst(argAlloca, "", &entryPoint);
+        arg->replaceAllUsesWith(load);
+        new StoreInst(arg, argAlloca, load);
+      }
+    }
 
 
     /**
@@ -283,14 +378,38 @@ namespace WebCL {
      * If val touching pointer operand needs checks, then inject boundary check code.
      */
     void addChecks(Value *ptrOperand, Instruction *inst, SmartPointerByValueMap &smartPointers) {
+      
       if ( dyn_cast<AllocaInst>(ptrOperand) ) {
         DEBUG(dbgs() << "Skipping direct alloca op: "; inst->print(dbgs()); dbgs() << "\n");
         return;
+      
       } else if ( dyn_cast<GlobalValue>(ptrOperand) ) {
         DEBUG(dbgs() << "Skipping direct load from global value: "; inst->print(dbgs()); dbgs() << "\n");
         return;
+        
+      } else if ( ConstantExpr *constGep = dyn_cast<ConstantExpr>(ptrOperand) ) {        
+        Instruction* inst = constGep->getAsInstruction();
+        bool isGep = false;
+        bool isInBounds = false;
+        
+        if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
+          isGep = true;
+          isInBounds = gep->isInBounds();
+          // if we refer non array global / external variable, we assume that we have to refer always to 0 element
+          if ( !gep->getPointerOperand()->getType()->isArrayTy() ) {
+            isInBounds = gep->hasAllZeroIndices();
+          }
+        }
+        
+        delete inst;
+        
+        if (isGep) {
+          assert(isInBounds && "Constant expression out of bounds");
+          DEBUG(dbgs() << "Skipping constant expression, which is in limits: "; inst->print(dbgs()); dbgs() << "\n");
+          return;
+        }
       }
-
+      
       // find out which limits load has to respect and add boundary checks
       if ( smartPointers.count(ptrOperand) == 0 ) {
         dbgs() << "When verifying: "; inst->print(dbgs()); dbgs() << "\n";
@@ -734,31 +853,39 @@ namespace WebCL {
         newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
         BasicBlock &entryBlock = newFun->getEntryBlock();
         newFun->takeName(oldFun);
-   
+        
+        DEBUG(dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n");
+
         for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
           Argument* oldArg = a;
           Argument* newArg = replacedArguments[a];
-          
+
+          DEBUG( dbgs() << "Fixing arg: "; oldArg->print(dbgs()); dbgs() << " : " );
+
           newArg->takeName(oldArg);
           oldArg->setName(newArg->getName() + "_replaced_arg");
 
           // if argument types are not the same we need to find smart pointer that was generated for 
           // argument and create initializations so that existing smart alloca will get correct values
           if (oldArg->getType() == newArg->getType()) {
+            DEBUG( dbgs() << "type was not changed. Just replacing oldArg uses with newArg.\n" );
             // argument was not tampered, just replace uses to point the new function
             oldArg->replaceAllUsesWith(newArg);
             continue;
           }
 
           // create GEPs for initializing smart pointer
+          DEBUG( dbgs() << "1 " );
           Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
           newArg->setName(paramName);
             
           // create GEPs for reading .Cur .First and .Last of parameter for initializations
+          DEBUG( dbgs() << "2 " );
           GetElementPtrInst* paramLast = generateGEP(c, newArg, 0, 2, entryBlock.begin(), Twine("") + newArg->getName() + ".Last");
           GetElementPtrInst* paramFirst = generateGEP(c, newArg, 0, 1, entryBlock.begin(), Twine("") + newArg->getName() + ".First");
           GetElementPtrInst* paramCur = generateGEP(c, newArg, 0, 0, entryBlock.begin(), Twine("") + newArg->getName() + ".Cur");
 
+          DEBUG( dbgs() << "3 " );
           LoadInst* paramLastVal = new LoadInst(paramLast, Twine("") + paramLast->getName() + ".LoadedVal");
           paramLastVal->insertAfter(paramLast);
           LoadInst* paramFirstVal = new LoadInst(paramFirst, Twine("") + paramFirst->getName() + ".LoadedVal");
@@ -796,22 +923,35 @@ namespace WebCL {
           assert(oldArg->hasOneUse() && 
                  "Unknown construct where pointer argument has > 1 uses. (expecting just store instruction to %param.addr)");
             
+          DEBUG( dbgs() << "4 " );
           if (StoreInst* store = dyn_cast<StoreInst>( (*oldArg->use_begin()) )) {
             AllocaInst *origAddrAlloca = dyn_cast<AllocaInst>(store->getPointerOperand());
             assert(origAddrAlloca);
-
+            
+            DEBUG( dbgs() << "5 " );
             StoreInst* newStore = new StoreInst( paramCurVal, origAddrAlloca );
             ReplaceInstWithInst( store, newStore );
               
             // find smart pointer of %param.addr and initialize .Cur, .First and .Last elements
+            if (smartPointers.count(origAddrAlloca) == 0) {
+              dbgs() << "While handling\n";            
+              origAddrAlloca->print(dbgs()); dbgs() << "\n";
+              store->print(dbgs()); dbgs() << "\n";
+              assert(false && "Could not find smart pointer for alloca.");
+            }
+
+            DEBUG( dbgs() << "6 " );
             SmartPointer* smartAlloca = smartPointers[origAddrAlloca];
             StoreInst* initCurStore = new StoreInst( paramCurVal, smartAlloca->cur);
             StoreInst* initFirstStore = new StoreInst( paramFirstVal, smartAlloca->min);
             StoreInst* initLastStore = new StoreInst( paramLastVal, smartAlloca->max);              
+
             initLastStore->insertAfter(newStore);
             initFirstStore->insertAfter(newStore);
             initCurStore->insertAfter(newStore);
-              
+
+            DEBUG( dbgs() << "done! \n" );
+
           } else {
             dbgs() << "\n"; oldArg->use_begin()->print(dbgs()); dbgs() << "\n";
             assert(false && 
