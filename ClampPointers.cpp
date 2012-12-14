@@ -75,6 +75,7 @@ namespace WebCL {
     typedef std::set< GetElementPtrInst* > GepInstrSet;
     typedef std::set< LoadInst* > LoadInstrSet;
     typedef std::set< StoreInst* > StoreInstrSet;
+    typedef std::set< Value* > ValueSet;
     typedef std::map< Value*, SmartPointer* > SmartPointerByValueMap;
 
     /// Helper function for generating a single-index GEP instruction from a value.
@@ -185,10 +186,9 @@ namespace WebCL {
       // map of function arguments, which are replaced with new ones
       ArgumentMap replacedArguments;
       
-      // sets for functions and their arguments, whose signatures are ok, even if they contain pointers
-      FunctionSet safeFunctions;
-      ArgumentSet safeArguments;
-
+      // set of values, which won't need boundary checks to memory accesses
+      ValueSet safeExceptions;
+      
       // set of different interesting instructions in the program
       // maybe could be just one map of sets sorted by opcode
       CallInstrSet calls;
@@ -219,7 +219,7 @@ namespace WebCL {
         // actually this should not touch functions yet at all, just collect data which functions needs to be changed
         // now it still creates new function signatures and steals old function's name
         DEBUG(dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n");
-        createNewFunctionSignature( i, replacedFunctions, replacedArguments, safeFunctions, safeArguments );
+        createNewFunctionSignature( i, replacedFunctions, replacedArguments );
 
         DEBUG(dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n");
         sortInstructions( i,  calls, allocas, stores, loads );
@@ -239,7 +239,6 @@ namespace WebCL {
       }
       */
 
-      // TODO: create smart pointer initializations for main function where we expect (int count, int8* argv[]) input
       // TODO: create smart pointer initializations for kernel function where we expect (int*, int) input
 
       DEBUG(dbgs() << "\n --------------- FIXING SMART POINTER STORE OPERATIONS TO ALSO KEEP .Cur, .First and .Last UP-TO-DATE --------------\n");
@@ -263,8 +262,11 @@ namespace WebCL {
       DEBUG(dbgs() << "\n --------------- EXPANDING SMARTPOINTER MAP TO ALSO CONTAIN LIMITS FOR USES OF ORIGINAL POINTERS --------------\n");
       expandSmartPointersResolvingToCoverUses(smartPointers);
 
+      DEBUG(dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED --------------\n");
+      collectSafeExceptions(replacedFunctions, safeExceptions);
+
       DEBUG(dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n");
-      addBoundaryChecks(stores, loads, smartPointers);
+      addBoundaryChecks(stores, loads, smartPointers, safeExceptions);
 
       /*
       for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
@@ -277,6 +279,55 @@ namespace WebCL {
       return true;
     }
     
+    void resolveArgvUses(Value *val, ValueSet &safeExceptions) {
+      for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
+        Value *use = *i;
+        
+        // ----- continue to next use if cannot be sure about if still safe
+        if ( dyn_cast<GetElementPtrInst>(use) || dyn_cast<LoadInst>(use) ) {
+          DEBUG(dbgs() << "Use: "; use->print(dbgs()); dbgs() << " is safe!\n");
+          safeExceptions.insert(use);
+          resolveArgvUses(use, safeExceptions);                
+        } else if ( StoreInst *store = dyn_cast<StoreInst>(use) ) {
+
+          // dont care about store, but try to find it's destinations uses too
+          if (safeExceptions.count(store->getPointerOperand()) == 0 && store->getPointerOperand()->getName() == "argv.addr") {
+            DEBUG(dbgs() << "store has no uses, but follow its destination's uses: "; use->print(dbgs()); dbgs() << "\n");
+            DEBUG(dbgs() << "follow: "; store->getPointerOperand()->print(dbgs()); dbgs() << "\n");
+            safeExceptions.insert(store->getPointerOperand());
+            resolveArgvUses(store->getPointerOperand(), safeExceptions);
+          }
+        } else { 
+          // notify about unexpected cannot be resolved cases for debug
+          DEBUG(dbgs() << "Cannot resolve if still safe for: "; use->print(dbgs()); dbgs() << "\n");
+          continue;
+        }
+
+      }
+    }
+
+    /**
+     * Collects values, which can be handled without modifying.
+     * 
+     * e.g. main function arguments (int8** is not currently supported 
+     * and won't be in the first place).
+     *
+     * Note: this is quite dirty symbol name based hack...
+     */
+    void collectSafeExceptions(FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
+      for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++)  {
+        Function *check = i->second;
+        if (check->getName() == "main") {
+          for( Function::arg_iterator a = check->arg_begin(); a != check->arg_end(); ++a ) {
+            Argument* arg = a;
+            if (arg->getName() == "argv") {
+              resolveArgvUses(arg, safeExceptions);
+            }
+          }
+        }
+      }
+    }
+
     /**
      * Pass globals always through local variables.
      *
@@ -363,23 +414,27 @@ namespace WebCL {
     /**
      * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
      */
-    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, SmartPointerByValueMap &smartPointers) {
+    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, SmartPointerByValueMap &smartPointers, ValueSet &safeExceptions) {
       // check load instructions... 
       for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
-        addChecks((*i)->getPointerOperand(), *i, smartPointers);
+        addChecks((*i)->getPointerOperand(), *i, smartPointers, safeExceptions);
       }   
       // check store instructions
       for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
-        addChecks((*i)->getPointerOperand(), *i, smartPointers);
+        addChecks((*i)->getPointerOperand(), *i, smartPointers, safeExceptions);
       }
     }
 
     /**
      * If val touching pointer operand needs checks, then inject boundary check code.
      */
-    void addChecks(Value *ptrOperand, Instruction *inst, SmartPointerByValueMap &smartPointers) {
+    void addChecks(Value *ptrOperand, Instruction *inst, SmartPointerByValueMap &smartPointers, ValueSet &safeExceptions) {
       
-      if ( dyn_cast<AllocaInst>(ptrOperand) ) {
+      // TODO: maybe all these could be added directly to safeExceptions map...
+      if (safeExceptions.count(ptrOperand)) {
+        DEBUG(dbgs() << "Skipping op that was listed in safe exceptions: "; inst->print(dbgs()); dbgs() << "\n");        
+        return;
+      } else if ( dyn_cast<AllocaInst>(ptrOperand) ) {
         DEBUG(dbgs() << "Skipping direct alloca op: "; inst->print(dbgs()); dbgs() << "\n");
         return;
       
@@ -409,7 +464,7 @@ namespace WebCL {
           return;
         }
       }
-      
+ 
       // find out which limits load has to respect and add boundary checks
       if ( smartPointers.count(ptrOperand) == 0 ) {
         dbgs() << "When verifying: "; inst->print(dbgs()); dbgs() << "\n";
@@ -759,7 +814,8 @@ namespace WebCL {
           DEBUG(dbgs() << "It's an array!\n");
 
           Type* element_type = a->getElementType();
-          assert(element_type->isIntegerTy(32) && "Currently pass supports only i32 type of alloca arrays.");
+          assert( ( element_type->isIntegerTy() || element_type->isFloatingPointTy() ) && 
+                  "Currently pass supports only integer or float arrays.");
 
           unsigned int array_size = a->getArrayNumElements();
 
@@ -778,9 +834,9 @@ namespace WebCL {
           first = alloca_load;
           last = alloca_load;
 
-        } else if (t->isIntegerTy()) {
+        } else if (t->isIntegerTy() || t->isFloatingPointTy()) {
 
-          DEBUG(dbgs() << "It's an integer!\n");
+          DEBUG(dbgs() << "It an integer or float!\n");
           ptrType = PointerType::getUnqual( t );
           first = alloca;
           last = alloca;
@@ -1095,16 +1151,11 @@ namespace WebCL {
      * 
      * If int main(int argc, char *argv[]) add to safe functions and safe arguments or assert because of those parameters for now.
      * 
-     * @param safeFunctions Set of function, which does not need to be replaced
-     * @param safeArguments Set of arguments, which shouldn't need extra caring even if they are any pointer types etc.
-     *
      */
     virtual Function* createNewFunctionSignature( 
       Function *F,  
       FunctionMap &functionMapping, 
-      ArgumentMap &argumentMapping, 
-      FunctionSet &safeFunctions,
-      ArgumentSet &safeArguments ) {
+      ArgumentMap &argumentMapping ) {
        
       LLVMContext& c = F->getContext();
 
@@ -1115,15 +1166,21 @@ namespace WebCL {
               "Handling function retruning array type is not implemented." );
       assert( (!F->isVarArg()) && "Variable argument functions are not supported.");
 
-      // TODO: check if main or kernel and in that case do not change signature 
-
+      // check if main or kernel and in that case do not change signature 
+      bool dontTouchArguments = false;
+      if (F->getName() == "main") {
+        dontTouchArguments = true;
+      }
+      
       // convert function signature to use pointer structs instead of direct pointers
       std::vector< Type* > param_types;
       for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
         Argument* arg = a;
         Type* t = arg->getType();
+
+        // TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)
         
-        if( t->isPointerTy() ) {
+        if( !dontTouchArguments && t->isPointerTy() ) {
           Type* smart_array_struct = getSmartPointerType( c, t );
           param_types.push_back( smart_array_struct );          
         } else {

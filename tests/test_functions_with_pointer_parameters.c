@@ -46,5 +46,3 @@ int main(void) {
   *(alloca_i32ptr+3) = 5071 * (int)alloca_i32ptr; 
   return *(alloca_i32ptr+3);
 }
-
-

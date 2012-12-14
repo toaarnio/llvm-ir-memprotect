@@ -8,13 +8,14 @@
  */
 
 // test case without clamp-pointers pass....
-// clang -c $TEST_SRC -O1 -emit-llvm -o $OUT_FILE.bc &&
+// clang -c $TEST_SRC -O3 -emit-llvm -o $OUT_FILE.bc &&
 // lli $OUT_FILE.bc 128 256 && 
 // if lli $OUT_FILE.bc 129 256; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi &&
 // if lli $OUT_FILE.bc 128 257; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi
 
-// RUN: clang -c $TEST_SRC -O1 -emit-llvm -o $OUT_FILE.bc &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
+// RUN: clang -c $TEST_SRC -O3 -emit-llvm -o $OUT_FILE.bc &&
+// RUN: llvm-dis < $OUT_FILE.bc &&
+// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: lli $OUT_FILE.clamped.ll 128 256 && 
 // RUN: if lli $OUT_FILE.clamped.ll 129 256; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi &&
 // RUN: if lli $OUT_FILE.clamped.ll 128 257; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi
