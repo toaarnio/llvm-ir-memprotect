@@ -15,7 +15,7 @@
 
 // RUN: clang -c $TEST_SRC -O3 -emit-llvm -o $OUT_FILE.bc &&
 // RUN: llvm-dis < $OUT_FILE.bc &&
-// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: lli $OUT_FILE.clamped.ll 128 256 && 
 // RUN: if lli $OUT_FILE.clamped.ll 129 256; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi &&
 // RUN: if lli $OUT_FILE.clamped.ll 128 257; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi
@@ -28,12 +28,26 @@
 // If you like to get more compact end program that does not have any extra
 // printf code.. also currently clamp pointers pass crash to printfs
 #ifndef ENABLE_STDIO
-#define ENABLE_STDIO 0
+#define ENABLE_STDIO 1
 #endif
 
 #if ENABLE_STDIO
 #include <stdio.h>
 #endif
+
+#define ATOI( x, ret_var )                                      \
+  do {                                                          \
+    char* cursor = x;                                           \
+    int val = 0;                                                \
+    while (cursor) {                                            \
+      int next = *cursor -'0';                                  \
+      val = val * 10;                                           \
+      val = val + next;                                         \
+      cursor++;                                                 \
+    }                                                           \
+    ret_var = val;                                              \
+  } while (0)                                     
+
 
 // TODO: fix this: clamping pass breaks passing values from commandline parameters
 int main(int argc, char* argv[])
@@ -52,7 +66,11 @@ int main(int argc, char* argv[])
 	}
 
 	int loop_a = atoi(argv[1]);
+    //	int loop_a;
+    //  ATOI(argv[1], loop_a);
 	int loop_b = atoi(argv[2]);
+    //	int loop_b;
+    //    ATOI(argv[2], loop_b);
 
 	// --------- initialization loops where checks can be eliminated by dce -------
 	for (int i = 0; i < LEN_A; i++) a[i] = atoi(argv[i%(argc-1)+1]);
