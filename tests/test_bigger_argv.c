@@ -12,9 +12,11 @@
 // RUN: clang -c $TEST_SRC -O3 -emit-llvm -o $OUT_FILE.bc &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: lli $OUT_FILE.clamped.ll 128 256 && 
+// RUN: echo "Running program wich causes index to over array bounds." &&
 // RUN: if lli $OUT_FILE.clamped.ll 129 256; then echo "FAIL: Command should have failed"; false; 
 // RUN: else echo "OK: execution failed as expected"; 
 // RUN: fi &&
+// RUN: echo "Running program wich causes index go under array bounds." &&
 // RUN: if lli $OUT_FILE.clamped.ll 128 257; then echo "FAIL: Command should have failed"; false; 
 // RUN: else echo "OK: execution failed as expected"; true; 
 // RUN: fi &&

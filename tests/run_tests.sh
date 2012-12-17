@@ -35,7 +35,7 @@ fi
 
 function get_run_command {
     file_name=$1
-    grep -E "(//|;)\s*RUN:" $file_name | sed -E "s@.+RUN:[*\t ]*(.+)@\1@"
+    grep -E "(//|;)\s*RUN:" $file_name | sed -E "s@.+RUN:[* ]*(.+)@\1@"
 }
 
 function run_test {

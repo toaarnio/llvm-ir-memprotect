@@ -452,7 +452,7 @@ namespace WebCL {
           isGep = true;
           isInBounds = gep->isInBounds();
           // if we refer non array global / external variable, we assume that we have to refer always to 0 element
-          if ( !gep->getPointerOperand()->getType()->isArrayTy() ) {
+          if ( !gep->getPointerOperand()->getType()->getSequentialElementType()->isArrayTy() ) {
             isInBounds = gep->hasAllZeroIndices();
           }
         }
@@ -460,7 +460,10 @@ namespace WebCL {
         delete inst;
         
         if (isGep) {
-          assert(isInBounds && "Constant expression out of bounds");
+          if (!isInBounds) {
+            dbgs() << "Cannot verify that expression is in limits: "; inst->print(dbgs());
+            assert(isInBounds && "Constant expression out of bounds");
+          }
           DEBUG( dbgs() << "Skipping constant expression, which is in limits: "; inst->print(dbgs()); dbgs() << "\n" );
           return;
         }
@@ -610,8 +613,10 @@ namespace WebCL {
     /**
      * Traces recursively up in SSA tree until finds element, which has information about limits.
      *
-     * Currently stops if alloca or global value is found.
+     * Currently stops if alloca or global value is found or a load.
      *
+     * NOTE: this function does not feel safe enough... approach should be validated or reimplemented
+     * 
      * @param trashcan When one gets getAsInstruction from constant expression, it creates dangling
      *   instruction. Dangling instructions will crash the pass on exit, so we add created instruction
      *   before trashcan instruction and let later optimization passes clean these up.
@@ -629,6 +634,11 @@ namespace WebCL {
         Instruction *newInst = constExp->getAsInstruction();
         newInst->insertBefore(trashcan);
         return findLimitingFactor(newInst, trashcan);
+
+      } else if (LoadInst *load = dyn_cast<LoadInst>(op)) {
+
+        // we are finding limiting factor for store to smart pointer, so we can accept that safe pointer of load can be it.
+        return load;
 
       } else {
         dbgs() << "Handling value: "; op->print(dbgs()); dbgs() << "\n";
@@ -656,7 +666,7 @@ namespace WebCL {
 
           assert (smartPointers.count(dest) > 0 && "Cannot find smart pointer for destination");
           SmartPointer *smartDest = smartPointers[dest];
-          
+ 
           Value* limits = findLimitingFactor(src, store->getParent()->begin());
           Value* first = NULL;
           Value* last = NULL;
@@ -671,6 +681,20 @@ namespace WebCL {
             last = lastLoad;
             first = firstLoad;
 
+          } else if ( LoadInst *load = dyn_cast<LoadInst>(limits) ) {
+
+            // TODO: can we just blindly take limits from pointer
+
+            // external or global src of load... local ones has smart pointers created
+            if ( !dyn_cast<GlobalValue>(load->getPointerOperand()) || 
+                 !dyn_cast<GlobalValue>(load->getPointerOperand())->hasExternalLinkage() ) {
+              dbgs() << "Unexpected load selected to be limiting factor: "; load->print(dbgs()); dbgs() << "\n";
+              assert(false && "Unexpected load instruction");
+            }
+
+            first = load;
+            last = load;
+            
           } else if ( GlobalValue *globalVal = dyn_cast<GlobalValue>(limits) ) {
 
             if (globalVal->hasExternalLinkage()) {
@@ -871,7 +895,7 @@ namespace WebCL {
         
         Function* oldFun = call->getCalledFunction();
         
-        if (oldFun->isDeclaration()) {
+        if (oldFun->isDeclaration() && replacedFunctions.count(oldFun) == 0) {
           dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; oldFun->print(dbgs());
           continue;
         }

@@ -9,5 +9,10 @@
 extern int ext_val;
 
 int main(void) {
-  return *(&ext_val + 1);
+  int table[10];
+  table[1] = ext_val;
+  long table_address_as_int = (long)table;
+  table_address_as_int += sizeof(int);
+  int *pointer = (int*)table_address_as_int;
+  return *pointer;
 }
