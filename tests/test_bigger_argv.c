@@ -4,21 +4,21 @@
  * 
  * if the first parameter > 128 program should fail because index overflow
  * if the second parameter > 256 program should fail because index underflow
- * returns 0 on success...
+ * returns 0 on success, traps to boundary checks if fail 
  */
 
 // test case without clamp-pointers pass....
-// clang -c $TEST_SRC -O3 -emit-llvm -o $OUT_FILE.bc &&
-// lli $OUT_FILE.bc 128 256 && 
-// if lli $OUT_FILE.bc 129 256; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi &&
-// if lli $OUT_FILE.bc 128 257; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi
 
 // RUN: clang -c $TEST_SRC -O3 -emit-llvm -o $OUT_FILE.bc &&
-// RUN: llvm-dis < $OUT_FILE.bc &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: lli $OUT_FILE.clamped.ll 128 256 && 
-// RUN: if lli $OUT_FILE.clamped.ll 129 256; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi &&
-// RUN: if lli $OUT_FILE.clamped.ll 128 257; then echo "Command should have failed"; false; else echo "failed as expected"; true; fi
+// RUN: if lli $OUT_FILE.clamped.ll 129 256; then echo "FAIL: Command should have failed"; false; 
+// RUN: else echo "OK: execution failed as expected"; 
+// RUN: fi &&
+// RUN: if lli $OUT_FILE.clamped.ll 128 257; then echo "FAIL: Command should have failed"; false; 
+// RUN: else echo "OK: execution failed as expected"; true; 
+// RUN: fi &&
+// RUN: lli $OUT_FILE.clamped.ll 128 256; echo "OK: 128 256 parameters did compute correctly."
 
 #include <stdlib.h>
 
@@ -34,20 +34,6 @@
 #if ENABLE_STDIO
 #include <stdio.h>
 #endif
-
-#define ATOI( x, ret_var )                                      \
-  do {                                                          \
-    char* cursor = x;                                           \
-    int val = 0;                                                \
-    while (cursor) {                                            \
-      int next = *cursor -'0';                                  \
-      val = val * 10;                                           \
-      val = val + next;                                         \
-      cursor++;                                                 \
-    }                                                           \
-    ret_var = val;                                              \
-  } while (0)                                     
-
 
 // TODO: fix this: clamping pass breaks passing values from commandline parameters
 int main(int argc, char* argv[])
@@ -66,11 +52,7 @@ int main(int argc, char* argv[])
 	}
 
 	int loop_a = atoi(argv[1]);
-    //	int loop_a;
-    //  ATOI(argv[1], loop_a);
 	int loop_b = atoi(argv[2]);
-    //	int loop_b;
-    //    ATOI(argv[2], loop_b);
 
 	// --------- initialization loops where checks can be eliminated by dce -------
 	for (int i = 0; i < LEN_A; i++) a[i] = atoi(argv[i%(argc-1)+1]);
@@ -90,7 +72,7 @@ int main(int argc, char* argv[])
 	}	
 
 #if ENABLE_STDIO
-	printf("Finally got until the end and returning %i\n", loop_a + loop_b);
+	printf("Finally got until the end and returning %i\n", b[LEN_B - loop_b] + a[loop_a-1]);
 #endif
 
 	// prevent dce to touch loops above
