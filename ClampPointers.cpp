@@ -370,7 +370,7 @@ namespace WebCL {
 #endif
         DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n" );
         if (!g->hasExternalLinkage()) {
-          dbgs() << "known global var.. we should be able to resolve limits...\n";
+          DEBUG( dbgs() << "-- It is known global var. We should be able to resolve limits when used. \n" );
           continue;
         }
 
@@ -503,7 +503,7 @@ namespace WebCL {
  
       // find out which limits load has to respect and add boundary checks
       if ( smartPointers.count(ptrOperand) == 0 ) {
-        // TODO: add recognition for loading data from global table...
+        // TODO: add recognition for loading data from global table... test case try to clamp optimized version of performace test sources.
         dbgs() << "When verifying: "; inst->print(dbgs()); dbgs() << "\n";
         fast_assert(false, "Could not find limits to create protection!");
       }
