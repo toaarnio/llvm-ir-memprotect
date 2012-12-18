@@ -31,6 +31,13 @@
 #define UNUSED( x ) \
   (void)x;
 
+#define fast_assert( condition, message ) do {                \
+    if ( condition == false ) {                               \
+      dbgs() << "\nOn line: " << __LINE__ << " " << message;  \
+      exit(1);                                                \
+    }                                                         \
+  } while(0)
+
 using namespace llvm;
 
 namespace WebCL {
@@ -462,7 +469,7 @@ namespace WebCL {
         if (isGep) {
           if (!isInBounds) {
             dbgs() << "Cannot verify that expression is in limits: "; inst->print(dbgs());
-            assert(isInBounds && "Constant expression out of bounds");
+            fast_assert(isInBounds, "Constant expression out of bounds");
           }
           DEBUG( dbgs() << "Skipping constant expression, which is in limits: "; inst->print(dbgs()); dbgs() << "\n" );
           return;
@@ -472,7 +479,7 @@ namespace WebCL {
       // find out which limits load has to respect and add boundary checks
       if ( smartPointers.count(ptrOperand) == 0 ) {
         dbgs() << "When verifying: "; inst->print(dbgs()); dbgs() << "\n";
-        assert(false && "Could not find limits to create protection!");
+        fast_assert(false, "Could not find limits to create protection!");
       }
       SmartPointer *limits = smartPointers[ptrOperand];
       createLimitCheck(ptrOperand, limits, inst);
@@ -643,7 +650,7 @@ namespace WebCL {
       } else {
         dbgs() << "Handling value: "; op->print(dbgs()); dbgs() << "\n";
         dyn_cast<Constant>(op)->print(dbgs()); dbgs() << "\n";
-        assert(false && "Don't know how to trace limiting operand for this structure.");
+        fast_assert(false, "Don't know how to trace limiting operand for this structure.");
       }
     }
 
@@ -664,7 +671,7 @@ namespace WebCL {
           DEBUG( dbgs() << "Found store to fix: "; store->print(dbgs()); dbgs() << "\n" );
           DEBUG( src->print(dbgs()); dbgs() << "\n" );
 
-          assert (smartPointers.count(dest) > 0 && "Cannot find smart pointer for destination");
+          fast_assert (smartPointers.count(dest) > 0, "Cannot find smart pointer for destination");
           SmartPointer *smartDest = smartPointers[dest];
  
           Value* limits = findLimitingFactor(src, store->getParent()->begin());
@@ -683,13 +690,11 @@ namespace WebCL {
 
           } else if ( LoadInst *load = dyn_cast<LoadInst>(limits) ) {
 
-            // TODO: can we just blindly take limits from pointer
-
             // external or global src of load... local ones has smart pointers created
             if ( !dyn_cast<GlobalValue>(load->getPointerOperand()) || 
                  !dyn_cast<GlobalValue>(load->getPointerOperand())->hasExternalLinkage() ) {
               dbgs() << "Unexpected load selected to be limiting factor: "; load->print(dbgs()); dbgs() << "\n";
-              assert(false && "Unexpected load instruction");
+              fast_assert(false, "Unexpected load instruction");
             }
 
             first = load;
@@ -708,11 +713,11 @@ namespace WebCL {
                 last = globalVal;
               }
             } else {
-              assert(false && "Unsupported use of global value.");
+              fast_assert(false, "Unsupported use of global value.");
             }
 
           } else {
-            assert(false && "Could not resolve limits from source operand, for smart pointer assignment.");
+            fast_assert(false, "Could not resolve limits from source operand, for smart pointer assignment.");
           }
           
           // fix limits and cur in smart pointer assignment
@@ -839,8 +844,8 @@ namespace WebCL {
           DEBUG( dbgs() << "It's an array!\n" );
 
           Type* element_type = a->getElementType();
-          assert( ( element_type->isIntegerTy() || element_type->isFloatingPointTy() ) && 
-                  "Currently pass supports only integer or float arrays.");
+          fast_assert( ( element_type->isIntegerTy() || element_type->isFloatingPointTy() ),
+                       "Currently pass supports only integer or float arrays.");
 
           unsigned int array_size = a->getArrayNumElements();
 
@@ -939,7 +944,7 @@ namespace WebCL {
                 dbgs() << "\n";
                 call->print(dbgs());
                 dbgs() << " cannot find smart pointer for op: " << op << "\n"; 
-                assert(false && "Cannot find smart pointer for the call operand. Maybe you tried to pass extern variable?");
+                fast_assert(false, "Cannot find smart pointer for the call operand. Maybe you tried to pass extern variable?");
               }
               
             } else if ( GetElementPtrInst* gepToFix = dyn_cast<GetElementPtrInst>(operand) ) {
@@ -958,7 +963,7 @@ namespace WebCL {
                 if (!sourcePointer) {
                   dbgs() << "In BB:\n"; gepToFix->getParent()->print(dbgs());
                   dbgs() << "\nConverting: "; gepToFix->getPointerOperand()->print(dbgs()); dbgs() << "\n";
-                  assert(false && "Could not find smart pointer for GEP, which should have smart pointer..");
+                  fast_assert(false, "Could not find smart pointer for GEP, which should have smart pointer..");
                 }
               }
               
@@ -987,7 +992,7 @@ namespace WebCL {
                 dbgs() << "\nNew argument type:::\n";
                 newArg->print(dbgs());
                 dbgs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
-                assert(false && "Could not find smart pointer for alloca");
+                fast_assert(false, "Could not find smart pointer for alloca");
               }
               
             } else {
@@ -1002,7 +1007,7 @@ namespace WebCL {
               dbgs() << " not able to find smart pointer for call operand: " << op << "  argument op: ";
               call->getArgOperand(op)->print(dbgs());
               dbgs() << "\n";
-              assert(false && "Could not find smart pointer for op for converting call.");
+              fast_assert(false, "Could not find smart pointer for op for converting call.");
 
             }
           }
@@ -1136,7 +1141,7 @@ namespace WebCL {
           // store i32* %orig_ptr_param.SmartArg.First.LoadedVal, i32** %orig_ptr_param.addr.Smart.First
           // store i32* %orig_ptr_param.SmartArg.Last.LoadedVal, i32** %orig_ptr_param.addr.Smart.Last
 
-          assert(oldArg->hasOneUse() && 
+          fast_assert(oldArg->hasOneUse(), 
                  "Unknown construct where pointer argument has > 1 uses. (expecting just store instruction to %param.addr)");
             
           DEBUG( dbgs() << "4 " );
@@ -1153,7 +1158,7 @@ namespace WebCL {
               dbgs() << "While handling\n";            
               origAddrAlloca->print(dbgs()); dbgs() << "\n";
               store->print(dbgs()); dbgs() << "\n";
-              assert(false && "Could not find smart pointer for alloca.");
+              fast_assert(false, "Could not find smart pointer for alloca.");
             }
 
             DEBUG( dbgs() << "6 " );
@@ -1170,8 +1175,8 @@ namespace WebCL {
 
           } else {
             dbgs() << "\n"; oldArg->use_begin()->print(dbgs()); dbgs() << "\n";
-            assert(false && 
-                   "Unknown construct where pointer argument's use is not StoreInst");
+            fast_assert(false, 
+                        "Unknown construct where pointer argument's use is not StoreInst");
           }
                 
         } // -- end arguments for loop
@@ -1197,11 +1202,11 @@ namespace WebCL {
       LLVMContext& c = F->getContext();
 
       // currently returning pointer or array is not supported
-      assert( (!F->getFunctionType()->getReturnType()->isPointerTy()) && 
-              "Handling function returning pointer is not implemented." );
-      assert( (!F->getFunctionType()->getReturnType()->isArrayTy()) && 
-              "Handling function retruning array type is not implemented." );
-      assert( (!F->isVarArg()) && "Variable argument functions are not supported.");
+      fast_assert( (!F->getFunctionType()->getReturnType()->isPointerTy()), 
+                   "Handling function returning pointer is not implemented." );
+      fast_assert( (!F->getFunctionType()->getReturnType()->isArrayTy()), 
+                   "Handling function retruning array type is not implemented." );
+      fast_assert( (!F->isVarArg()), "Variable argument functions are not supported.");
 
       // check if main or kernel and in that case do not change signature 
       bool dontTouchArguments = false;
@@ -1221,7 +1226,7 @@ namespace WebCL {
           Type* smart_array_struct = getSmartPointerType( c, t );
           param_types.push_back( smart_array_struct );          
         } else {
-          assert( (!t->isArrayTy()) && "Passing array in arguments is not implemented." );
+          fast_assert( (!t->isArrayTy()), "Passing array in arguments is not implemented." );
           param_types.push_back( t );
         }
       }
