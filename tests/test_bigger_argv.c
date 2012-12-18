@@ -20,7 +20,7 @@
 // RUN: if lli $OUT_FILE.clamped.ll 128 257; then echo "FAIL: Command should have failed"; false; 
 // RUN: else echo "OK: execution failed as expected"; true; 
 // RUN: fi &&
-// RUN: lli $OUT_FILE.clamped.ll 128 256; echo "OK: 128 256 parameters did compute correctly."
+// RUN: lli $OUT_FILE.clamped.ll 128 256 && echo "OK: 128 256 parameters did compute correctly."
 
 #include <stdlib.h>
 

@@ -28,14 +28,18 @@
 #include <iostream>
 #include <cstdio>
 
+#if STRICT_CHECKS == 0
+#undef STRICT_CHECKS
+#endif
+
 #define UNUSED( x ) \
   (void)x;
 
-#define fast_assert( condition, message ) do {                \
-    if ( condition == false ) {                               \
-      dbgs() << "\nOn line: " << __LINE__ << " " << message;  \
-      exit(1);                                                \
-    }                                                         \
+#define fast_assert( condition, message ) do {                       \
+    if ( condition == false ) {                                      \
+      dbgs() << "\nOn line: " << __LINE__ << " " << message << "\n"; \
+      exit(1);                                                       \
+    }                                                                \
   } while(0)
 
 using namespace llvm;
@@ -213,10 +217,15 @@ namespace WebCL {
       // ####### Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
 
-        // TODO: allow calling external functions with original signatures (this pass should be ran just for fully linked code)
+        // allow calling external functions with original signatures (this pass should be ran just for fully linked code)
         if ( i->isIntrinsic() || i->isDeclaration() ) {
+#ifndef STRICT_CHECKS
           DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
           continue;
+#else
+           dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
+           fast_assert(false, "Calling external functions is not allowed in strict mode. Also intrinsics should be lowered before runnin pass.");
+#endif
         }
 
         // some optimizations causes removal of passing argument %arg to %arg.addr alloca
@@ -323,6 +332,7 @@ namespace WebCL {
      * Note: this is quite dirty symbol name based hack...
      */
     void collectSafeExceptions(FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
+#ifndef STRICT_CHECKS
       for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++)  {
         Function *check = i->second;
         if (check->getName() == "main") {
@@ -334,6 +344,9 @@ namespace WebCL {
           }
         }
       }
+#else
+      DEBUG( dbgs() << "Skipping allowance to use int main(argc, argv) arguments freely. \n" );
+#endif
     }
 
     /**
@@ -347,6 +360,12 @@ namespace WebCL {
      */ 
     void normalizeGlobalVariableUses(Module &M) {
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
+#ifdef STRICT_CHECKS
+        if (! g->isDeclaration() ) {
+          dbgs() << "Global variables are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
+          fast_assert( false, "Global/external variables are not supported in strict mode.");
+        }
+#endif
         DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n" );
         int id = 0;
 
@@ -438,7 +457,7 @@ namespace WebCL {
      */
     void addChecks(Value *ptrOperand, Instruction *inst, SmartPointerByValueMap &smartPointers, ValueSet &safeExceptions) {
       
-      // TODO: maybe all these could be added directly to safeExceptions map...
+      // TODO: maybe all of these cases could be added directly to safeExceptions map...
       if (safeExceptions.count(ptrOperand)) {
         DEBUG( dbgs() << "Skipping op that was listed in safe exceptions: "; inst->print(dbgs()); dbgs() << "\n" );        
         return;
@@ -589,6 +608,9 @@ namespace WebCL {
     
     /**
      * Traverses through uses of safe pointer and adds limits to derivedUses map.
+     *
+     * TODO: better description how uses derived uses are collected. e.g. some kind of tree...
+     *
      */
     void resolveUses(Value *val, SmartPointer *limits, SmartPointerByValueMap &derivedUses) {
       for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
@@ -902,6 +924,9 @@ namespace WebCL {
         
         if (oldFun->isDeclaration() && replacedFunctions.count(oldFun) == 0) {
           dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; oldFun->print(dbgs());
+#ifdef STRICT_CHECKS
+          fast_assert(false, "Aborting since we are in strict mode.");
+#endif
           continue;
         }
 
