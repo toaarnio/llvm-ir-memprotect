@@ -28,6 +28,8 @@
 #include <iostream>
 #include <cstdio>
 
+// #define STRICT_CHECKS 1
+
 #if STRICT_CHECKS == 0
 #undef STRICT_CHECKS
 #endif
@@ -367,8 +369,12 @@ namespace WebCL {
         }
 #endif
         DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n" );
-        int id = 0;
+        if (!g->hasExternalLinkage()) {
+          dbgs() << "known global var.. we should be able to resolve limits...\n";
+          continue;
+        }
 
+        int id = 0;
         for( Value::use_iterator i = g->use_begin(); i != g->use_end(); ++i ) {
           DEBUG( dbgs() << "Found use: "; i->print(dbgs()); dbgs() << " : " );
 
@@ -376,7 +382,7 @@ namespace WebCL {
           
           // skipping does not mean that stuff is always fine... it just means that
           // we don't know how to handle the use and if it is bad, compilation will abort later
-          if (!useAsInst || dyn_cast<StoreInst>(useAsInst) ||dyn_cast<LoadInst>(useAsInst)) {
+          if (!useAsInst || dyn_cast<StoreInst>(useAsInst) || dyn_cast<LoadInst>(useAsInst)) {
             DEBUG( dbgs() << "## skipping\n" );
             continue;
           }
@@ -497,9 +503,11 @@ namespace WebCL {
  
       // find out which limits load has to respect and add boundary checks
       if ( smartPointers.count(ptrOperand) == 0 ) {
+        // TODO: add recognition for loading data from global table...
         dbgs() << "When verifying: "; inst->print(dbgs()); dbgs() << "\n";
         fast_assert(false, "Could not find limits to create protection!");
       }
+
       SmartPointer *limits = smartPointers[ptrOperand];
       createLimitCheck(ptrOperand, limits, inst);
     }
@@ -577,7 +585,7 @@ namespace WebCL {
 
       // ------ break current BB to 2 after branch and name later one to be if.end
 
-      BasicBlock* end_block = BB->splitBasicBlock(before, "if.end." + postfix);
+      BasicBlock* end_block = BB->splitBasicBlock(before, "if.end.boundary.check." + postfix);
       // remove implicitly added branch..
       BB->back().eraseFromParent();
 
@@ -678,6 +686,8 @@ namespace WebCL {
 
     /**
      * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
+     * 
+     * NOTE: maybe there should be better way to do this than used here... or generic version...
      */
     void fixStoreInstructions(StoreInstrSet &stores, SmartPointerByValueMap &smartPointers) {
       
@@ -723,19 +733,22 @@ namespace WebCL {
             last = load;
             
           } else if ( GlobalValue *globalVal = dyn_cast<GlobalValue>(limits) ) {
+            DEBUG( dbgs() << "Handling global: "; globalVal->print(dbgs()); dbgs() << " : " );
+            
+            // if array type of global
+            if (globalVal->getType()->getElementType()->isArrayTy()) {
+              DEBUG( dbgs() << "applying array limits.\n" );
+              int array_size = dyn_cast<ArrayType>(globalVal->getType()->getElementType())->getNumElements();
+              first = generateGEP(c, globalVal, 0, 0, store, "");
+              last = generateGEP(c, globalVal, 0, array_size-1, store, "");
 
-            if (globalVal->hasExternalLinkage()) {
-              // if ext array init, get last and first from there, otherwise just use global val..
-              if (globalVal->getType()->getElementType()->isArrayTy()) {
-                int array_size = dyn_cast<ArrayType>(globalVal->getType()->getElementType())->getNumElements();
-                first = generateGEP(c, globalVal, 0, 0, store, "");
-                last = generateGEP(c, globalVal, 0, array_size-1, store, "");
-              } else {
-                first = globalVal;
-                last = globalVal;
-              }
+            } else if (globalVal->getType()->getElementType()->isStructTy()) {
+              dbgs() << "While handling: "; globalVal->print(dbgs()); dbgs() << "\n";
+              fast_assert(false, "Getting limits from struct type is not implemented.");
+
             } else {
-              fast_assert(false, "Unsupported use of global value.");
+              first = globalVal;
+              last = globalVal;
             }
 
           } else {
@@ -744,9 +757,13 @@ namespace WebCL {
           
           // fix limits and cur in smart pointer assignment
           DEBUG( dbgs() << "#### FOUND LIMITS:\n" );
-          DEBUG( first->print(dbgs()); dbgs() << "\n" );
-          DEBUG( last->print(dbgs()); dbgs() << "\n" );
-          
+          DEBUG( first->print(dbgs()); dbgs() << " type: "; first->getType()->print(dbgs()); 
+                 dbgs() << " ---> "; 
+                 smartDest->min->print(dbgs()); dbgs() << " type: "; smartDest->min->getType()->print(dbgs()); dbgs() << "\n" );
+          DEBUG( last->print(dbgs()); dbgs() << " type: "; last->getType()->print(dbgs()); 
+                 dbgs() << " ---> "; 
+                 smartDest->max->print(dbgs()); dbgs() << " type: "; smartDest->max->getType()->print(dbgs()); dbgs() << "\n" );
+
           StoreInst* firstStore = new StoreInst(first, smartDest->min);
           StoreInst* lastStore = new StoreInst(last, smartDest->max);
           StoreInst* curStore = new StoreInst(store->getValueOperand(), smartDest->cur);          
@@ -1328,10 +1345,15 @@ namespace WebCL {
             
             loads.insert(load);
             DEBUG( dbgs() << "Found load: "; load->print(dbgs()); dbgs() << "\n" );
+
+          } else if ( dyn_cast<FenceInst>(&inst) || 
+                      dyn_cast<VAArgInst>(&inst) ||  
+                      dyn_cast<AtomicRMWInst>(&inst) || 
+                      dyn_cast<AtomicCmpXchgInst>(&inst) ) {
+            
+            DEBUG( dbgs() << "Unsafe instruction: "; inst.print(dbgs()); dbgs() << "\n" );
+            fast_assert(false, "Instruction is not supported.");
           } 
-          
-          //    TODO: if unsupported instruction is seen (inttoptr, fence, va_arg, cmpxchg,atomicrmw, 
-          //           landingpad, memintrinsics) , abort
         }
       }
     }

@@ -2,27 +2,26 @@
  * Test program to see if checks stays correctly in code after pass.
  */
 
-// RUN: clang -c $TEST_SRC -Oz -emit-llvm -o $OUT_FILE.optimized.bc &&
+// RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.optimized.bc &&
 // RUN: llvm-dis $OUT_FILE.optimized.bc &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.optimized.bc -o $OUT_FILE.clamped.ll &&
-// RUN: opt -Oz -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll &&
-// RUN: echo "-- extracting main functions from .ll code" &&
-// RUN: sed -e ':a' -e 'N' -e '$!ba' -Ee 's/.*(define i32 @main[^}]*).*/\1/g' $OUT_FILE.clamped.optimized.ll > $OUT_FILE.clamped.main.ll &&
-// RUN: sed -e ':a' -e 'N' -e '$!ba' -Ee 's/.*(define i32 @main[^}]*).*/\1/g' $OUT_FILE.optimized.ll > $OUT_FILE.main.ll &&
-// RUN: echo "Line count of code should not be the same" &&
-// RUN: [ $(wc -l < $OUT_FILE.clamped.main.ll) !=  $(wc -l < $OUT_FILE.main.ll) ]
-
+// RUN: opt -O3 -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll &&
+// DONT RUN: echo "Checking that one 2 tests did stay" &&
+// DONT RUN: [ $(grep "if\.end[^:]*:" $OUT_FILE.clamped.optimized.ll | wc -l) == 2 ] || 
+// DONT RUN: ( cat $OUT_FILE.clamped.optimized.ll && echo "" &&
+// DONT RUN:   echo "Optimizations did not remove unnecessary checks from first loop" && echo "" && false )
+// RUN: echo "Test is disabled, until feature is implemented."
 #define LEN_B 256
 
 // this should prevent any optimizations
 extern int loop_b;
 
-int main()
+int main(int argc, char *argv[])
 {
 	int b[ LEN_B ];
 
 	// --------- initialization loops where checks can be eliminated by dce -------
-	for (int i = 0; i < LEN_B; i++) b[i] = loop_b;
+	for (int i = 0; i < LEN_B; i++) b[i] = argc;
 
 	// ------ checks should be there -------
 	// loop backward over b as many steps as second commandline parameter
