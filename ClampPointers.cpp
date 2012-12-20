@@ -14,13 +14,13 @@
 #include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/User.h"
+#include "llvm/IRBuilder.h"
+#include "llvm/Operator.h"
 
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-
-#include "llvm/IRBuilder.h"
 
 #include <vector>
 #include <map>
@@ -45,6 +45,76 @@
   } while(0)
 
 using namespace llvm;
+
+/**
+ * LLVM 3.2 didn't support getAsInstruction() yet
+ * so for now we have copypasted it from trunk
+ */
+Instruction *getAsInstruction(ConstantExpr *expr) {
+  SmallVector<Value*,4> ValueOperands;
+  for (ConstantExpr::op_iterator I = expr->op_begin(), E = expr->op_end(); I != E; ++I)
+    ValueOperands.push_back(cast<Value>(I));
+  
+  ArrayRef<Value*> Ops(ValueOperands);
+  
+  switch (expr->getOpcode()) {
+  case Instruction::Trunc:
+  case Instruction::ZExt:
+  case Instruction::SExt:
+  case Instruction::FPTrunc:
+  case Instruction::FPExt:
+  case Instruction::UIToFP:
+  case Instruction::SIToFP:
+  case Instruction::FPToUI:
+  case Instruction::FPToSI:
+  case Instruction::PtrToInt:
+  case Instruction::IntToPtr:
+  case Instruction::BitCast:
+    return CastInst::Create((Instruction::CastOps)expr->getOpcode(),
+                            Ops[0], expr->getType());
+  case Instruction::Select:
+    return SelectInst::Create(Ops[0], Ops[1], Ops[2]);
+  case Instruction::InsertElement:
+    return InsertElementInst::Create(Ops[0], Ops[1], Ops[2]);
+  case Instruction::ExtractElement:
+    return ExtractElementInst::Create(Ops[0], Ops[1]);
+  case Instruction::InsertValue:
+    return InsertValueInst::Create(Ops[0], Ops[1], expr->getIndices());
+  case Instruction::ExtractValue:
+    return ExtractValueInst::Create(Ops[0], expr->getIndices());
+  case Instruction::ShuffleVector:
+    return new ShuffleVectorInst(Ops[0], Ops[1], Ops[2]);
+    
+  case Instruction::GetElementPtr:
+    if (cast<GEPOperator>(expr)->isInBounds())
+      return GetElementPtrInst::CreateInBounds(Ops[0], Ops.slice(1));
+    else
+      return GetElementPtrInst::Create(Ops[0], Ops.slice(1));
+    
+  case Instruction::ICmp:
+  case Instruction::FCmp:
+    return CmpInst::Create((Instruction::OtherOps)expr->getOpcode(),
+                           expr->getPredicate(), Ops[0], Ops[1]);
+    
+  default:
+    assert(expr->getNumOperands() == 2 && "Must be binary operator?");
+    BinaryOperator *BO =
+      BinaryOperator::Create((Instruction::BinaryOps)expr->getOpcode(),
+                             Ops[0], Ops[1]);
+    if (isa<OverflowingBinaryOperator>(BO)) {
+      assert(false && "Not supported hopefully never needed until llvm 3.3 is out.");
+      //BO->setHasNoUnsignedWrap(expr->SubclassOptionalData &
+      //                         OverflowingBinaryOperator::NoUnsignedWrap);
+      //BO->setHasNoSignedWrap(expr->SubclassOptionalData &
+      //                       OverflowingBinaryOperator::NoSignedWrap);
+    }
+    if (isa<PossiblyExactOperator>(BO)) {
+      assert(false && "Not supported hopefully never needed until llvm 3.3 is out.");
+      // BO->setIsExact(expr->SubclassOptionalData & PossiblyExactOperator::IsExact);
+    }
+    return BO;
+  }
+}
 
 namespace WebCL {
 
@@ -476,7 +546,7 @@ namespace WebCL {
         return;
         
       } else if ( ConstantExpr *constGep = dyn_cast<ConstantExpr>(ptrOperand) ) {        
-        Instruction* inst = constGep->getAsInstruction();
+        Instruction* inst = getAsInstruction(constGep);
         bool isGep = false;
         bool isInBounds = false;
         
@@ -668,7 +738,7 @@ namespace WebCL {
       } else if (ConstantExpr *constExp = dyn_cast<ConstantExpr>(op)) {
 
         constExp->isGEPWithNoNotionalOverIndexing();
-        Instruction *newInst = constExp->getAsInstruction();
+        Instruction *newInst = getAsInstruction(constExp);
         newInst->insertBefore(trashcan);
         return findLimitingFactor(newInst, trashcan);
 
