@@ -207,55 +207,6 @@ namespace WebCL {
     }
 
     /**
-     * Is there really any cases where this might be needed and how this will 
-     * prevent uses after delete anyways, since pointers are passed as copies?
-     * Remember that when pointer is passed, passed value is actually copy of pointer's
-     * memory address. When smart pointer is passed, the same way copy of min, max and cur
-     * pointed pointers values are passed. 
-    virtual void freeMemory( Function *F ) {
-      FunctionSmartPointerList::iterator sp_source = mFunctionSmartPointers.find( F );
-      //assert( sp_source != mFunctionSmartPointers.end() );
-
-      if( sp_source == mFunctionSmartPointers.end() ) {
-        // no smart pointers to free
-        return;
-      }
-
-      for( Function::iterator f = F->begin(), ef = F->end(); f != ef; ++f) {
-        for( BasicBlock::iterator i = f->begin(), eb = f->end(); i != eb; ++i) {
-          if( llvm::AllocaInst* a = dyn_cast< llvm::AllocaInst >(i) ) {
-            UNUSED( a );
-            //errs() << "RET" << *ret;
-          }
-        }
-
-        for( BasicBlock::iterator i = f->begin(), eb = f->end(); i != eb; ++i) {
-          if( llvm::ReturnInst* ret = dyn_cast< llvm::ReturnInst >(i) ) {
-            SmartPointerList* sp_list = sp_source->second;
-            assert( sp_list != 0 );
-
-            for( SmartPointerList::iterator i = sp_list->begin(); i != sp_list->end(); ++i ) {
-              SmartPointer* sp = *i;
-
-              assert( sp != 0 );
-
-              StoreInst* s_cur = new StoreInst( mGlobalNull, sp->cur );
-              s_cur->insertBefore( ret );
-
-              StoreInst* s_min = new StoreInst( mGlobalNull, sp->min );
-              s_min->insertBefore( ret );
-
-              StoreInst* s_max = new StoreInst( mGlobalNull, sp->max );
-              s_max->insertBefore( ret );
-
-            }
-          }
-        }
-      }
-    }
-     */
-
-    /**
      * First analyze original code and then do transformations, 
      * until code is again runnable with using smart pointers.
      * 
@@ -595,69 +546,72 @@ namespace WebCL {
      *   %0 = load i32** %some_label
      *   %1 = load i32** %some_lable.Smart.Last
      *   %2 = icmp ugt i32* %0, %1
-     *   br i1 %2, label %boundary.check.failed, label %check.first.limit
-     * boundary.check.failed:
-     *   tail call void @llvm.trap()
-     *   unreachable
+     *   br i1 %2, label %boundary.check.fail, label %check.first.limit
      * check.first.limit:      
      *   %3 = load i32** %some_label.Smart.First
      *   %4 = icmp ult i32* %0, %3
-     *   br i1 %4, label %boundary.check.failed, label %if.end
-     * if.end:
+     *   br i1 %4, label %boundary.check.fail, label %boundary.check.ok
+     * boundary.check.ok:
      *   %5 = load i32* %0
+     *   br %if.end
+     * boundary.check.fail:
+     *   br %if.end
+     * if.end:
+     *   %6 = phi i32* [ 0, %boundary.check.fail ], [ %5, %boundary.check.ok ]
+     *
+     * ==== for store instruction phi node is not generated (instruction is just skipped)
      * 
+     * @param ptr Address whose limits are checked
+     * @param limits Smart pointer, whose limits pointer should respect
+     * @param meminst Instruction which for check is injected
      */
-    void createLimitCheck(Value *ptr, SmartPointer *limits, Instruction *before) {
+    void createLimitCheck(Value *ptr, SmartPointer *limits, Instruction *meminst) {
       static int id = 0;
       id++;
       char postfix_buf[64];
-      sprintf(postfix_buf, "%d", id);
+      if ( dyn_cast<LoadInst>(meminst) ) {
+        sprintf(postfix_buf, "load.%d", id);
+      } else {
+        sprintf(postfix_buf, "store.%d", id);
+      }
       std::string postfix = postfix_buf;
 
-      BasicBlock *BB = before->getParent();
+      BasicBlock *BB = meminst->getParent();
       Function *F = BB->getParent();
       LLVMContext& c = F->getContext();
 
-      Twine boundary_fail_name = Twine("boundary.check.failed");
+      // ------ this block is destination of all places where limit check fails, needs unconditional just branch to if.end block
+      BasicBlock* boundary_fail_block = BasicBlock::Create( c, "boundary.check.failed." + postfix, F );
+      IRBuilder<> boundary_fail_builder( boundary_fail_block );
 
-      // find exit on fail block
-      BasicBlock* boundary_fail_block = NULL;
-      for (Function::iterator bbi = F->begin(); bbi != F->end(); bbi++) {
-        BasicBlock *bb = &(*bbi); // iterator seems to return reference...
-        if (bb->getName() == boundary_fail_name.getSingleStringRef()) {
-          boundary_fail_block = bb;
-          break;
-        }
-      }
-      
-      // fail block not created yet... create it
-      if (!boundary_fail_block) {
-        DEBUG( dbgs() << "Creating fail block to function: " << F->getName() << "\n" );
-        boundary_fail_block = BasicBlock::Create( c, boundary_fail_name, F );
-        IRBuilder<> boundary_fail_builder( boundary_fail_block );
-        Function *trapFn = Intrinsic::getDeclaration(F->getParent(), Intrinsic::trap);
-        CallInst *trapCall = CallInst::Create(trapFn, "", boundary_fail_block);
-        trapCall->setDebugLoc(before->getDebugLoc());
-        new UnreachableInst (c, boundary_fail_block);
-      }
- 
+      // ------ block for minimum value check
       BasicBlock* check_first_block = BasicBlock::Create( c, "check.first.limit." + postfix, F );
       IRBuilder<> check_first_builder( check_first_block );
-
+      
       // ------ add max boundary check code 
 
       // *   %1 = load i32** %some_lable.Smart.Last
-      LoadInst* last_val = new LoadInst( limits->max, "", before );
+      LoadInst* last_val = new LoadInst( limits->max, "", meminst );
       // *   %2 = icmp ugt i32* %0, %1
-      ICmpInst* cmp = new ICmpInst( before, CmpInst::ICMP_UGT, ptr, last_val, "" );
+      ICmpInst* cmp = new ICmpInst( meminst, CmpInst::ICMP_UGT, ptr, last_val, "" );
       // *   br i1 %2, label %boundary.check.failed, label %check.first.limit
-      BranchInst::Create( boundary_fail_block, check_first_block, cmp, before );
+      BranchInst::Create( boundary_fail_block, check_first_block, cmp, meminst );
 
-      // ------ break current BB to 2 after branch and name later one to be if.end
+      // ------ break current BB to 3 parts, start, boundary_check_ok and if_end (meminst is left in ok block)
 
-      BasicBlock* end_block = BB->splitBasicBlock(before, "if.end.boundary.check." + postfix);
-      // remove implicitly added branch..
+      // ------ this block actually contains the load/store instruction and branch to if.end block
+      BasicBlock* boundary_ok_block = BB->splitBasicBlock(meminst, "boundary.check.ok." + postfix);
+
+      // leave meminst to ok block and split it again to create if.end block
+      BasicBlock* end_block = 
+        boundary_ok_block->splitBasicBlock(boundary_ok_block->begin()->getNextNode(),
+                                           "if.end.boundary.check." + postfix);
+      
+      // erase implicitly added branch from start block to boundary.check.ok
       BB->back().eraseFromParent();
+
+      // and add unconditional branch from boundary_fail_block to if.end 
+      BranchInst::Create( end_block, boundary_fail_block );
 
       // ------ add min boundary check code 
 
@@ -667,9 +621,23 @@ namespace WebCL {
       // *   %4 = icmp ult i32* %0, %3
       ICmpInst* cmp2 = new ICmpInst( *check_first_block, CmpInst::ICMP_ULT, ptr, first_val, "" );
       // *   br i1 %4, label %boundary.check.failed, label %if.end
-      BranchInst::Create( boundary_fail_block, end_block, cmp2, check_first_block );
+      BranchInst::Create( boundary_fail_block, boundary_ok_block, cmp2, check_first_block );
 
-      DEBUG( dbgs() << "Created boundary check for: "; before->print(dbgs()); dbgs() << "\n" );
+      // if meminst == load, create phi node to start of if.end block and replace all uses of meminst with this phi
+      if ( dyn_cast<LoadInst>(meminst) ) {
+        PHINode* newPhi = PHINode::Create(meminst->getType(), 2, "", &end_block->front());
+        meminst->replaceAllUsesWith(newPhi);
+        newPhi->addIncoming(meminst, boundary_ok_block);
+        newPhi->addIncoming(Constant::getNullValue(meminst->getType()), boundary_fail_block);
+      }
+
+      // organize blocks to order shown in comment
+      check_first_block->moveAfter(BB);
+      boundary_ok_block->moveAfter(check_first_block);
+      boundary_fail_block->moveAfter(boundary_ok_block);
+      end_block->moveAfter(boundary_fail_block);
+
+      DEBUG( dbgs() << "Created boundary check for: "; meminst->print(dbgs()); dbgs() << "\n" );
     }
     
     void expandSmartPointersResolvingToCoverUses(SmartPointerByValueMap &smartPointers) {

@@ -18,6 +18,8 @@
 
 // The output is a 44100Hz 16bit stereo PCM file.
 
+// TODO: add internalize public API to maximize inlining optimizations
+
 // RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
 // RUN: opt -O3 $OUT_FILE.bc -o $OUT_FILE.O3.bc &&
