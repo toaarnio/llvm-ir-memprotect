@@ -28,7 +28,7 @@ cd $current_dir;
 
 # if test file not given in $1 then find the tests
 if [ -z $1 ]; then
-    tests=$(ls -1 test_*.c test_*.ll 2> /dev/null);
+    tests=$(ls -1 test_*.c test_*.ll test_*.cl 2> /dev/null);
 else
     tests=$1;
 fi

@@ -6,11 +6,10 @@
 // RUN: llvm-dis $OUT_FILE.optimized.bc &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.optimized.bc -o $OUT_FILE.clamped.ll &&
 // RUN: opt -O3 -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll &&
-// DONT RUN: echo "Checking that one 2 tests did stay" &&
-// DONT RUN: [ $(grep "if\.end[^:]*:" $OUT_FILE.clamped.optimized.ll | wc -l) == 2 ] || 
-// DONT RUN: ( cat $OUT_FILE.clamped.optimized.ll && echo "" &&
-// DONT RUN:   echo "Optimizations did not remove unnecessary checks from first loop" && echo "" && false )
-// RUN: echo "Test is disabled, until feature is implemented."
+// RUN: echo "Checking that at least 2 tests did stay (b[index]=0; and return b[loop_b];)" &&
+// RUN: [ $(grep "boundary.check.ok.[^:]*:" $OUT_FILE.clamped.optimized.ll | wc -l) > 2 ] || 
+// RUN: ( cat $OUT_FILE.clamped.optimized.ll && echo "" &&
+// RUN:   echo "Could not find enough memory access tests..." && echo "" && false )
 #define LEN_B 256
 
 // this should prevent any optimizations

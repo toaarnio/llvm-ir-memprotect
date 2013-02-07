@@ -1154,7 +1154,10 @@ namespace WebCL {
         newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
         BasicBlock &entryBlock = newFun->getEntryBlock();
         newFun->takeName(oldFun);
-        
+
+        // TODO: if old function is kernel, then fix its parameters and name for allowing to call function from outside. 
+        //       Internal calls to kernels already has been fixed
+ 
         DEBUG( dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n" );
 
         for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
