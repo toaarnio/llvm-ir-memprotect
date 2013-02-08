@@ -266,7 +266,6 @@ namespace WebCL {
         sortInstructions( i,  calls, allocas, stores, loads );
       }
 
-
       // add smart allocas and generate initial smart pointer data
       DEBUG( dbgs() << "\n --------------- CREATING SMART ALLOCAS FOR EVERYONE --------------\n" );
       createSmartAllocas( allocas, smartPointers );
@@ -289,6 +288,22 @@ namespace WebCL {
       // gets rid of old functions, replaces calls to old functions and fix call arguments to 
       // use smart pointers in call parameters 
       moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, smartPointers);
+
+      DEBUG( dbgs() << "\n --------------- MOVE KERNEL METADATA TO NEW FUNCTION SIGNATURE --------------\n" );
+      NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
+      if (oclKernels != NULL) {
+        for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
+          MDNode* md = oclKernels->getOperand(op);
+          dbgs() << "Fixing kernel metadata " << op << ": "; md->print(dbgs()); dbgs() << " --> ";
+          Function* oldFun = dyn_cast<Function>(md->getOperand(0));
+          Function* newFun = NULL;
+          if (replacedFunctions.count(oldFun) > 0) {
+            newFun = replacedFunctions[oldFun];
+          }
+          md->replaceOperandWith(0, newFun);
+          md->print(dbgs()); dbgs() << "\n";
+        }
+      }
 
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
       fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, calls, smartPointers);
@@ -1154,9 +1169,6 @@ namespace WebCL {
         newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
         BasicBlock &entryBlock = newFun->getEntryBlock();
         newFun->takeName(oldFun);
-
-        // TODO: if old function is kernel, then fix its parameters and name for allowing to call function from outside. 
-        //       Internal calls to kernels already has been fixed
  
         DEBUG( dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n" );
 
@@ -1265,6 +1277,14 @@ namespace WebCL {
         } // -- end arguments for loop
       }  
     }
+
+    /**
+     * Changes webcl external kernel call signature to contain limits.
+     *
+     * NOTE: maybe better if we require host to pass parameters as { current, first, last } structs
+    virtual Function* fixWebClKernelFunctionSignature( FunctionMap &replacedFunctions, ArgumentMap &argumentMapping ) {
+    }
+     */
     
     /**
      * Creates new function signatures and mapping between original and new.
@@ -1400,7 +1420,7 @@ namespace WebCL {
     }
 
   private:
-    GlobalVariable* mGlobalNull;
+    // GlobalVariable* mGlobalNull;
 
   };
 }
