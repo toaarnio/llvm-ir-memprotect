@@ -37,6 +37,10 @@
 #define UNUSED( x ) \
   (void)x;
 
+/**
+ * Exits fast on expected assertion position. Prevents tests from blocking
+ * for a few seconds after each tested error case.
+ */
 #define fast_assert( condition, message ) do {                       \
     if ( condition == false ) {                                      \
       dbgs() << "\nOn line: " << __LINE__ << " " << message << "\n"; \
@@ -240,7 +244,8 @@ namespace WebCL {
       // ####### Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
 
-        // allow calling external functions with original signatures (this pass should be ran just for fully linked code)
+        // allow calling external functions with original signatures (this pass should be ran just 
+        // for fully linked code)
         if ( i->isIntrinsic() || i->isDeclaration() ) {
 #ifndef STRICT_CHECKS
           DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
@@ -288,23 +293,7 @@ namespace WebCL {
       // gets rid of old functions, replaces calls to old functions and fix call arguments to 
       // use smart pointers in call parameters 
       moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, smartPointers);
-
-      DEBUG( dbgs() << "\n --------------- MOVE KERNEL METADATA TO NEW FUNCTION SIGNATURE --------------\n" );
-      NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
-      if (oclKernels != NULL) {
-        for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
-          MDNode* md = oclKernels->getOperand(op);
-          dbgs() << "Fixing kernel metadata " << op << ": "; md->print(dbgs()); dbgs() << " --> ";
-          Function* oldFun = dyn_cast<Function>(md->getOperand(0));
-          Function* newFun = NULL;
-          if (replacedFunctions.count(oldFun) > 0) {
-            newFun = replacedFunctions[oldFun];
-          }
-          md->replaceOperandWith(0, newFun);
-          md->print(dbgs()); dbgs() << "\n";
-        }
-      }
-
+      
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
       fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, calls, smartPointers);
 
@@ -323,6 +312,9 @@ namespace WebCL {
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
       addBoundaryChecks(stores, loads, smartPointers, safeExceptions);
 
+      DEBUG( dbgs() << "\n --------------- FIX KERNEL PARAMETERS TO BE WEBCL COMPLIANT AND FIX KERNEL METADATA --------------\n" );
+      createKernelEntryPoints(M, replacedFunctions);
+
       /*
       for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
         // loop through arguments and if type has changed, then create label to access original arg 
@@ -333,7 +325,125 @@ namespace WebCL {
 
       return true;
     }
+
+    /**
+     * Goes through kernels metadata entries and creates webcl compliant kernel signature.
+     *
+     * If signature has no pointers, then do nothing, if there was pinter arguments, add 
+     * count parameter after each pointer to tell how many elements pointer has. Take original
+     * kernel name and add implementation, that just resolves the last address of array and passes
+     * it as limit to safepointer version of original kernel.
+     */
+    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions) {
+      NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
+      if (oclKernels != NULL) {
+        for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
+          MDNode* md = oclKernels->getOperand(op);
+          dbgs() << "Fixing entry point " << op << ": "; md->print(dbgs()); dbgs() << " --> ";
+          Function* oldFun = dyn_cast<Function>(md->getOperand(0));
+          Function *newKernelEntryFunction = NULL;
+          
+          // If there is need, create new kernel wrapper and replace old kernel reference with new WebCl
+          // compatible version.
+          if (replacedFunctions.count(oldFun) > 0) {
+            Function *smartKernel = replacedFunctions[oldFun];
+            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel);
+            // make smartKernel to be internal linkage to allow better optimization
+            smartKernel->setLinkage(GlobalValue::InternalLinkage);
+            md->replaceOperandWith(0, newKernelEntryFunction);
+          }
+
+          md->print(dbgs()); dbgs() << "\n";
+        }
+      }
+    }
+
+    /**
+     * Creates new WebCl kernel compliant function, which has element count parameter for each
+     * pointer parameter and can be called from host.
+     *
+     * New function will be given name of the original kernel, but after each pointer parameter,
+     * count parameter will be added which is used to pass information how many elements are
+     * reserved in pointer. Function implementation will convert (pointer, count) to corresponding
+     * smart pointer, which is used to make call to smartKernel.
+     */
+    Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel) {
+      LLVMContext &c = M.getContext();
+
+      // create argument list for WebCl kernel
+      std::vector< Type* > paramTypes;
+      for( Function::arg_iterator a = origKernel->arg_begin(); a != origKernel->arg_end(); ++a ) {
+        Argument* arg = a;
+        Type* t = arg->getType();
+        paramTypes.push_back( t );
+        
+        if( t->isPointerTy() ) {
+          Type* arraySizeType = Type::getInt32Ty(c);
+          paramTypes.push_back( arraySizeType );          
+        }
+      }
+
+      // creating new function with WebCl compatible arguments
+      FunctionType *functionType = origKernel->getFunctionType();
+      FunctionType *newFunctionType = FunctionType::get( functionType->getReturnType(), paramTypes, false );
+      Function *webClKernel = dyn_cast<Function>( M.getOrInsertFunction("", newFunctionType) );
+      webClKernel->takeName( origKernel );
+
+      // create basic block and builder
+      BasicBlock* kernelBlock = BasicBlock::Create( c, "entry", webClKernel );
+      IRBuilder<> blockBuilder( kernelBlock );
+
+      std::vector<Value*> args;
+      Function::arg_iterator origArg = origKernel->arg_begin();
+      for( Function::arg_iterator a = webClKernel->arg_begin(); a != webClKernel->arg_end(); ++a ) {
+        Argument* arg = a;
+        arg->setName(origArg->getName());
+        Type* t = arg->getType();
+        if ( t->isPointerTy() ) {
+          Value* elementCount = (++a);
+          a->setName(origArg->getName() + ".size");
+          AllocaInst *argAlloca = blockBuilder.CreateAlloca(t, 0, arg->getName() + ".addr");
+          blockBuilder.CreateStore(arg, argAlloca);
+          LoadInst *pointerFirstAddr = blockBuilder.CreateLoad(argAlloca);
+          
+          // TODO: this probably should be elementCount - 1
+          GetElementPtrInst *lastLimit = dyn_cast<GetElementPtrInst>
+            (blockBuilder.CreateGEP(pointerFirstAddr, elementCount));
+          
+          // create instructions to smart pointers and pass reference to correct instructions to arg list
+          SmartPointer* tempPointer = createSmartPointer( t, argAlloca, pointerFirstAddr, lastLimit );
+          args.push_back(tempPointer->smart);
+          
+          // we don't need to keep array where all references are stored,
+          delete tempPointer;
+
+        } else {
+          args.push_back(arg);
+        }
+        origArg++;
+      }
+
+      DEBUG( dbgs() << "\nCreated arguments: "; 
+             for ( size_t i = 0; i < args.size(); i++ ) { 
+               args[i]->getType()->print(dbgs()); dbgs() << " "; 
+             } dbgs() << "\n"; ) ;
+      DEBUG( dbgs() << "Function arguments: "; 
+             for ( Function::arg_iterator a = smartKernel->arg_begin(); a != smartKernel->arg_end(); ++a ) { 
+               a->getType()->print(dbgs()); dbgs() << " "; 
+             } dbgs() << "\n"; ) ;
+      
+      blockBuilder.CreateCall(smartKernel, args);
+      blockBuilder.CreateRetVoid();
+
+      DEBUG( webClKernel->print(dbgs()) );
+      return webClKernel;
+    }
     
+    /**
+     * Paint all uses of argv of main function as safe ones, which does not require checks.
+     *
+     * NOTE: should never be called for opencl code
+     */
     void resolveArgvUses(Value *val, ValueSet &safeExceptions) {
       for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
         Value *use = *i;
@@ -357,7 +467,6 @@ namespace WebCL {
           DEBUG( dbgs() << "Cannot resolve if still safe for: "; use->print(dbgs()); dbgs() << "\n" );
           continue;
         }
-
       }
     }
 
@@ -393,7 +502,7 @@ namespace WebCL {
      * To be able to create SmartPointers with limits for global variables, we need to 
      * pass them first through local variables.
      * 
-     * NOTE: this is slow, hopefulle post optimizations fixes the overhead and 
+     * NOTE: this is slow, hopefully post optimizations fixes the overhead and 
      *       avoid using globals
      */ 
     void normalizeGlobalVariableUses(Module &M) {
@@ -857,6 +966,9 @@ namespace WebCL {
      * store i32* %int_table.First, i32** %int_table.Smart.Cur
      * 
      * @param elementType Type which is used to generate smart pointer internal elements.
+     * @param alloca Alloca which will be "smartified"
+     * @param first Start limit. First valid memory address (e.g. gep or alloca intstruction).
+     * @param last End limit (e.g. gep or alloca intstruction). Last valid address.
      */
     SmartPointer* createSmartPointer(Type* elementType, AllocaInst* alloca, Instruction* first, Instruction* last) {
 
@@ -1168,7 +1280,6 @@ namespace WebCL {
         // move all instructions to new function
         newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
         BasicBlock &entryBlock = newFun->getEntryBlock();
-        newFun->takeName(oldFun);
  
         DEBUG( dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n" );
 
@@ -1179,7 +1290,7 @@ namespace WebCL {
           DEBUG( dbgs() << "Fixing arg: "; oldArg->print(dbgs()); dbgs() << " : " );
 
           newArg->takeName(oldArg);
-          oldArg->setName(newArg->getName() + "_replaced_arg");
+          oldArg->setName(newArg->getName() + ".orig");
 
           // if argument types are not the same we need to find smart pointer that was generated for 
           // argument and create initializations so that existing smart alloca will get correct values
@@ -1277,14 +1388,6 @@ namespace WebCL {
         } // -- end arguments for loop
       }  
     }
-
-    /**
-     * Changes webcl external kernel call signature to contain limits.
-     *
-     * NOTE: maybe better if we require host to pass parameters as { current, first, last } structs
-    virtual Function* fixWebClKernelFunctionSignature( FunctionMap &replacedFunctions, ArgumentMap &argumentMapping ) {
-    }
-     */
     
     /**
      * Creates new function signatures and mapping between original and new.
@@ -1341,7 +1444,7 @@ namespace WebCL {
       Function *new_function = Function::Create( new_function_type, F->getLinkage() );
       new_function->copyAttributesFrom( F );      
       F->getParent()->getFunctionList().insert( F, new_function );
-      new_function->setName( F->getName() + "___tobe_replacement___" );
+      new_function->setName( F->getName() + "__smart_ptrs__" );
       
       // add new function to book keepig to show what was replaced
       functionMapping.insert( std::pair< Function*, Function* >( F, new_function ) );
@@ -1418,10 +1521,6 @@ namespace WebCL {
         }
       }
     }
-
-  private:
-    // GlobalVariable* mGlobalNull;
-
   };
 }
   

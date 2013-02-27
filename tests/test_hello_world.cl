@@ -1,5 +1,6 @@
 // RUN: clang $TEST_SRC -x cl -include pocl_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 -emit-llvm -S -o $OUT_FILE.ll &&
-// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll
+// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
+// RUN: opt -Oz -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll
 // TODO: write runner, which actually executes the kernel code...
 // TODO: check that opencl kernel is converted to webcl one, which takes one ulong after each pointer defining size
 
