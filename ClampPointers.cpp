@@ -251,22 +251,25 @@ namespace WebCL {
             DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
             continue;
           }
-          
-          // TODO: Find 
-          dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
-          fast_assert(false, "Calling external functions is not allowed in strict mode. "
-                      "Also intrinsics should be lowered before runnin pass.");
-          
+
+          // if ok builtin, skip this function (only analyze functions which has implementation available)
+          if (!isWebClBuiltin(i)) {
+            dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
+            fast_assert(false, "Calling external functions is not allowed in strict mode. "
+                        "Also intrinsics should be lowered before runnin pass.");
+          } else {
+            DEBUG( dbgs() << "Recognized builtin: "; i->print(dbgs()); );
+            continue;
+          }
         }
 
         // some optimizations causes removal of passing argument %arg to %arg.addr alloca
         // this construct is needed by later phases, so we need to make sure that arguments are fine
-        // before starting... has something to do with nocapture argument attribute...
+        // before starting...
         DEBUG( dbgs() << "\n --------------- NORMALIZE ARGUMENT PASSING --------------\n" );
         normalizeArgumentPassing( i );
 
-        // actually this should not touch functions yet at all, just collect data which functions needs to be changed
-        // now it still creates new function signatures and steals old function's name
+        // actually this should just collect functions to replace, but now it also creates new signatures
         DEBUG( dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n" );
         createNewFunctionSignature( i, replacedFunctions, replacedArguments );
 
@@ -286,8 +289,6 @@ namespace WebCL {
         dbgs() << "\n";
       }
       */
-
-      // TODO: create smart pointer initializations for kernel function where we expect (int*, int) input
 
       DEBUG( dbgs() << "\n ---------- FIXING SMART POINTER STORE OPERATIONS TO ALSO KEEP .Cur, .First and .Last UP-TO-DATE ------\n" );
       fixStoreInstructions(stores, smartPointers);
@@ -326,6 +327,11 @@ namespace WebCL {
       }
       */
 
+      return true;
+    }
+
+    // TODO: implement this check
+    bool isWebClBuiltin(Function *F) {
       return true;
     }
 
@@ -1110,10 +1116,14 @@ namespace WebCL {
         Function* oldFun = call->getCalledFunction();
         
         if (oldFun->isDeclaration() && replacedFunctions.count(oldFun) == 0) {
-          dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; oldFun->print(dbgs());
           
-          if (!RunUnsafeMode) {
-            fast_assert(false, "Aborting since we are in strict mode.");
+          if ( !isWebClBuiltin(oldFun) ) {
+            if ( RunUnsafeMode ) {
+              dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; 
+              oldFun->print(dbgs());
+            } else {
+              fast_assert(false, "Aborting since we are in strict mode.");
+            }
           }
           continue;
         }
