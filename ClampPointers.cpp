@@ -480,9 +480,10 @@ namespace WebCL {
      */
     void collectSafeExceptions(FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
 #ifndef STRICT_CHECKS
-      for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++)  {
+      for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
         Function *check = i->second;
-        if (check->getName() == "main") {
+        if (check->getName() == "main__smart_ptrs__") {
+          check->takeName(i->first);
           for( Function::arg_iterator a = check->arg_begin(); a != check->arg_end(); ++a ) {
             Argument* arg = a;
             if (arg->getName() == "argv") {

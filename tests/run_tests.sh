@@ -26,6 +26,9 @@ fi
 
 cd $current_dir;
 
+export OCLANG=$PWD/oclang.sh
+export RUN_KERNEL=$PWD/run_kernel.sh
+
 # if test file not given in $1 then find the tests
 if [ -z $1 ]; then
     tests=$(ls -1 test_*.c test_*.ll test_*.cl 2> /dev/null);

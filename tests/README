@@ -2,7 +2,7 @@
 
 == Running tests ==
 
-./run_tests.sh [<test_file.(c|ll)>]
+./run_tests.sh [<test_file.(c|ll|cl)>]
 
 If test_file is not given, runner finds all tests from current directory and runs them.
 
@@ -10,11 +10,7 @@ If test_file is not given, runner finds all tests from current directory and run
 
 All test file names must be either:
 
-test_*.c
-
-or
-
-test_*.ll
+test_*.c, test_*.ll or test_*.cl
 
 Each test file has execution instructions in the test file's comments. 
 
@@ -29,6 +25,8 @@ Before running tests CLAMP_PLUGIN variable must be set.
 Variables that can be used in tests are:
 
 CLAMP_PLUGIN Absolute path to clamp_pointers plugin module
-TEST_SRC Source file of the test
-OUT_FILE File name which points to run_temp directory to prevent trashing test directory
-
+TEST_SRC   Source file of the test
+OUT_FILE   File name which points to run_temp directory to prevent trashing test directory
+RUN_KERNEL Helper for running kernel with given parameters. See ./run_kernel.sh
+OCLANG     Wrapper for clang which contains all required switches for compiling opencl 
+           kernels. See ./oclang.sh
