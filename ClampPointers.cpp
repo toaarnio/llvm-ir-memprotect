@@ -250,10 +250,13 @@ namespace WebCL {
           if (RunUnsafeMode) {
             DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
             continue;
-          } else {
-            dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
-            fast_assert(false, "Calling external functions is not allowed in strict mode. Also intrinsics should be lowered before runnin pass.");
           }
+          
+          // TODO: Find 
+          dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
+          fast_assert(false, "Calling external functions is not allowed in strict mode. "
+                      "Also intrinsics should be lowered before runnin pass.");
+          
         }
 
         // some optimizations causes removal of passing argument %arg to %arg.addr alloca
@@ -508,11 +511,11 @@ namespace WebCL {
      */ 
     void normalizeGlobalVariableUses(Module &M) {
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
-        if ( !RunUnsafeMode ) {
-          if (! g->isDeclaration() ) {
-            dbgs() << "Global variables are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
-            fast_assert( false, "Global/external variables are not supported in strict mode.");
-          }
+        
+        // if global, whose address is important for program execution 
+        if ( !RunUnsafeMode && !g->isDeclaration() && !g->hasUnnamedAddr() ) {
+          dbgs() << "Global variables are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
+          fast_assert( false, "Global/external variables are not supported in strict mode.");
         }
 
         DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n" );
