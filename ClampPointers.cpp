@@ -125,7 +125,7 @@ namespace WebCL {
   /// Module pass that implements algorithm for restricting memory
   /// accesses to locally reserved addresses.  
   ///
-  /// TODO: add detailed description what is done...
+  /// TODO: add detailed description of algorithm
   /// 
 
   struct ClampPointers :
@@ -329,8 +329,16 @@ namespace WebCL {
 
       return true;
     }
-
-    // TODO: implement this check
+    
+    /**
+     * Checks if given function declaration is one of webcl builtins
+     * 
+     * NOTE: This check and validity that only builtins are called can be implemented easier
+     * by setting compiler to give an error if call to undefined function is made. All builtins
+     * are defined already in some implicit kernel header.
+     *
+     * Since this is does not really matter here, return always true
+     */
     bool isWebClBuiltin(Function *F) {
       return true;
     }
@@ -348,7 +356,7 @@ namespace WebCL {
       if (oclKernels != NULL) {
         for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
           MDNode* md = oclKernels->getOperand(op);
-          dbgs() << "Fixing entry point " << op << ": "; md->print(dbgs()); dbgs() << " --> ";
+          DEBUG( dbgs() << "Fixing entry point " << op << ": "; md->print(dbgs()); dbgs() << " --> " );
           Function* oldFun = dyn_cast<Function>(md->getOperand(0));
           Function *newKernelEntryFunction = NULL;
           
@@ -362,7 +370,7 @@ namespace WebCL {
             md->replaceOperandWith(0, newKernelEntryFunction);
           }
 
-          md->print(dbgs()); dbgs() << "\n";
+          DEBUG( md->print(dbgs()); dbgs() << "\n" );
         }
       }
     }
@@ -415,9 +423,10 @@ namespace WebCL {
           blockBuilder.CreateStore(arg, argAlloca);
           LoadInst *pointerFirstAddr = blockBuilder.CreateLoad(argAlloca);
           
-          // TODO: this probably should be elementCount - 1
+          // get count - 1 element
+          Value *lastIndex = blockBuilder.CreateSub(elementCount, ConstantInt::get( Type::getInt32Ty(c), 1));
           GetElementPtrInst *lastLimit = dyn_cast<GetElementPtrInst>
-            (blockBuilder.CreateGEP(pointerFirstAddr, elementCount));
+            (blockBuilder.CreateGEP(pointerFirstAddr, lastIndex));
           
           // create instructions to smart pointers and pass reference to correct instructions to arg list
           SmartPointer* tempPointer = createSmartPointer( t, argAlloca, pointerFirstAddr, lastLimit );
@@ -1116,8 +1125,10 @@ namespace WebCL {
         Function* oldFun = call->getCalledFunction();
         
         if (oldFun->isDeclaration() && replacedFunctions.count(oldFun) == 0) {
-          
-          if ( !isWebClBuiltin(oldFun) ) {
+          if ( isWebClBuiltin(oldFun) ) {
+            // TODO: check if call requires that some checks to pointer limits are added?
+            // TODO: if simple pointer parameter, check that pointer is direct alloca label
+          } else {
             if ( RunUnsafeMode ) {
               dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; 
               oldFun->print(dbgs());
@@ -1129,10 +1140,10 @@ namespace WebCL {
         }
 
         Function* newFun = replacedFunctions[oldFun];
-        
         call->setCalledFunction(newFun);
         
-        // find if function signature changed some Operands and change them to refer smart pointers instead of pointers directly
+        // find if function signature changed some Operands and change them to refer smart pointers 
+        // instead of pointers directly
         int op = 0;
         for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
           Argument* oldArg = a;

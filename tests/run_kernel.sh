@@ -72,11 +72,12 @@ lli $KRUNNER_LINKED_BC
 
 ret_val=$?
 
-if [ ! $ret_val -eq 0 ]; then
+if [ $ret_val -eq 0 ]; then
     rm -f $KRUNNER_C $KRUNNER_BC $KRUNNER_LINKED_BC
     rmdir $TEMP_DIR
 else
-    echo "Failed, not deleting temp dir: $TEMP_DIR" >&2;
+    echo $@ >&2;
+    echo "Failed, ret_val: $ret_val not deleting temp dir: $TEMP_DIR" >&2;
 fi
 
-exit $ret_val
+exit $ret_val;
