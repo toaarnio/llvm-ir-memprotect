@@ -20,6 +20,7 @@
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include <vector>
@@ -28,11 +29,12 @@
 #include <iostream>
 #include <cstdio>
 
-// #define STRICT_CHECKS 1
+using namespace llvm;
 
-#if STRICT_CHECKS == 0
-#undef STRICT_CHECKS
-#endif
+static cl::opt<bool>
+RunUnsafeMode("allow-unsafe-exceptions",
+        cl::desc("Will not add boundary checks to main() arguments and allows calling external functions."),
+        cl::init(false), cl::Hidden);
 
 #define UNUSED( x ) \
   (void)x;
@@ -47,8 +49,6 @@
       exit(1);                                                       \
     }                                                                \
   } while(0)
-
-using namespace llvm;
 
 /**
  * LLVM 3.2 didn't support getAsInstruction() yet
@@ -246,14 +246,14 @@ namespace WebCL {
 
         // allow calling external functions with original signatures (this pass should be ran just 
         // for fully linked code)
-        if ( i->isIntrinsic() || i->isDeclaration() ) {
-#ifndef STRICT_CHECKS
-          DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
-          continue;
-#else
-           dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
-           fast_assert(false, "Calling external functions is not allowed in strict mode. Also intrinsics should be lowered before runnin pass.");
-#endif
+        if ( i->isIntrinsic() || i->isDeclaration() ) {         
+          if (RunUnsafeMode) {
+            DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
+            continue;
+          } else {
+            dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
+            fast_assert(false, "Calling external functions is not allowed in strict mode. Also intrinsics should be lowered before runnin pass.");
+          }
         }
 
         // some optimizations causes removal of passing argument %arg to %arg.addr alloca
@@ -479,24 +479,24 @@ namespace WebCL {
      * Note: this is quite dirty symbol name based hack...
      */
     void collectSafeExceptions(FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
-#ifndef STRICT_CHECKS
-      for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
-        Function *check = i->second;
-        if (check->getName() == "main__smart_ptrs__") {
-          check->takeName(i->first);
-          for( Function::arg_iterator a = check->arg_begin(); a != check->arg_end(); ++a ) {
-            Argument* arg = a;
-            if (arg->getName() == "argv") {
-              resolveArgvUses(arg, safeExceptions);
+      if (RunUnsafeMode) {
+        for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
+          Function *check = i->second;
+          if (check->getName() == "main__smart_ptrs__") {
+            check->takeName(i->first);
+            for( Function::arg_iterator a = check->arg_begin(); a != check->arg_end(); ++a ) {
+              Argument* arg = a;
+              if (arg->getName() == "argv") {
+                resolveArgvUses(arg, safeExceptions);
+              }
             }
           }
         }
+      } else {
+        DEBUG( dbgs() << "Skipping allowance to use int main(argc, argv) arguments freely. \n" );
       }
-#else
-      DEBUG( dbgs() << "Skipping allowance to use int main(argc, argv) arguments freely. \n" );
-#endif
     }
-
+    
     /**
      * Pass globals always through local variables.
      *
@@ -508,12 +508,13 @@ namespace WebCL {
      */ 
     void normalizeGlobalVariableUses(Module &M) {
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
-#ifdef STRICT_CHECKS
-        if (! g->isDeclaration() ) {
-          dbgs() << "Global variables are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
-          fast_assert( false, "Global/external variables are not supported in strict mode.");
+        if ( !RunUnsafeMode ) {
+          if (! g->isDeclaration() ) {
+            dbgs() << "Global variables are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
+            fast_assert( false, "Global/external variables are not supported in strict mode.");
+          }
         }
-#endif
+
         DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n" );
         if (!g->hasExternalLinkage()) {
           DEBUG( dbgs() << "-- It is known global var. We should be able to resolve limits when used. \n" );
@@ -1107,9 +1108,10 @@ namespace WebCL {
         
         if (oldFun->isDeclaration() && replacedFunctions.count(oldFun) == 0) {
           dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; oldFun->print(dbgs());
-#ifdef STRICT_CHECKS
-          fast_assert(false, "Aborting since we are in strict mode.");
-#endif
+          
+          if (!RunUnsafeMode) {
+            fast_assert(false, "Aborting since we are in strict mode.");
+          }
           continue;
         }
 
@@ -1526,4 +1528,7 @@ namespace WebCL {
 }
   
 char WebCL::ClampPointers::ID = 0;
-static RegisterPass<WebCL::ClampPointers> X("clamp-pointers", "Safe array accesses using clamp.", false, false);
+static RegisterPass<WebCL::ClampPointers> 
+X("clamp-pointers", "Adds dynamic checks to prevent accessing memory outside of allocated area.", 
+  false, false);
+

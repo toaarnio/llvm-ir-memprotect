@@ -3,7 +3,7 @@
 //
 // RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
 // DONT RUN: llvm-dis < $OUT_FILE.bc && echo "-------- end of compiler out ----------------" &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: echo "------- Compiled fine. ---------" && 
 // RUN: opt -internalize -internalize-public-api-list=main -O3 -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll && 
 // RUN: opt -internalize -internalize-public-api-list=main -O3  -S $OUT_FILE.bc -o $OUT_FILE.optimized.ll &&
