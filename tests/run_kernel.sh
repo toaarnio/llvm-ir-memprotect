@@ -48,8 +48,10 @@ echo "int main() {" >> $KRUNNER_C;
 kernel_argument_list="";
 for arg in $arg_list; do
     type=$(echo ${arg} | sed -E 's@\(([^,]+),.*@\1@');
-    initializer=$(echo $arg | sed -E 's@[^,]+,([^\)]+)\).*@\1@');
+    # parse initializer from the first comma until arg separator ":"
+    initializer=$(echo $arg | sed -E 's@[^,]+,([^\:]+)\).*@\1@');
     not_table=$(echo $initializer | grep -q "{"; echo $?);
+    echo "Parameter: $type $initializer"
     if [ "$not_table" == "0" ]; then 
         echo "  $type arg${arg_index}[] = $initializer;"  >> $KRUNNER_C;
     else
