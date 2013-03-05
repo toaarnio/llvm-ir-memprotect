@@ -1121,7 +1121,11 @@ namespace WebCL {
         "vstore2", "vstore3", "vstore4", "vstore8", "vstore16",
         "async_work_group_copy",
         "async_work_group_strided_copy",
-        "wait_group_events"
+        "wait_group_events",
+        "atomic_add", "atomic_sub", "atomic_xchg", 
+        "atomic_inc", "atomic_dec", "atomic_cmpxchg", 
+        "atomic_min", "atomic_max",
+        "atomic_and", "atomic_or", "atomic_xor"
       };
       std::set<std::string> unsafeBuiltins
         (unsafeBuiltins_tmp, unsafeBuiltins_tmp + sizeof(unsafeBuiltins_tmp) / sizeof(unsafeBuiltins_tmp[0]));
