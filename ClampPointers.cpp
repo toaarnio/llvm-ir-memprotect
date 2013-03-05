@@ -229,7 +229,8 @@ namespace WebCL {
       
       // set of different interesting instructions in the program
       // maybe could be just one map of sets sorted by opcode
-      CallInstrSet calls;
+      CallInstrSet internalCalls;
+      CallInstrSet externalCalls;
       AllocaInstrSet allocas;
       StoreInstrSet stores;
       LoadInstrSet loads;
@@ -274,7 +275,7 @@ namespace WebCL {
         createNewFunctionSignature( i, replacedFunctions, replacedArguments );
 
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
-        sortInstructions( i,  calls, allocas, stores, loads );
+        sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
       }
 
       // add smart allocas and generate initial smart pointer data
@@ -299,7 +300,7 @@ namespace WebCL {
       moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, smartPointers);
       
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
-      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, calls, smartPointers);
+      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, smartPointers);
 
       // ##########################################################################################
       // #### At this point code should be again perfectly executable and runs with new function 
@@ -318,6 +319,9 @@ namespace WebCL {
 
       DEBUG( dbgs() << "\n --------------- FIX KERNEL PARAMETERS TO BE WEBCL COMPLIANT AND FIX KERNEL METADATA --------------\n" );
       createKernelEntryPoints(M, replacedFunctions);
+
+      DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
+      makeBuiltinCallsSafe(externalCalls, smartPointers);
 
       /*
       for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
@@ -1105,6 +1109,40 @@ namespace WebCL {
         }
       }
     }
+
+    /**
+     * Goes through external function calls and if call is unsafe opencl call convert it to safe webcl implementation
+     * which operates with smart pointers
+     */
+    void makeBuiltinCallsSafe(CallInstrSet &calls, SmartPointerByValueMap &smartPointers) {
+      
+      // if mapping is needed outside export this to be reference parameter instead of local 
+      FunctionMap safeBuiltins;
+
+      for (CallInstrSet::iterator i = calls.begin(); i != calls.end(); i++) {
+        CallInst *call = *i;
+
+        DEBUG( dbgs() << "---- Checking builtin call:"; call->print(dbgs()); dbgs() << "\n" );
+        
+        Function* oldFun = call->getCalledFunction();
+        
+        if ( isWebClBuiltin(oldFun) ) {
+          // TODO: check if old function is safe or not
+          // TODO: if call is safe, skip with continue
+          // TODO: if not safe get / create safe declaration safeBuiltins map is used as cache
+          // TODO: go through agruments and pass safe pointer instead of original
+          // TODO: make sure that value is updated, before call
+        } else {
+          if ( RunUnsafeMode ) {
+            dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; 
+            oldFun->print(dbgs());
+            continue;
+          } else {
+            fast_assert(false, "Aborting since we are in strict mode.");
+          }
+        }
+      }
+    }
     
     /**
      * Goes through function calls and change call parameters to be suitable for new function signature.
@@ -1124,42 +1162,36 @@ namespace WebCL {
         
         Function* oldFun = call->getCalledFunction();
         
-        if (oldFun->isDeclaration() && replacedFunctions.count(oldFun) == 0) {
-          if ( isWebClBuiltin(oldFun) ) {
-            // TODO: check if call requires that some checks to pointer limits are added?
-            // TODO: if simple pointer parameter, check that pointer is direct alloca label
-          } else {
-            if ( RunUnsafeMode ) {
-              dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; 
-              oldFun->print(dbgs());
-            } else {
-              fast_assert(false, "Aborting since we are in strict mode.");
-            }
-          }
+        // if function was not replaced (didn't have pointer parameters)
+        if (replacedFunctions.count(oldFun) == 0) {
           continue;
         }
 
         Function* newFun = replacedFunctions[oldFun];
-        call->setCalledFunction(newFun);
+        convertCallToUseSmartPointerArgs(call, newFun, smartPointers);
+      }
+    }
+    
+    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, SmartPointerByValueMap &smartPointers) {
+
+      Function* oldFun = call->getCalledFunction();
+      call->setCalledFunction(newFun);
         
         // find if function signature changed some Operands and change them to refer smart pointers 
         // instead of pointers directly
         int op = 0;
+        Function::arg_iterator newArgIter = newFun->arg_begin();
         for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
           Argument* oldArg = a;
-          Argument* newArg = replacedArguments[oldArg];
+          // Argument* newArg = replacedArguments[oldArg];
+          Argument* newArg = newArgIter;
+          newArgIter++;
 
           // this argument type has been changed to smart pointer, find out corresponding smart
           if (oldArg->getType() != newArg->getType()) {
             Value* operand = call->getArgOperand(op);
 
             DEBUG( dbgs() << "- op #" << op << " needs fixing: "; operand->print(dbgs()); dbgs() << "\n" );
-
-            // !!! TODO !!! We probably should traverse SSA tree further up to find smart pointer
-            // in that case we should also update .Cur to oldParam to have calculated 
-            // value passed to function. This method could work universally to all cases here...
-              
-            // use findLimitingElement and it should have smart pointer
 
             // get load, which actually loads smart pointer from the end of label
             if ( LoadInst* loadToFix = dyn_cast<LoadInst>(operand) ) {
@@ -1249,7 +1281,6 @@ namespace WebCL {
         }
 
         DEBUG( dbgs() << "-- Converted call to : "; call->print(dbgs()); dbgs() << "\n" );
-      }
     }
     
     /**
@@ -1493,7 +1524,8 @@ namespace WebCL {
     }
 
     virtual void sortInstructions( Function *F, 
-                                   CallInstrSet &calls, 
+                                   CallInstrSet &internalCalls, 
+                                   CallInstrSet &externalCalls, 
                                    AllocaInstrSet &allocas,
                                    StoreInstrSet &stores,
                                    LoadInstrSet &loads) {
@@ -1507,8 +1539,14 @@ namespace WebCL {
        
           if ( CallInst *call = dyn_cast< CallInst >(&inst) ) {
             if (!call->getCalledFunction()->isIntrinsic()) {
-              calls.insert(call);
-              DEBUG( dbgs() << "Found call: "; call->print(dbgs()); dbgs() << "\n" );
+              if (call->getCalledFunction()->isDeclaration()) {
+                externalCalls.insert(call);
+                DEBUG( dbgs() << "Found external call: " );
+              } else {
+                internalCalls.insert(call);
+                DEBUG( dbgs() << "Found internal call: " );
+              }
+              DEBUG( call->print(dbgs()); dbgs() << "\n" );
             } else {
               DEBUG( dbgs() << "Ignored call to intrinsic\n" );
             }
