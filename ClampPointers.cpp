@@ -1115,9 +1115,39 @@ namespace WebCL {
      * which operates with smart pointers
      */
     void makeBuiltinCallsSafe(CallInstrSet &calls, SmartPointerByValueMap &smartPointers) {
-      
+      std::string unsafeBuiltins_tmp[] = {
+        "fract", "frexp", "lgamma_r", "modf", "remquo", "sincos", 
+        "vload2", "vload3", "vload4", "vload8", "vload16", 
+        "vstore2", "vstore3", "vstore4", "vstore8", "vstore16",
+        "async_work_group_copy",
+        "async_work_group_strided_copy",
+        "wait_group_events"
+      };
+      std::set<std::string> unsafeBuiltins
+        (unsafeBuiltins_tmp, unsafeBuiltins_tmp + sizeof(unsafeBuiltins_tmp) / sizeof(unsafeBuiltins_tmp[0]));
+
+      // we currently do not support some half vstore/vload variants
+      std::string forbiddenBuiltins_tmp[] = {
+        "vload_half", "vload_half2", "vload_half3", "vload_half4", "vload_half8", "vload_half16", 
+        "vloada_half2", "vloada_half3", "vloada_half4", "vloada_half8", "vloada_half16", 
+        "vstore_half", "vstore_half2", "vstore_half3", "vstore_half4", "vstore_half8", "vstore_half16", 
+        "vstore_half_rte", "vstore_half2_rte", "vstore_half3_rte", "vstore_half4_rte", "vstore_half8_rte", "vstore_half16_rte",
+        "vstore_half_rtz", "vstore_half2_rtz", "vstore_half3_rtz", "vstore_half4_rtz", "vstore_half8_rtz", "vstore_half16_rtz",
+        "vstore_half_rtp", "vstore_half2_rtp", "vstore_half3_rtp", "vstore_half4_rtp", "vstore_half8_rtp", "vstore_half16_rtp",
+        "vstore_half_rtn", "vstore_half2_rtn", "vstore_half3_rtn", "vstore_half4_rtn", "vstore_half8_rtn", "vstore_half16_rtn",
+        "vstorea_half2", "vstorea_half3", "vstorea_half4", "vstorea_half8", "vstorea_half16", 
+        "vstorea_half2_rte", "vstorea_half3_rte", "vstorea_half4_rte", "vstorea_half8_rte","vstorea_half16_rte",
+        "vstorea_half2_rtz", "vstorea_half3_rtz", "vstorea_half4_rtz", "vstorea_half8_rtz","vstorea_half16_rtz",
+        "vstorea_half2_rtp", "vstorea_half3_rtp", "vstorea_half4_rtp", "vstorea_half8_rtp","vstorea_half16_rtp",
+        "vstorea_half2_rtn", "vstorea_half3_rtn", "vstorea_half4_rtn", "vstorea_half8_rtn","vstorea_half16_rtn"
+      };
+      std::set<std::string> forbiddenBuiltins
+        (forbiddenBuiltins_tmp, forbiddenBuiltins_tmp + sizeof(forbiddenBuiltins_tmp) / sizeof(forbiddenBuiltins_tmp[0]));
+
+
       // if mapping is needed outside export this to be reference parameter instead of local 
       FunctionMap safeBuiltins;
+      ArgumentMap dummyArgMap;
 
       for (CallInstrSet::iterator i = calls.begin(); i != calls.end(); i++) {
         CallInst *call = *i;
@@ -1127,11 +1157,22 @@ namespace WebCL {
         Function* oldFun = call->getCalledFunction();
         
         if ( isWebClBuiltin(oldFun) ) {
-          // TODO: check if old function is safe or not
-          // TODO: if call is safe, skip with continue
-          // TODO: if not safe get / create safe declaration safeBuiltins map is used as cache
-          // TODO: go through agruments and pass safe pointer instead of original
-          // TODO: make sure that value is updated, before call
+          
+          // if not supported yet assert
+          fast_assert( forbiddenBuiltins.count(oldFun->getName()) == 0, "Tried to call forbidden builtin: " + oldFun->getName() );
+          
+          // if unsafe fix call
+          if ( unsafeBuiltins.count(oldFun->getName()) > 0 ) {
+            
+            // if safe version is not yet generated do it first..
+            if ( safeBuiltins.count(oldFun) == 0 ) {
+              createNewFunctionSignature(oldFun, safeBuiltins, dummyArgMap);
+            }
+            
+            Function *newFun = safeBuiltins[oldFun];
+            convertCallToUseSmartPointerArgs(call, newFun, smartPointers);
+          }
+
         } else {
           if ( RunUnsafeMode ) {
             dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; 
@@ -1172,115 +1213,117 @@ namespace WebCL {
       }
     }
     
+    /**
+     * Converts call function to use new function as called function and changes all pointer parameters to be smart pointers.
+     */
     void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, SmartPointerByValueMap &smartPointers) {
 
       Function* oldFun = call->getCalledFunction();
       call->setCalledFunction(newFun);
+      
+      // find if function signature changed some Operands and change them to refer smart pointers 
+      // instead of pointers directly
+      int op = 0;
+      Function::arg_iterator newArgIter = newFun->arg_begin();
+      for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
+        Argument* oldArg = a;
+        Argument* newArg = newArgIter;
+        newArgIter++;
         
-        // find if function signature changed some Operands and change them to refer smart pointers 
-        // instead of pointers directly
-        int op = 0;
-        Function::arg_iterator newArgIter = newFun->arg_begin();
-        for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
-          Argument* oldArg = a;
-          // Argument* newArg = replacedArguments[oldArg];
-          Argument* newArg = newArgIter;
-          newArgIter++;
-
-          // this argument type has been changed to smart pointer, find out corresponding smart
-          if (oldArg->getType() != newArg->getType()) {
-            Value* operand = call->getArgOperand(op);
-
-            DEBUG( dbgs() << "- op #" << op << " needs fixing: "; operand->print(dbgs()); dbgs() << "\n" );
-
-            // get load, which actually loads smart pointer from the end of label
-            if ( LoadInst* loadToFix = dyn_cast<LoadInst>(operand) ) {
+        // this argument type has been changed to smart pointer, find out corresponding smart
+        if (oldArg->getType() != newArg->getType()) {
+          Value* operand = call->getArgOperand(op);
+          
+          DEBUG( dbgs() << "- op #" << op << " needs fixing: "; operand->print(dbgs()); dbgs() << "\n" );
+          
+          // get load, which actually loads smart pointer from the end of label
+          if ( LoadInst* loadToFix = dyn_cast<LoadInst>(operand) ) {
               
-
-              Value* oldParam = loadToFix->getOperand(0);
-
+            
+            Value* oldParam = loadToFix->getOperand(0);
+            
               // we should not load value from end of pointer, but directly pass smart pointer instead...
-              if (smartPointers.count(oldParam) > 0) {
-                call->setOperand( op, smartPointers[oldParam]->smart );
+            if (smartPointers.count(oldParam) > 0) {
+              call->setOperand( op, smartPointers[oldParam]->smart );
               } else {
-                dbgs() << "In function: ---- \n";
-                call->getParent()->print(dbgs());
-                dbgs() << "\n\nError while converting call:\n";
-                loadToFix->print(dbgs());
-                dbgs() << "\n";
-                call->print(dbgs());
-                dbgs() << " cannot find smart pointer for op: " << op << "\n"; 
-                fast_assert(false, "Cannot find smart pointer for the call operand. Maybe you tried to pass extern variable?");
-              }
-              
-            } else if ( GetElementPtrInst* gepToFix = dyn_cast<GetElementPtrInst>(operand) ) {
-              
-              // fixing passing parameter got from GEP e.g. passing table
-              Value *sourcePointer = gepToFix->getPointerOperand();
-              if (smartPointers.count(sourcePointer) == 0 ) {
-                // hack for one current special case should be fixed as described in start of function
-                if (LoadInst* load = dyn_cast<LoadInst>(sourcePointer)) {
-                  sourcePointer = load->getPointerOperand();
-                  if (smartPointers.count(sourcePointer) == 0) sourcePointer = NULL;
-                } else {
-                  sourcePointer = NULL;
-                }
-
-                if (!sourcePointer) {
-                  dbgs() << "In BB:\n"; gepToFix->getParent()->print(dbgs());
-                  dbgs() << "\nConverting: "; gepToFix->getPointerOperand()->print(dbgs()); dbgs() << "\n";
-                  fast_assert(false, "Could not find smart pointer for GEP, which should have smart pointer..");
-                }
-              }
-              
-              SmartPointer *smartPtr = smartPointers[sourcePointer];
-              // update smartPointer .Cur to match the  
-              StoreInst *updateCur = new StoreInst(gepToFix, smartPtr->cur);
-              updateCur->insertAfter(gepToFix);
-              call->setOperand(op, smartPtr->smart);
-
-            } else if ( AllocaInst* allocaSrc = dyn_cast<AllocaInst>(operand) ) {
-              
-              // value can be also e.g. alloca, which is read from caller function's arguments %param.addr... 
-              if (smartPointers.count(allocaSrc) > 0) {
-                SmartPointer *smartPtr = smartPointers[allocaSrc];
-                call->setOperand(op, smartPtr->smart);
-              } else {
-                // check if alloca is not integer type lets fail
-                dbgs() << "\n\nIn BB:\n";
-                call->getParent()->print(dbgs());
-                dbgs() << "\n\nError while converting call:\n";
-                allocaSrc->print(dbgs());
-                dbgs() << "\n";
-                call->print(dbgs());
-                dbgs() << "\nOld argument type:::\n";
-                oldArg->print(dbgs());
-                dbgs() << "\nNew argument type:::\n";
-                newArg->print(dbgs());
-                dbgs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
-                fast_assert(false, "Could not find smart pointer for alloca");
-              }
-              
-            } else {
-
-              // NOTE: if we find lots of cases where earlier does not work we could think of adding 
-              // normalizing pass which would fix constructs to be suitable for this pass. 
-              // In llvm there might be already passes, which may work for doing it.
-              dbgs() << "In BB:\n";
+              dbgs() << "In function: ---- \n";
               call->getParent()->print(dbgs());
               dbgs() << "\n\nError while converting call:\n";
-              call->print(dbgs());
-              dbgs() << " not able to find smart pointer for call operand: " << op << "  argument op: ";
-              call->getArgOperand(op)->print(dbgs());
+              loadToFix->print(dbgs());
               dbgs() << "\n";
-              fast_assert(false, "Could not find smart pointer for op for converting call.");
-
+              call->print(dbgs());
+              dbgs() << " cannot find smart pointer for op: " << op << "\n"; 
+              fast_assert(false, "Cannot find smart pointer for the call operand. Maybe you tried to pass extern variable?");
             }
+            
+          } else if ( GetElementPtrInst* gepToFix = dyn_cast<GetElementPtrInst>(operand) ) {
+            
+            // fixing passing parameter got from GEP e.g. passing table
+            Value *sourcePointer = gepToFix->getPointerOperand();
+            if (smartPointers.count(sourcePointer) == 0 ) {
+              // hack for one current special case should be fixed as described in start of function
+              if (LoadInst* load = dyn_cast<LoadInst>(sourcePointer)) {
+                sourcePointer = load->getPointerOperand();
+                if (smartPointers.count(sourcePointer) == 0) sourcePointer = NULL;
+              } else {
+                sourcePointer = NULL;
+              }
+              
+              if (!sourcePointer) {
+                dbgs() << "In BB:\n"; gepToFix->getParent()->print(dbgs());
+                dbgs() << "\nConverting: "; gepToFix->getPointerOperand()->print(dbgs()); dbgs() << "\n";
+                fast_assert(false, "Could not find smart pointer for GEP, which should have smart pointer..");
+              }
+            }
+            
+            SmartPointer *smartPtr = smartPointers[sourcePointer];
+            // update smartPointer .Cur to match the  
+            StoreInst *updateCur = new StoreInst(gepToFix, smartPtr->cur);
+            updateCur->insertAfter(gepToFix);
+            call->setOperand(op, smartPtr->smart);
+            
+          } else if ( AllocaInst* allocaSrc = dyn_cast<AllocaInst>(operand) ) {
+            
+            // value can be also e.g. alloca, which is read from caller function's arguments %param.addr... 
+            if (smartPointers.count(allocaSrc) > 0) {
+              SmartPointer *smartPtr = smartPointers[allocaSrc];
+              call->setOperand(op, smartPtr->smart);
+            } else {
+              // check if alloca is not integer type lets fail
+              dbgs() << "\n\nIn BB:\n";
+              call->getParent()->print(dbgs());
+              dbgs() << "\n\nError while converting call:\n";
+              allocaSrc->print(dbgs());
+              dbgs() << "\n";
+              call->print(dbgs());
+              dbgs() << "\nOld argument type:::\n";
+              oldArg->print(dbgs());
+              dbgs() << "\nNew argument type:::\n";
+              newArg->print(dbgs());
+              dbgs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
+              fast_assert(false, "Could not find smart pointer for alloca");
+            }
+            
+          } else {
+            
+            // NOTE: if we find lots of cases where earlier does not work we could think of adding 
+            // normalizing pass which would fix constructs to be suitable for this pass. 
+            // In llvm there might be already passes, which may work for doing it.
+            dbgs() << "In BB:\n";
+            call->getParent()->print(dbgs());
+            dbgs() << "\n\nError while converting call:\n";
+            call->print(dbgs());
+            dbgs() << " not able to find smart pointer for call operand: " << op << "  argument op: ";
+            call->getArgOperand(op)->print(dbgs());
+            dbgs() << "\n";
+            fast_assert(false, "Could not find smart pointer for op for converting call.");
+            
           }
-          op++;
         }
-
-        DEBUG( dbgs() << "-- Converted call to : "; call->print(dbgs()); dbgs() << "\n" );
+        op++;
+      }
+      
+      DEBUG( dbgs() << "-- Converted call to : "; call->print(dbgs()); dbgs() << "\n" );
     }
     
     /**
@@ -1469,12 +1512,13 @@ namespace WebCL {
       fast_assert( (!F->getFunctionType()->getReturnType()->isPointerTy()), 
                    "Handling function returning pointer is not implemented." );
       fast_assert( (!F->getFunctionType()->getReturnType()->isArrayTy()), 
-                   "Handling function retruning array type is not implemented." );
+                   "Handling function returning array type is not implemented." );
       fast_assert( (!F->isVarArg()), "Variable argument functions are not supported.");
 
       // check if main or kernel and in that case do not change signature 
       bool dontTouchArguments = false;
-      if (F->getName() == "main") {
+
+      if (RunUnsafeMode && F->getName() == "main") {
         dontTouchArguments = true;
       }
       
