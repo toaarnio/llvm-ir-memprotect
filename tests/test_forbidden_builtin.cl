@@ -1,5 +1,5 @@
 // RUN: $OCLANG $TEST_SRC -S -o $OUT_FILE.ll &&
-// RUN: ( opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll;
+// RUN: ( opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll;
 // RUN:   ( [ ! $? = 0 ] && echo "OK: Compilation failed as expected") ||
 // RUN:   ( echo "FAIL: pass should have asserted" && false )
 // RUN: )

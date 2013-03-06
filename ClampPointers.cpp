@@ -539,6 +539,20 @@ namespace WebCL {
     }
     
     /**
+     * Returns true if pointer limits can be safely resolved for the global value.
+     *
+     * Used to whitelist supported IR constructs.
+     */
+    bool isSafeGlobalValue(GlobalValue *g) {
+      // if address of global value is not important 
+      if ( g->hasUnnamedAddr() ) {
+        return true;
+      }
+
+      return false;
+    }
+    
+    /**
      * Pass globals always through local variables.
      *
      * To be able to create SmartPointers with limits for global variables, we need to 
@@ -549,13 +563,15 @@ namespace WebCL {
      */ 
     void normalizeGlobalVariableUses(Module &M) {
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
-        
-        // if global, whose address is important for program execution 
-        if ( !RunUnsafeMode && !g->isDeclaration() && !g->hasUnnamedAddr() ) {
-          dbgs() << "Global variables are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
-          fast_assert( false, "Global/external variables are not supported in strict mode.");
+           
+        // if global, which has not been whitelisted to be ok
+        if ( !RunUnsafeMode ) {
+          if ( !isSafeGlobalValue(g) ) {
+            dbgs() << "This global variable are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
+            fast_assert( false, "Global/external variables are not supported in strict mode.");
+          }
         }
-
+        
         DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n" );
         if (!g->hasExternalLinkage()) {
           DEBUG( dbgs() << "-- It is known global var. We should be able to resolve limits when used. \n" );
@@ -1184,14 +1200,17 @@ namespace WebCL {
           std::string demangledName = demangle(oldFun->getName().str());
 
           // if not supported yet assert
-          fast_assert( forbiddenBuiltins.count(oldFun->getName()) == 0, "Tried to call forbidden builtin: " + oldFun->getName() );
+          fast_assert( forbiddenBuiltins.count(demangledName) == 0, 
+                       "Tried to call forbidden builtin: " + oldFun->getName() + " " + demangledName);
           
           // if unsafe fix call
-          if ( unsafeBuiltins.count(oldFun->getName()) > 0 ) {
+          if ( unsafeBuiltins.count(demangledName) > 0 ) {
             
             // if safe version is not yet generated do it first..
             if ( safeBuiltins.count(oldFun) == 0 ) {
-              createNewFunctionSignature(oldFun, safeBuiltins, dummyArgMap);
+              Function *newFun = createNewFunctionSignature(oldFun, safeBuiltins, dummyArgMap);
+              newFun->setName(demangledName + "__smart_ptrs__");
+              // TODO: maybe need to mangle name to be able to link with safe_builtins
             }
             
             Function *newFun = safeBuiltins[oldFun];

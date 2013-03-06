@@ -4,7 +4,7 @@
 
 // RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.optimized.bc &&
 // RUN: llvm-dis $OUT_FILE.optimized.bc &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.optimized.bc -o $OUT_FILE.clamped.ll &&
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.optimized.bc -o $OUT_FILE.clamped.ll &&
 // RUN: opt -O3 -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll &&
 // RUN: echo "Checking that at least 2 tests did stay (b[index]=0; and return b[loop_b];)" &&
 // RUN: [ $(grep "boundary.check.ok.[^:]*:" $OUT_FILE.clamped.optimized.ll | wc -l) > 2 ] || 
