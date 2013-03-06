@@ -122,6 +122,25 @@ Instruction *getAsInstruction(ConstantExpr *expr) {
 
 namespace WebCL {
 
+  /**
+   * Returns demangled function name without parameter list.
+   *
+   * @param name Mangled function name or non-mangled
+   * @return Demangled function name or the passed argument if mangling is not recognized.
+   */
+  std::string demangle(std::string name) {
+    bool isMangled = name.find("_Z") == 0;
+    std::string retVal = name;
+    if (isMangled) {
+      size_t lastIndex = name.find_first_not_of("0123456789", 2);
+      std::string functionNameLength = name.substr(2, lastIndex-2); 
+      fast_assert(functionNameLength.find_first_not_of("0123456789") == std::string::npos, "Error when trying to demangle: " + name);
+      retVal = name.substr(lastIndex, atoi(functionNameLength.c_str()));
+    }
+    DEBUG( dbgs() << "Demangled: " << name << " to " << retVal << "\n" );
+    return retVal;
+  }
+
   /// Module pass that implements algorithm for restricting memory
   /// accesses to locally reserved addresses.  
   ///
@@ -1161,7 +1180,9 @@ namespace WebCL {
         Function* oldFun = call->getCalledFunction();
         
         if ( isWebClBuiltin(oldFun) ) {
-          
+
+          std::string demangledName = demangle(oldFun->getName().str());
+
           // if not supported yet assert
           fast_assert( forbiddenBuiltins.count(oldFun->getName()) == 0, "Tried to call forbidden builtin: " + oldFun->getName() );
           

@@ -1814,6 +1814,18 @@ typedef uint event_t;
                                  const __local GENTYPE *src,    \
                                  size_t num_gentypes,           \
                                  event_t event);                \
+                                                                \
+  _cl_overloadable                                              \
+  event_t async_work_group_strided_copy (__local GENTYPE *dst,  \
+                                 const __global GENTYPE *src,   \
+                                 size_t num_gentypes,           \
+                                 event_t event);                \
+                                                                \
+  _cl_overloadable                                              \
+  event_t async_work_group_strided_copy (__global GENTYPE *dst, \
+                                 const __local GENTYPE *src,    \
+                                 size_t num_gentypes,           \
+                                 event_t event);                \
                                                                 
 void wait_group_events (int num_events,                      
                         event_t *event_list);                 
