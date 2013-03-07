@@ -140,7 +140,45 @@ namespace WebCL {
     DEBUG( dbgs() << "Demangled: " << name << " to " << retVal << "\n" );
     return retVal;
   }
+  
+  ConstantInt* getConstInt(LLVMContext &context, int i) {
+    return ConstantInt::get(Type::getInt32Ty(context), i);
+  }    
 
+  template <class T>
+  ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1, int i2) {
+    std::vector<T> temp;
+    temp.push_back(getConstInt(context, i1));
+    temp.push_back(getConstInt(context, i2));
+    return ArrayRef<T>(temp);
+  }    
+  
+  template <class T>
+  ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1, int i2, int i3) {
+    std::vector<T> temp;
+    temp.push_back(getConstInt(context, i1));
+    temp.push_back(getConstInt(context, i2));
+    temp.push_back(getConstInt(context, i3));
+    return ArrayRef<T>(temp);
+  }    
+  
+  template <class T>
+  ArrayRef<T> genArrayRef(LLVMContext &context, T v1, T v2) {
+    std::vector<T> temp;
+    temp.push_back(v1);
+    temp.push_back(v2);
+    return ArrayRef<T>(temp);
+  }    
+  
+  template <class T>
+  ArrayRef<T> genArrayRef(LLVMContext &context, T v1, T v2, T v3) {
+    std::vector<T> temp;
+    temp.push_back(v1);
+    temp.push_back(v2);
+    temp.push_back(v3);
+    return ArrayRef<T>(temp);
+  }    
+  
   /// Module pass that implements algorithm for restricting memory
   /// accesses to locally reserved addresses.  
   ///
@@ -170,6 +208,33 @@ namespace WebCL {
       Value* max; // Last valid address (not last  valid + 1)
       Value* smart;
       Value* smart_ptr;
+      
+      // returns last valid address for given type
+      Value* maxFor(LLVMContext &c, Type *type) {
+        Value *retVal = max;
+        if (type != max->getType()) {
+          DEBUG( dbgs() << "Resolving types "; max->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
+          // go to end, cast pointer to required type, rewind one elem and return addr
+          Constant *firstInvalidAddr = ConstantExpr::getGetElementPtr(dyn_cast<Constant>(max), getConstInt(c,1));
+          Constant *dstPtrType = ConstantExpr::getPointerCast(firstInvalidAddr, type);
+          Constant *lastValid = ConstantExpr::getGetElementPtr(dstPtrType, getConstInt(c, -1));
+          retVal = lastValid;
+          DEBUG( dbgs() << "Resolved: "; retVal->print(dbgs()); dbgs() << " Type: "; retVal->getType()->print(dbgs()); dbgs() << "\n" );
+        }
+        return retVal;
+      }
+
+      // adds type cast to min address if necessary
+      Value* minFor(LLVMContext &c, Type *type) {
+        Value *retVal = min;
+        if (type != min->getType()) {
+          DEBUG( dbgs() << "Resolving types "; min->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
+          // cast pointer to required type
+          retVal = ConstantExpr::getPointerCast(dyn_cast<Constant>(min), type);
+        }
+        return retVal;
+      }
+
     };
     
     typedef std::map< Function*, Function* > FunctionMap;
@@ -187,7 +252,7 @@ namespace WebCL {
     /// Helper function for generating a single-index GEP instruction from a value.
     GetElementPtrInst* generateGEP( LLVMContext& ctx, Value* ptr, int a, Instruction* i, Twine t = "" ) {
       Twine name = t;
-      ConstantInt* c_0 = ConstantInt::get( Type::getInt32Ty(ctx), a );
+      ConstantInt* c_0 = getConstInt(ctx, a);
       std::vector< Value* > values;
       values.push_back( c_0 );
       ArrayRef< Value* > ref( values );
@@ -198,8 +263,8 @@ namespace WebCL {
     /// Helper function for generating a two-index GEP instruction from a value.
     GetElementPtrInst* generateGEP( LLVMContext& c, Value* ptr, int a, int b, Instruction* i, Twine t = "" ) {
       Twine name = t;
-      ConstantInt* c_0 = ConstantInt::get( Type::getInt32Ty(c), a );
-      ConstantInt* c_1 = ConstantInt::get( Type::getInt32Ty(c), b );
+      ConstantInt* c_0 = getConstInt(c, a);
+      ConstantInt* c_1 = getConstInt(c, b);
       std::vector< Value* > values;
       values.push_back( c_0 );
       values.push_back( c_1 );
@@ -211,7 +276,7 @@ namespace WebCL {
     /// Helper function for generating smart pointer struct pointer type
     Type* getSmartPointerType( LLVMContext& c, Type* t ) {
       StructType* s = this->getSmartStructType( c, t );
-      Type* smart_array_pointer_type = PointerType::getUnqual( s );
+      Type* smart_array_pointer_type = s->getPointerTo();
       return smart_array_pointer_type;
     }
 
@@ -259,7 +324,7 @@ namespace WebCL {
 
       // we can create smart pointers only for local allocas
       DEBUG( dbgs() << "\n --------------- NORMALIZE GLOBAL VARIABLE USES --------------\n" );
-      normalizeGlobalVariableUses( M );
+      normalizeGlobalVariableUses( M, smartPointers );
 
       // ####### Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
@@ -447,7 +512,7 @@ namespace WebCL {
           LoadInst *pointerFirstAddr = blockBuilder.CreateLoad(argAlloca);
           
           // get count - 1 element
-          Value *lastIndex = blockBuilder.CreateSub(elementCount, ConstantInt::get( Type::getInt32Ty(c), 1));
+          Value *lastIndex = blockBuilder.CreateSub(elementCount, getConstInt(c, 1));
           GetElementPtrInst *lastLimit = dyn_cast<GetElementPtrInst>
             (blockBuilder.CreateGEP(pointerFirstAddr, lastIndex));
           
@@ -534,7 +599,7 @@ namespace WebCL {
           }
         }
       } else {
-        DEBUG( dbgs() << "Skipping allowance to use int main(argc, argv) arguments freely. \n" );
+        DEBUG( dbgs() << "No exceptions added in strict mode. \n" );
       }
     }
     
@@ -544,8 +609,14 @@ namespace WebCL {
      * Used to whitelist supported IR constructs.
      */
     bool isSafeGlobalValue(GlobalValue *g) {
+      
       // if address of global value is not important 
       if ( g->hasUnnamedAddr() ) {
+        return true;
+      }
+      
+      // if variable is internal and we should be able to resolve safely its limits
+      if ( g->hasInternalLinkage() ) {
         return true;
       }
 
@@ -553,7 +624,7 @@ namespace WebCL {
     }
     
     /**
-     * Pass globals always through local variables.
+     * TODO: FIX THE COMMENT AFTER STUFF WORKS Pass globals always through local variables.
      *
      * To be able to create SmartPointers with limits for global variables, we need to 
      * pass them first through local variables.
@@ -561,23 +632,105 @@ namespace WebCL {
      * NOTE: this is slow, hopefully post optimizations fixes the overhead and 
      *       avoid using globals
      */ 
-    void normalizeGlobalVariableUses(Module &M) {
+    void normalizeGlobalVariableUses(Module &M, SmartPointerByValueMap &smartPointers) {
+
+      LLVMContext& c = M.getContext();
+
+      // save smart pointers created for globals here during the iteration of module
+      // NOTE: design would be more clear if we collect also original global values in analyse pass
+      //       the same way that we do for instructions, need to refactor if we are going to go through
+      //       globals somewhere else
+      std::set<Value*> ignore;
+
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
            
         // if global, which has not been whitelisted to be ok
         if ( !RunUnsafeMode ) {
           if ( !isSafeGlobalValue(g) ) {
             dbgs() << "This global variable are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
-            fast_assert( false, "Global/external variables are not supported in strict mode.");
+            fast_assert( false, "Some global values are not supported in strict mode.");
           }
-        }
-        
-        DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << "\n" );
-        if (!g->hasExternalLinkage()) {
-          DEBUG( dbgs() << "-- It is known global var. We should be able to resolve limits when used. \n" );
+        } else {
+          // ignore globals in unsafe mode.
           continue;
         }
+        
+        DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << " Type: "; g->getType()->print(dbgs()); dbgs() << "\n" );
 
+        // HACK: to not to generate smart pointers for smart pointers...
+        if (ignore.count(g) > 0) continue;
+
+        // actually all globals are pointers, unnamed addresses does not need safe pointers
+        if ( g->getType()->isPointerTy() && !g->hasUnnamedAddr() ) {
+
+          SequentialType *globalArrayType = dyn_cast<SequentialType>(g->getType()->getElementType());
+          Constant *first = NULL;
+          Constant *last = NULL;
+          Type *elementType = NULL;
+
+          // limits for arrays
+          if (globalArrayType) {
+            
+            // TODO: check array in array, should all have same limits
+
+            // get element pointer (0, 0) and (0, lastIndex) since global is actually 2 dimensional array (pointer to array)
+            int lastIndex =  globalArrayType->getArrayNumElements() - 1;
+            first = ConstantExpr::getInBoundsGetElementPtr( g, genIntArrayRef<Constant*>(c, 0, 0) );
+            last = ConstantExpr::getInBoundsGetElementPtr( g,  genIntArrayRef<Constant*>(c, 0, lastIndex) );
+            elementType = globalArrayType->getElementType();
+          } else {
+            // limits for simple var
+            first = ConstantExpr::getInBoundsGetElementPtr( g, getConstInt(c, 0) );
+            last = ConstantExpr::getInBoundsGetElementPtr( g, getConstInt(c, 0) );
+            elementType = g->getType()->getElementType();            
+          }
+
+          StructType *smart_ptr_struct_type = getSmartPointerType(elementType->getPointerTo(), c);
+          Type* smart_ptr_struct_ptr_type = smart_ptr_struct_type->getPointerTo();
+
+          DEBUG( dbgs() << "first: "; first->print(dbgs()); dbgs() << "\n" );
+          DEBUG( dbgs() << "last: "; last->print(dbgs()); dbgs() << "\n" );          
+
+          ArrayRef<Constant*> structElementData = genArrayRef<Constant*>(c, first, first, last);                              
+          Constant* smartStructInitializer = ConstantStruct::get( smart_ptr_struct_type, structElementData );
+          DEBUG( dbgs() << "Smart init: "; smartStructInitializer->print(dbgs()); dbgs() << "\n" );
+
+          GlobalVariable *smartPtrStruct = new GlobalVariable
+            (smart_ptr_struct_type, false, GlobalValue::InternalLinkage,  smartStructInitializer, g->getName() + ".Smart");
+          
+          GlobalVariable *smartPtrStructPtr = new GlobalVariable
+            (smart_ptr_struct_ptr_type, false, GlobalValue::InternalLinkage, smartPtrStruct, g->getName() + ".SmartPtr");
+          
+          // add created global value smart pointers to book keeping
+          SmartPointer* s = new SmartPointer( ConstantExpr::getGetElementPtr(smartPtrStruct, genIntArrayRef<Constant*>(c, 0, 0)),
+                                              ConstantExpr::getGetElementPtr(smartPtrStruct, genIntArrayRef<Constant*>(c, 0, 1)), 
+                                              ConstantExpr::getGetElementPtr(smartPtrStruct, genIntArrayRef<Constant*>(c, 0, 2)), 
+                                              smartPtrStruct, smartPtrStructPtr );
+
+          // add smart pointer and put global values to module
+          smartPointers.insert( std::pair< Value*, SmartPointer* >( g, s ) );
+          GlobalVariable *smart = dyn_cast<GlobalVariable>(s->smart);
+          GlobalVariable *smart_ptr = dyn_cast<GlobalVariable>(s->smart_ptr);
+          fast_assert(smart && smart_ptr, "Unexpected types, could not cast.");
+          M.getGlobalList().insertAfter(g, smart_ptr); 
+          M.getGlobalList().insertAfter(g, smart); 
+
+          // add newly generated globals to ignore list so that we won't try generating smart pointers for them
+          ignore.insert( s->smart );
+          ignore.insert( s->smart_ptr );
+        }
+        
+
+        /*        
+
+        // if we are here and linkage is local (NOTE: could be better just to create smart pointer for it and use it as any other var)
+        if (g->hasInternalLinkage()) {
+          DEBUG( dbgs() << "-- It is internal global var. We will be able to resolve limits when used. \n" );
+          continue;
+        }
+        
+        // TODO: don't normalize this, but just simply create smart pointers for these too
+        //       current algorithm that passes them to local variables isn't too 
         int id = 0;
         for( Value::use_iterator i = g->use_begin(); i != g->use_end(); ++i ) {
           DEBUG( dbgs() << "Found use: "; i->print(dbgs()); dbgs() << " : " );
@@ -605,6 +758,8 @@ namespace WebCL {
           i->replaceUsesOfWith(g, load);
           DEBUG( dbgs() << "with: "; i->print(dbgs()); dbgs() << "\n" );
         }
+        
+        */
       }
     }
 
@@ -749,6 +904,7 @@ namespace WebCL {
      * @param meminst Instruction which for check is injected
      */
     void createLimitCheck(Value *ptr, SmartPointer *limits, Instruction *meminst) {
+      DEBUG( dbgs() << "Creating limit check for: "; ptr->print(dbgs()); dbgs() << " of type: "; ptr->getType()->print(dbgs()); dbgs() << "\n" );
       static int id = 0;
       id++;
       char postfix_buf[64];
@@ -770,11 +926,16 @@ namespace WebCL {
       // ------ block for minimum value check
       BasicBlock* check_first_block = BasicBlock::Create( c, "check.first.limit." + postfix, F );
       IRBuilder<> check_first_builder( check_first_block );
-      
-      // ------ add max boundary check code 
 
+      // TODO: since in some cases e.g. when we have safe pointers done for struct type
+      //       we need to compare pointer value to different type of pointer it is better
+      //       to have also short cut in SmartPointer for getting last valid address for different
+      //       types of pointers e.g. float*, vector*.. that can be implemented as function...
+
+      // ------ add max boundary check code 
       // *   %1 = load i32** %some_lable.Smart.Last
-      LoadInst* last_val = new LoadInst( limits->max, "", meminst );
+      LoadInst* last_val = new LoadInst( limits->maxFor(c, ptr->getType()->getPointerTo()), "", meminst );
+
       // *   %2 = icmp ugt i32* %0, %1
       ICmpInst* cmp = new ICmpInst( meminst, CmpInst::ICMP_UGT, ptr, last_val, "" );
       // *   br i1 %2, label %boundary.check.failed, label %check.first.limit
@@ -800,7 +961,7 @@ namespace WebCL {
 
       // * check.first.limit:      
       // *   %3 = load i32** %some_label.Smart.First
-      LoadInst* first_val = new LoadInst( limits->min, "", check_first_block );
+      LoadInst* first_val = new LoadInst( limits->minFor(c, ptr->getType()->getPointerTo()), "", check_first_block );
       // *   %4 = icmp ult i32* %0, %3
       ICmpInst* cmp2 = new ICmpInst( *check_first_block, CmpInst::ICMP_ULT, ptr, first_val, "" );
       // *   br i1 %4, label %boundary.check.failed, label %if.end
@@ -1001,6 +1162,15 @@ namespace WebCL {
         }
       }
     }
+
+    StructType* getSmartPointerType(Type *type, LLVMContext &c) {
+          std::vector< Type* > types;
+          types.push_back( type );
+          types.push_back( type );
+          types.push_back( type );
+          ArrayRef< Type* > tref( types );
+          return StructType::get( c, tref );
+    }
     
     /**
      * Creates smart pointer, before given alloca.
@@ -1031,19 +1201,13 @@ namespace WebCL {
      */
     SmartPointer* createSmartPointer(Type* elementType, AllocaInst* alloca, Instruction* first, Instruction* last) {
 
-          std::vector< Type* > types;
-          types.push_back( elementType );
-          types.push_back( elementType );
-          types.push_back( elementType );
-          ArrayRef< Type* > tref( types );
-
           LLVMContext& c = alloca->getParent()->getContext();
           StringRef allocaName = alloca->getName();
 
-          StructType *smart_ptr_struct_type = StructType::get( c, tref );
+          StructType *smart_ptr_struct_type = getSmartPointerType(elementType, c);
           assert( smart_ptr_struct_type );
           // I'm sorry.. 
-          Type* smart_ptr_struct_ptr_type = PointerType::getUnqual( smart_ptr_struct_type );
+          Type* smart_ptr_struct_ptr_type = smart_ptr_struct_type->getPointerTo();
 
           Twine name_data = allocaName + ".Smart";
           AllocaInst* smart_ptr_struct_alloca = new AllocaInst( smart_ptr_struct_type, 0, name_data, alloca );
@@ -1112,7 +1276,7 @@ namespace WebCL {
 
           unsigned int array_size = a->getArrayNumElements();
 
-          ptrType = PointerType::getUnqual( element_type );
+          ptrType = element_type->getPointerTo();
           first = generateGEP(c, alloca, 0, 0, 0, "");
           last = generateGEP(c, alloca, 0, array_size - 1, 0, "");
           last->insertAfter(alloca);
@@ -1130,7 +1294,7 @@ namespace WebCL {
         } else if (t->isIntegerTy() || t->isFloatingPointTy()) {
 
           DEBUG( dbgs() << "It an integer or float!\n" );
-          ptrType = PointerType::getUnqual( t );
+          ptrType = t->getPointerTo();
           first = alloca;
           last = alloca;
           
