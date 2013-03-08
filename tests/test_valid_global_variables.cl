@@ -1,10 +1,9 @@
 // RUN: $OCLANG $TEST_SRC -S -O0 -o $OUT_FILE.ll &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: echo "Testing that when run with global work group size 5 only 1,2,3 prints non-zero" &&
-// RUN: $RUN_KERNEL $OUT_FILE.clamped.ll test 5 "(float,{1,2,3,4}):(int,4):(float,{1,2,3,4}):(int,4)" |
-// RUN: grep "1.000000 1, 2.000000 2, 3.000000 3, 0.000000 0, 0.000000 0,"
-
-// TODO: CHECK WHY STRUCT LIMITS RETURNS 0 IN SOME VALID CASE (check created checks...)
+// RUN: RESULT=`$RUN_KERNEL $OUT_FILE.clamped.ll test 5 "(float,{1,2,3,4}):(int,4):(float,{1,2,3,4}):(int,4)"` &&
+// RUN: echo $RESULT | grep "1.000000 1, 2.000000 2, 3.000000 3, 0.000000 0, 0.000000 0," || 
+// RUN: (echo "Failed result: $RESULT" && false)
 
 struct test_struct {
   int i;

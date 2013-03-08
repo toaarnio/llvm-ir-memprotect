@@ -5,6 +5,12 @@
 # Simple tester for kernels.
 #
 
+# setup required variables if not set
+if [ ! -f "$OCLANG" ]; then
+OCLANG="$(dirname $0)/oclang.sh"
+echo "OCLANG was not set, setting default to $OCLANG"
+fi
+
 function show_usage {
     echo "Usage: run_kernel.sh <kernel.clamped.ll> <kernel_name> <global_work_group_size> <ret_arg> \"<arg1>:<arg2>:<arg3>:<arg4>:...\"";
     echo "<kernel.clamped.ll>      LLVM ll/bc file, which has kernel which is going to be ran.";

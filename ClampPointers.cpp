@@ -204,20 +204,25 @@ namespace WebCL {
       }
 
       Value* cur; // Used only to be able to pass pointer value with limits to function call
-      Value* min; // First valid address
-      Value* max; // Last valid address (not last  valid + 1)
+      Value* min; // Contains first valid address
+      Value* max; // Contains last valid address (not last  valid + 1)
       Value* smart;
       Value* smart_ptr;
       
       // returns last valid address for given type
-      Value* maxFor(LLVMContext &c, Type *type) {
-        Value *retVal = max;
-        if (type != max->getType()) {
-          DEBUG( dbgs() << "Resolving types "; max->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
-          // go to end, cast pointer to required type, rewind one elem and return addr
-          Constant *firstInvalidAddr = ConstantExpr::getGetElementPtr(dyn_cast<Constant>(max), getConstInt(c,1));
-          Constant *dstPtrType = ConstantExpr::getPointerCast(firstInvalidAddr, type);
-          Constant *lastValid = ConstantExpr::getGetElementPtr(dstPtrType, getConstInt(c, -1));
+      Instruction* maxFor(LLVMContext &c, LoadInst *maxValue, Type *type) {
+        Instruction *retVal = maxValue;
+        if (type != maxValue->getType()) {
+          DEBUG( dbgs() << "Resolving types "; maxValue->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
+          // go to end, cast pointer to required type, rewind one elem and return addr 
+          // (would be easier if max stores first invalid addr)
+          Instruction *firstInvalidAddr = GetElementPtrInst::Create( maxValue, getConstInt(c, 1) );
+          Instruction *bitCast = new BitCastInst(firstInvalidAddr, type);
+          Instruction *lastValid = GetElementPtrInst::Create( bitCast, getConstInt(c, -1) );          
+          lastValid->insertAfter(maxValue);
+          bitCast->insertAfter(maxValue);
+          firstInvalidAddr->insertAfter(maxValue);
+
           retVal = lastValid;
           DEBUG( dbgs() << "Resolved: "; retVal->print(dbgs()); dbgs() << " Type: "; retVal->getType()->print(dbgs()); dbgs() << "\n" );
         }
@@ -225,12 +230,14 @@ namespace WebCL {
       }
 
       // adds type cast to min address if necessary
-      Value* minFor(LLVMContext &c, Type *type) {
-        Value *retVal = min;
-        if (type != min->getType()) {
-          DEBUG( dbgs() << "Resolving types "; min->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
+      Instruction* minFor(LLVMContext &c, LoadInst *minValue, Type *type) {
+        Instruction *retVal = minValue;
+        if (type != minValue->getType()) {
+          DEBUG( dbgs() << "Resolving types "; minValue->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
           // cast pointer to required type
-          retVal = ConstantExpr::getPointerCast(dyn_cast<Constant>(min), type);
+          Instruction *bitCast = new BitCastInst(minValue, type);
+          bitCast->insertAfter(minValue);
+          retVal = bitCast;
         }
         return retVal;
       }
@@ -890,10 +897,15 @@ namespace WebCL {
 
       // ------ add max boundary check code 
       // *   %1 = load i32** %some_lable.Smart.Last
-      LoadInst* last_val = new LoadInst( limits->maxFor(c, ptr->getType()->getPointerTo()), "", meminst );
+      LoadInst* last_val = new LoadInst( limits->max, "", meminst );
+      
+      // get limits for this certain type of pointer... basically does "((ptrType)(&last_val[1]))[-1]"
+      Instruction *max_value_for_type = limits->maxFor(c, last_val, ptr->getType());
+      
+      DEBUG( max_value_for_type->getType()->print(dbgs()); dbgs() << " VS. "; ptr->getType()->print(dbgs()); dbgs() << "\n" );
 
       // *   %2 = icmp ugt i32* %0, %1
-      ICmpInst* cmp = new ICmpInst( meminst, CmpInst::ICMP_UGT, ptr, last_val, "" );
+      ICmpInst* cmp = new ICmpInst( meminst, CmpInst::ICMP_UGT, ptr, max_value_for_type, "" );
       // *   br i1 %2, label %boundary.check.failed, label %check.first.limit
       BranchInst::Create( boundary_fail_block, check_first_block, cmp, meminst );
 
@@ -917,9 +929,14 @@ namespace WebCL {
 
       // * check.first.limit:      
       // *   %3 = load i32** %some_label.Smart.First
-      LoadInst* first_val = new LoadInst( limits->minFor(c, ptr->getType()->getPointerTo()), "", check_first_block );
+      LoadInst* first_val = new LoadInst( limits->min, "", check_first_block );
+      
+      // get limits for this certain type of pointer...
+      Instruction* first_valid_pointer = limits->minFor(c, first_val, ptr->getType());
+
       // *   %4 = icmp ult i32* %0, %3
-      ICmpInst* cmp2 = new ICmpInst( *check_first_block, CmpInst::ICMP_ULT, ptr, first_val, "" );
+      ICmpInst* cmp2 = new ICmpInst( *check_first_block, CmpInst::ICMP_ULT, ptr, first_valid_pointer, "" );
+
       // *   br i1 %4, label %boundary.check.failed, label %if.end
       BranchInst::Create( boundary_fail_block, boundary_ok_block, cmp2, check_first_block );
 
