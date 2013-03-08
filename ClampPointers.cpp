@@ -324,7 +324,7 @@ namespace WebCL {
 
       // we can create smart pointers only for local allocas
       DEBUG( dbgs() << "\n --------------- NORMALIZE GLOBAL VARIABLE USES --------------\n" );
-      normalizeGlobalVariableUses( M, smartPointers );
+      createSmartPointersForGlobals( M, smartPointers );
 
       // ####### Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
@@ -632,7 +632,7 @@ namespace WebCL {
      * NOTE: this is slow, hopefully post optimizations fixes the overhead and 
      *       avoid using globals
      */ 
-    void normalizeGlobalVariableUses(Module &M, SmartPointerByValueMap &smartPointers) {
+    void createSmartPointersForGlobals(Module &M, SmartPointerByValueMap &smartPointers) {
 
       LLVMContext& c = M.getContext();
 
@@ -670,9 +670,6 @@ namespace WebCL {
 
           // limits for arrays
           if (globalArrayType) {
-            
-            // TODO: check array in array, should all have same limits
-
             // get element pointer (0, 0) and (0, lastIndex) since global is actually 2 dimensional array (pointer to array)
             int lastIndex =  globalArrayType->getArrayNumElements() - 1;
             first = ConstantExpr::getInBoundsGetElementPtr( g, genIntArrayRef<Constant*>(c, 0, 0) );
@@ -719,47 +716,6 @@ namespace WebCL {
           ignore.insert( s->smart );
           ignore.insert( s->smart_ptr );
         }
-        
-
-        /*        
-
-        // if we are here and linkage is local (NOTE: could be better just to create smart pointer for it and use it as any other var)
-        if (g->hasInternalLinkage()) {
-          DEBUG( dbgs() << "-- It is internal global var. We will be able to resolve limits when used. \n" );
-          continue;
-        }
-        
-        // TODO: don't normalize this, but just simply create smart pointers for these too
-        //       current algorithm that passes them to local variables isn't too 
-        int id = 0;
-        for( Value::use_iterator i = g->use_begin(); i != g->use_end(); ++i ) {
-          DEBUG( dbgs() << "Found use: "; i->print(dbgs()); dbgs() << " : " );
-
-          Instruction *useAsInst = dyn_cast<Instruction>(*i);
-          
-          // skipping does not mean that stuff is always fine... it just means that
-          // we don't know how to handle the use and if it is bad, compilation will abort later
-          if (!useAsInst || dyn_cast<StoreInst>(useAsInst) || dyn_cast<LoadInst>(useAsInst)) {
-            DEBUG( dbgs() << "## skipping\n" );
-            continue;
-          }
-          
-          DEBUG( dbgs() << "## fixing\n" );
-
-          id++;
-          char postfix_buf[64];
-          sprintf(postfix_buf, "%d", id);
-          std::string postfix = postfix_buf;
-
-          // before each use copy it to local variable
-          AllocaInst *alloca = new AllocaInst(g->getType(), g->getName() + ".use.alloca." + postfix, useAsInst);
-          new StoreInst(g, alloca, useAsInst);
-          LoadInst *load = new LoadInst(alloca, "", useAsInst);
-          i->replaceUsesOfWith(g, load);
-          DEBUG( dbgs() << "with: "; i->print(dbgs()); dbgs() << "\n" );
-        }
-        
-        */
       }
     }
 
@@ -1438,6 +1394,9 @@ namespace WebCL {
         Argument* newArg = newArgIter;
         newArgIter++;
         
+        // NOTE: If we would first expand smart pointer map, we might be able to resolve smart pointer for parameter
+        //       a lot easier... if there is need to add more and more special cases here, consider the option...
+
         // this argument type has been changed to smart pointer, find out corresponding smart
         if (oldArg->getType() != newArg->getType()) {
           Value* operand = call->getArgOperand(op);
@@ -1450,7 +1409,7 @@ namespace WebCL {
             
             Value* oldParam = loadToFix->getOperand(0);
             
-              // we should not load value from end of pointer, but directly pass smart pointer instead...
+            // we should not load value from end of pointer, but directly pass smart pointer instead...
             if (smartPointers.count(oldParam) > 0) {
               call->setOperand( op, smartPointers[oldParam]->smart );
               } else {
@@ -1465,11 +1424,13 @@ namespace WebCL {
             }
             
           } else if ( GetElementPtrInst* gepToFix = dyn_cast<GetElementPtrInst>(operand) ) {
-            
+
             // fixing passing parameter got from GEP e.g. passing table
             Value *sourcePointer = gepToFix->getPointerOperand();
+            
+            // TODO: Make one universal resolving function which can always be used to trace
+            //       corresponding safe pointer for a value... ()
             if (smartPointers.count(sourcePointer) == 0 ) {
-              // hack for one current special case should be fixed as described in start of function
               if (LoadInst* load = dyn_cast<LoadInst>(sourcePointer)) {
                 sourcePointer = load->getPointerOperand();
                 if (smartPointers.count(sourcePointer) == 0) sourcePointer = NULL;
@@ -1490,6 +1451,19 @@ namespace WebCL {
             updateCur->insertAfter(gepToFix);
             call->setOperand(op, smartPtr->smart);
             
+          } else if (  ConstantExpr* constantExpr = dyn_cast<ConstantExpr>(operand) ) {
+            // fixing passing parameter got from GEP e.g. passing table
+            GetElementPtrInst *gepInst = dyn_cast<GetElementPtrInst>(getAsInstruction(constantExpr));
+            Value *sourcePointer = gepInst->getPointerOperand();
+            delete gepInst;
+            gepInst = NULL;
+
+            SmartPointer *smartPtr = smartPointers[sourcePointer];
+            // update smartPointer .Cur to match the  
+            //StoreInst *updateCur = new StoreInst(gepToFix, smartPtr->cur);
+            //updateCur->insertAfter(gepToFix);
+            call->setOperand(op, smartPtr->smart);
+                     
           } else if ( AllocaInst* allocaSrc = dyn_cast<AllocaInst>(operand) ) {
             
             // value can be also e.g. alloca, which is read from caller function's arguments %param.addr... 
@@ -1511,7 +1485,7 @@ namespace WebCL {
               dbgs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
               fast_assert(false, "Could not find smart pointer for alloca");
             }
-            
+
           } else {
             
             // NOTE: if we find lots of cases where earlier does not work we could think of adding 
