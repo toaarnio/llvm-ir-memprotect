@@ -983,13 +983,18 @@ namespace WebCL {
         if ( dyn_cast<GetElementPtrInst>(use) ) {
           // all good for GEPs
         } else if ( LoadInst *load = dyn_cast<LoadInst>(use) ) {
-          // we cannot be sure about limits, if load is not directly from alloca
+          // we cannot be sure about limits unless the load is directly from alloca
           if ( ! dyn_cast<AllocaInst>(load->getPointerOperand()) ) {
             continue;
           }
         } else if ( dyn_cast<StoreInst>(use) ) {
           // never care about stores... they does not return anything
           continue;
+        } else if ( BitCastInst* bitCast = dyn_cast<BitCastInst>(use) ) {
+          // if bitcast does pointer -> pointer conversion it is ok...
+          if (!bitCast->getType()->isPointerTy()) { 
+            continue;
+          }
         } else { 
           // notify about unexpected cannot be resolved cases for debug
           DEBUG( dbgs() << "Cannot resolve limit for: "; use->print(dbgs()); dbgs() << "\n" );
