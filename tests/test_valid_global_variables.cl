@@ -8,6 +8,7 @@
 struct test_struct {
   int i;
   long l;
+  uint ui;
   float f;
 };
 

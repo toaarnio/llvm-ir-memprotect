@@ -1887,3 +1887,89 @@ void _cl_overloadable write_imagei( image2d_t image,
 
 int get_image_width (image2d_t image);
 int get_image_height (image2d_t image);
+
+
+
+/**
+
+// Safe versions of builtins... should be in forbidden list to call directly.
+
+// TODO: define macros...
+
+SAFE_STRUCT(bool);
+SAFE_STRUCT(char);
+SAFE_STRUCT(uchar);
+SAFE_STRUCT(short);
+SAFE_STRUCT(ushort);
+SAFE_STRUCT(int);
+SAFE_STRUCT(uint);
+SAFE_STRUCT(long);
+SAFE_STRUCT(ulong);
+SAFE_STRUCT(float);
+SAFE_STRUCT(double);
+SAFE_STRUCT(half);
+SAFE_STRUCT(size_t);
+SAFE_STRUCT(ptrdiff_t);
+SAFE_STRUCT(intptr_t);
+SAFE_STRUCT(uintptr_t);
+SAFE_STRUCT(event_t);
+
+SAFE_VECTOR_STRUCTS(char);
+SAFE_VECTOR_STRUCTS(uchar);
+SAFE_VECTOR_STRUCTS(short);
+SAFE_VECTOR_STRUCTS(ushort);
+SAFE_VECTOR_STRUCTS(int);
+SAFE_VECTOR_STRUCTS(uint);
+SAFE_VECTOR_STRUCTS(long);
+SAFE_VECTOR_STRUCTS(ulong);
+SAFE_VECTOR_STRUCTS(float);
+SAFE_VECTOR_STRUCTS(double);
+
+// T fract(T x, Q T *iptr) 
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(fract, b->current >= b->first && b->current <= b->last);
+
+// Ts frexp(T x, int *exp)
+// Tn frexp(T x, intn *exp)
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(frexp, b->current >= b->first && b->current <= b->last);
+
+// Ts lgamma_r(T x, Q int *signp)
+// Tn lgamma_r(T x, Q intn *signp)
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r, b->current >= b->first && b->current <= b->last);
+
+// T modf(T x, Q T *iptr) { }
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(modf, b->current >= b->first && b->current <= b->last);
+
+// Ts remquo(T x, T y, int *quo) { }
+// Tn remquo(T x, T y, intn *quo) { }
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo, c->current >= c->first && c->current <= c->last);
+
+// T sincos(T x, Q T *cosval) { }
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos, b->current >= b->first && b->current <= b->last);
+
+// loads vector from address p + (offset*n) 
+// Tn vloadn(size_t offset, const Q T *p) { }
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_V2_STV2P  (vload2,  (b->current + a*2)  >= b->first && (b->current + a*2) <= b->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_V3_STV3P  (vload3,  (b->current + a*3)  >= b->first && (b->current + a*3) <= b->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_V4_STV4P  (vload4,  (b->current + a*4)  >= b->first && (b->current + a*4) <= b->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_V8_STV8P  (vload8,  (b->current + a*8)  >= b->first && (b->current + a*8) <= b->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_V16_STV16P(vload16, (b->current + a*16) >= b->first && (b->current + a*16) <= b->last);
+
+// stores vector to address p + (offset*n) 
+// void vstoren(Tn data, size_t offset, Q T *p) { }
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V2STV2P  (vstore2, (c->current + b*2)  >= c->first && (c->current + b*2) <= c->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V3STV3P  (vstore3, (c->current + b*3)  >= c->first && (c->current + b*3) <= c->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V4STV4P  (vstore4, (c->current + b*4)  >= c->first && (c->current + b*4) <= c->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V8STV8P  (vstore8, (c->current + b*8)  >= c->first && (c->current + b*8) <= c->last);
+IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V16STV16P(vstore16,(c->current + b*16) >= c->first && (c->current + b*16)<= c->last);
+
+// vload_half/vstore_half variants not supported for now. 
+
+void wait_group_events__smart_ptrs__(int num_events, smart_event_t *event_list) {
+     if (event_list->current >= event_list->first && event_list->current+num_events <= event_list->last) {
+        wait_group_events(num_events, event_list->current);
+     }
+}
+
+// TODO: atomic functions 
+
+*/

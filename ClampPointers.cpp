@@ -27,6 +27,7 @@
 #include <map>
 #include <set>
 #include <iostream>
+#include <sstream>
 #include <cstdio>
 
 using namespace llvm;
@@ -128,17 +129,38 @@ namespace WebCL {
    * @param name Mangled function name or non-mangled
    * @return Demangled function name or the passed argument if mangling is not recognized.
    */
-  std::string demangle(std::string name) {
+  std::string extractItaniumDemangledFunctionName(std::string name) {
     bool isMangled = name.find("_Z") == 0;
     std::string retVal = name;
     if (isMangled) {
       size_t lastIndex = name.find_first_not_of("0123456789", 2);
       std::string functionNameLength = name.substr(2, lastIndex-2); 
-      fast_assert(functionNameLength.find_first_not_of("0123456789") == std::string::npos, "Error when trying to demangle: " + name);
+      fast_assert(functionNameLength.find_first_not_of("0123456789") == std::string::npos, 
+                  "Error when trying to demangle: " + name);
       retVal = name.substr(lastIndex, atoi(functionNameLength.c_str()));
     }
     DEBUG( dbgs() << "Demangled: " << name << " to " << retVal << "\n" );
     return retVal;
+  }
+
+  /**
+   * Creates mangled name (own mangling scheme) to be able to select correct safe builtin to call.
+   * All calls to functions with names mangled by this algorithm should be inlined and removed afterwards 
+   * by dce.
+   * 
+   * Scheme steals mangle suffix from original Itanium Mangled function call and add it to our version which
+   * is safe to call.
+   */
+  std::string customMangle(Function* function, std::string base) {
+    std::stringstream ss;
+    std::string origName = function->getName();
+    std::string demangledOrig = extractItaniumDemangledFunctionName(function->getName());
+    size_t namePos = origName.find(demangledOrig);
+    size_t prefixChars = namePos + demangledOrig.length();
+    std::string itaniumMangleSuffix = origName.erase(0, prefixChars);
+    ss << base << itaniumMangleSuffix;
+    DEBUG( dbgs() << "Orig: " << function->getName() << " new: " << ss.str() << "\n" ); 
+    return ss.str();
   }
   
   ConstantInt* getConstInt(LLVMContext &context, int i) {
@@ -1339,7 +1361,7 @@ namespace WebCL {
         
         if ( isWebClBuiltin(oldFun) ) {
 
-          std::string demangledName = demangle(oldFun->getName().str());
+          std::string demangledName = extractItaniumDemangledFunctionName(oldFun->getName().str());
 
           // if not supported yet assert
           fast_assert( forbiddenBuiltins.count(demangledName) == 0, 
@@ -1351,8 +1373,9 @@ namespace WebCL {
             // if safe version is not yet generated do it first..
             if ( safeBuiltins.count(oldFun) == 0 ) {
               Function *newFun = createNewFunctionSignature(oldFun, safeBuiltins, dummyArgMap);
-              newFun->setName(demangledName + "__smart_ptrs__");
-              // TODO: maybe need to mangle name to be able to link with safe_builtins
+              // simple name mangler to be able to select, which implementation to call (couldn't find easy way to do Itanium C++ mangling here)
+              // luckily the cases that needs mangling are pretty limited so we can keep it simple
+              newFun->setName(customMangle(oldFun, demangledName + "__safe__"));
             }
             
             Function *newFun = safeBuiltins[oldFun];
