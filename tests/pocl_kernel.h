@@ -78,11 +78,20 @@
 
    This mess will be cleaned up at latest when SPIR and its standard
    address space numbers gets finished and implemented in Clang. */
-#define __global __attribute__ ((address_space(3))) 
-#define __constant __attribute__ ((address_space(5))) 
 
-#define global __attribute__ ((address_space(3)))
-#define constant __attribute__ ((address_space(5))) 
+/* SPIR 1.0 address space numbering (with endian spaces not supported yet) 
+
+#define __private __attribute__ ((address_space(0))) 
+#define __global __attribute__ ((address_space(1))) 
+#define __constant __attribute__ ((address_space(2))) 
+#define __local __attribute__ ((address_space(3))) 
+
+#define private __private
+#define global __global
+#define constant __constant
+#define local __local
+
+*/
 
 typedef enum {
   CLK_LOCAL_MEM_FENCE = 0x1,
@@ -1894,6 +1903,9 @@ int get_image_height (image2d_t image);
 
 // Safe versions of builtins... should be in forbidden list to call directly.
 
+// safe builtin naming is like: 
+// Orig call: _Z7vstore4Dv4_fyPU3AS3f new call: vstore4__safe___Dv4_fyPU3AS3f
+
 // TODO: define macros...
 
 SAFE_STRUCT(bool);
@@ -1964,7 +1976,7 @@ IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V16STV16P(vstore16,(c->current + b*16) >= c-
 
 // vload_half/vstore_half variants not supported for now. 
 
-void wait_group_events__smart_ptrs__(int num_events, smart_event_t *event_list) {
+void wait_group_events__smart_ptrs__IPE(int num_events, smart_event_t *event_list) {
      if (event_list->current >= event_list->first && event_list->current+num_events <= event_list->last) {
         wait_group_events(num_events, event_list->current);
      }

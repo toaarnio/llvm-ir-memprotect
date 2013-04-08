@@ -165,7 +165,14 @@ namespace WebCL {
   
   ConstantInt* getConstInt(LLVMContext &context, int i) {
     return ConstantInt::get(Type::getInt32Ty(context), i);
-  }    
+  }
+
+  template <class T>
+  ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1) {
+    std::vector<T> temp;
+    temp.push_back(getConstInt(context, i1));
+    return ArrayRef<T>(temp);
+  }
 
   template <class T>
   ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1, int i2) {
@@ -182,10 +189,17 @@ namespace WebCL {
     temp.push_back(getConstInt(context, i2));
     temp.push_back(getConstInt(context, i3));
     return ArrayRef<T>(temp);
-  }    
+  }
   
   template <class T>
-  ArrayRef<T> genArrayRef(LLVMContext &context, T v1, T v2) {
+  ArrayRef<T> genArrayRef(T v1) {
+    std::vector<T> temp;
+    temp.push_back(v1);
+    return ArrayRef<T>(temp);
+  }
+
+  template <class T>
+  ArrayRef<T> genArrayRef(T v1, T v2) {
     std::vector<T> temp;
     temp.push_back(v1);
     temp.push_back(v2);
@@ -193,7 +207,7 @@ namespace WebCL {
   }    
   
   template <class T>
-  ArrayRef<T> genArrayRef(LLVMContext &context, T v1, T v2, T v3) {
+  ArrayRef<T> genArrayRef(T v1, T v2, T v3) {
     std::vector<T> temp;
     temp.push_back(v1);
     temp.push_back(v2);
@@ -265,7 +279,92 @@ namespace WebCL {
       }
 
     };
-    
+
+    // area limits for certain value to respect
+    // values should be always stored in correct
+    // pointer type
+    struct AreaLimit {
+    private:
+      AreaLimit( Value* _min, Value* _max, bool _indirect ) :
+      min( _min ),
+      max( _max ),
+      indirect( _indirect ) {
+      }
+      
+      /**
+       * Returns valid address relative to val and offset for certain type.
+       *
+       * If val is indirect, first add load instruction to get indirect address value and then
+       * do the pointer cast / address arithmetic to get the correct address for given type.
+       *
+       * @param val Direct or indirect base address which from offset is computed
+       * @param isIndirect True if we require load before doing offset artihmetics
+       * @param offset Offset how many addresses we roll from val
+       * @param type Type which kind of pointer we are going to access
+       * @param checkStart Position where necessary loads and arithmetict will be added.
+       */
+
+      Value* getValidAddressFor(Value *val, bool isIndirect, int offset, Type *type, Instruction *checkStart) {
+        
+        LLVMContext &c = checkStart->getParent()->getParent()->getContext();
+        
+        // load indirect value
+        Value *limit = val;
+        if (isIndirect) {
+          limit = new LoadInst(min, "", checkStart);
+        }
+                
+        Value *ret_limit = NULL;
+        
+        if ( Instruction *inst = dyn_cast<Instruction>(limit) ) {
+          // this should be removed by other optimizations if not necessary
+          BitCastInst *type_fixed_limit = new BitCastInst(inst, type, "", checkStart);
+          ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntArrayRef<Value*>(c, offset), "", checkStart);
+          
+        } else if ( Constant *constant = dyn_cast<Constant>(limit) ) {
+          Constant *type_fixed_limit = ConstantExpr::getBitCast(constant, type);
+          ret_limit = ConstantExpr::getGetElementPtr( type_fixed_limit, genIntArrayRef<Constant*>(c, offset));
+          
+        } else {
+          fast_assert(false, "Couldnt resolve type of the limit value.");
+        }
+        
+        return ret_limit;
+      }
+
+    public:
+      Value* min; // Contains first valid address
+      Value* max; // Contains last valid address
+      bool indirect; // true if min and max are indirect pointers (requires load for getting address)
+
+      // TODO: add bookkeeping for freeing memory here
+      static AreaLimit* Create( Value* _min, Value* _max, bool _indirect) {
+        DEBUG( dbgs() << "Creating limits min: "; _min->print(dbgs()); dbgs() << " max: "; _max->print(dbgs()); dbgs() << " indirect: " << _indirect << "\n"; );
+        return new AreaLimit(_min, _max, _indirect);
+      }
+
+      /**
+       * Returns first valid address inside of these limits for given type of memory access.
+       *
+       * @param type Type of memory access which is going to be done inside these limits.
+       * @param checkStart Instruction before that we add new instructions if necessary.
+       */
+      Value* firstValidAddressFor(Type *type, Instruction *checkStart) {
+        return getValidAddressFor(min, indirect, 0, type, checkStart);
+      }
+
+      /**
+       * Returns last valid address inside of these limits for given type of memory access.
+       *
+       * @param type Type of memory access which is going to be done inside these limits.
+       * @param checkStart Instruction before that we add new instructions if necessary.
+       */
+      Value* lastValidAddressFor(Type *type, Instruction *checkStart) {
+        return getValidAddressFor(max, indirect, -1, type, checkStart);
+      }
+
+    };
+      
     typedef std::map< Function*, Function* > FunctionMap;
     typedef std::map< Argument*, Argument* > ArgumentMap;
     typedef std::set< Function* > FunctionSet;
@@ -277,7 +376,13 @@ namespace WebCL {
     typedef std::set< StoreInst* > StoreInstrSet;
     typedef std::set< Value* > ValueSet;
     typedef std::map< Value*, SmartPointer* > SmartPointerByValueMap;
+    typedef std::vector< Value* > ValueVector;
+    typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap; 
 
+    typedef std::set< AreaLimit* > AreaLimitSet;
+    typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
+    typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
+      
     /// Helper function for generating a single-index GEP instruction from a value.
     GetElementPtrInst* generateGEP( LLVMContext& ctx, Value* ptr, int a, Instruction* i, Twine t = "" ) {
       Twine name = t;
@@ -351,10 +456,18 @@ namespace WebCL {
       // smartpointers sorted by value e.g. i32* %a ->  {i32*, i32*, i32*}* %safe_a
       SmartPointerByValueMap smartPointers;
 
-      // we can create smart pointers only for local allocas
-      DEBUG( dbgs() << "\n --------------- NORMALIZE GLOBAL VARIABLE USES --------------\n" );
-      createSmartPointersForGlobals( M, smartPointers );
+      // limits for values and address spaces
+      AreaLimitByValueMap valueLimits;
+      AreaLimitSetByAddressSpaceMap addressSpaceLimits;
 
+      // TODO: MAYBE THIS COULD BE MOVED TO COMPLETELY SEPARATE PASS
+      DEBUG( dbgs() << "\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n" );
+      consolidateStaticMemory( M );
+
+      DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
+      findAddressSpaceLimits( M, addressSpaceLimits );
+
+      
       // ####### Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
 
@@ -377,12 +490,6 @@ namespace WebCL {
           }
         }
 
-        // some optimizations causes removal of passing argument %arg to %arg.addr alloca
-        // this construct is needed by later phases, so we need to make sure that arguments are fine
-        // before starting...
-        DEBUG( dbgs() << "\n --------------- NORMALIZE ARGUMENT PASSING --------------\n" );
-        normalizeArgumentPassing( i );
-
         // actually this should just collect functions to replace, but now it also creates new signatures
         DEBUG( dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n" );
         createNewFunctionSignature( i, replacedFunctions, replacedArguments );
@@ -390,63 +497,296 @@ namespace WebCL {
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
         sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
       }
-
-      // add smart allocas and generate initial smart pointer data
-      DEBUG( dbgs() << "\n --------------- CREATING SMART ALLOCAS FOR EVERYONE --------------\n" );
-      createSmartAllocas( allocas, smartPointers );
-
-      // some extra hint of debug...
-      /*
-      for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
-        // loop through arguments and if type has changed, then create label to access original arg 
-        i->first->print(dbgs());
-        dbgs() << "\n";
-      }
-      */
-
-      DEBUG( dbgs() << "\n ---------- FIXING SMART POINTER STORE OPERATIONS TO ALSO KEEP .Cur, .First and .Last UP-TO-DATE ------\n" );
-      fixStoreInstructions(stores, smartPointers);
-
+      
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
       // gets rid of old functions, replaces calls to old functions and fix call arguments to 
-      // use smart pointers in call parameters 
-      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, smartPointers);
+      // use smart pointers in call parameters
+      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, smartPointers); // TODO: remove unused smartPointers argument
+      
+      DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
+      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
+
+      DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY LOAD/STORE OPERAND --------------\n" );
+      findLimits(replacedFunctions, loads, stores, valueLimits, addressSpaceLimits);
       
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
       fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, smartPointers);
-
+      
       // ##########################################################################################
       // #### At this point code should be again perfectly executable and runs with new function 
       // #### signatures and has cahnged pointers to smart ones
       // ##########################################################################################
 
-      // expand smart pointers to be able to find limits for uses of smart pointers (loads and geps mostly)
-      DEBUG( dbgs() << "\n ------- EXPANDING SMARTPOINTER MAP TO ALSO CONTAIN LIMITS FOR USES OF ORIGINAL POINTERS -----------\n" );
-      expandSmartPointersResolvingToCoverUses(smartPointers);
-
-      DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED --------------\n" );
+      DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED TODO: collect direct loads etc. who shouldnt need checks --------------\n" );
       collectSafeExceptions(replacedFunctions, safeExceptions);
 
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
-      addBoundaryChecks(stores, loads, smartPointers, safeExceptions);
-
-      DEBUG( dbgs() << "\n --------------- FIX KERNEL PARAMETERS TO BE WEBCL COMPLIANT AND FIX KERNEL METADATA --------------\n" );
-      createKernelEntryPoints(M, replacedFunctions);
+      addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
 
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
       makeBuiltinCallsSafe(externalCalls, smartPointers);
 
-      /*
-      for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
-        // loop through arguments and if type has changed, then create label to access original arg 
-        i->second->print(dbgs());
-        dbgs() << "\n";
-      }
-      */
+      DEBUG( dbgs() << "\n --------------- FINAL OUTPUT --------------\n" );
+      M.print(dbgs(), NULL);
+      DEBUG( dbgs() << "\n --------------- FINAL OUTPUT END --------------\n" );
 
       return true;
     }
     
+    /**
+     * Resolves uses of value and limits that it should respect
+     *
+     * Do simple data dependency analysis to be able to resolve limits which
+     * values should respect in case of same address space has more 
+     * than allocated 1 areas.
+     *
+     * Follows uses of val and in case of storing to memory, keep track if
+     * there is always only single limits for that location.
+     */
+    void resolveUses(Value *val, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits) {
+      
+      // check all uses of value until cannot trace anymore
+      for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
+        Value *use = *i;
+        
+        // ----- continue to next use if cannot be sure about the limits
+        if ( dyn_cast<GetElementPtrInst>(use) ) {
+          DEBUG( dbgs() << "Found GEP: "; use->print(dbgs()); dbgs() << "\n## Preserving original limits KEEP ON TRACKING\n"; );
+        } else if ( LoadInst *load = dyn_cast<LoadInst>(use) ) {
+          DEBUG( dbgs() << "Found LOAD: "; use->print(dbgs()); dbgs() << "\n## If we reached here we should have already resolved limits from somewhere. Keep on resolving.\n"; );
+        } else if ( StoreInst *store = dyn_cast<StoreInst>(use) ) {
+          DEBUG( dbgs() << "Found STORE: "; use->print(dbgs()); dbgs() << "\n## If we are storing pointer, also pass VAL limits to destination address. DEPENDENCY ANALYSIS\n" );
+          
+          // first check if use is actually in value operand and in that case set limits for destination pointer
+          if (store->getValueOperand() == val) {
+            if (valLimits.count(store->getPointerOperand()) != 0) {
+              fast_assert(valLimits[store->getPointerOperand()] == valLimits[val],
+                          "Dependency analysis cannot resolve single limits for a memory address. This is a bit nasty problem to resolve, since we cannot pass multiple possible limits to functions safe pointer argument. SPIR + removing all safe pointer argument hassling could help this some day. For now avoid assigning pointers from different ranges to the same variable.");
+            }
+            valLimits[store->getPointerOperand()] = valLimits[val];
+            resolveUses(store->getPointerOperand(), valLimits, asLimits);
+          }
+          continue;
+        
+        } else if ( BitCastInst* bitCast = dyn_cast<BitCastInst>(use) ) {
+          // if bitcast is not from pointer to pointer in same address space, cannot resolve
+          if (!bitCast->getType()->isPointerTy() ||
+              dyn_cast<PointerType>(bitCast->getType())->getAddressSpace() != dyn_cast<PointerType>(val->getType())->getAddressSpace()) {
+            DEBUG( dbgs() << "## Found bitcast that cannot preserve limits.\n" );
+            continue;
+          }
+          DEBUG( dbgs() << "## Found valid pointer cast, keep on tracking.\n" );
+        
+        } else {
+          // notify about unexpected cannot be resolved cases for debug
+          DEBUG( dbgs() << "#### Cannot resolve limit for: "; use->print(dbgs()); dbgs() << "\n" );
+          continue;
+        }
+        
+        // limits of use are directly derived from value
+        valLimits[use] = valLimits[val];
+        resolveUses(use, valLimits, asLimits);
+      }
+    }
+  
+    /**
+     * Goes through all relevant parts in program and traces limits for those values.
+     *
+     * Call operands are not a problem anymore, since they has been converted to pass structs, not direct pointers.
+     */
+    void findLimits(FunctionMap &replacedFunctions,
+                    LoadInstrSet &loads,
+                    StoreInstrSet &stores,
+                    AreaLimitByValueMap &valLimits,
+                    AreaLimitSetByAddressSpaceMap &asLimits) {
+    
+      // first trace all uses of function arguments to find their limits
+      for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
+        Function *originalFunc = i->first;
+        Function *safePointerFunction = i->second;
+        Function::arg_iterator originalArgIter = originalFunc->arg_begin();
+
+        for( Function::arg_iterator a = safePointerFunction->arg_begin(); a != safePointerFunction->arg_end(); ++a ) {
+          Argument &originalArg = *originalArgIter;
+          Argument &replaceArg = *a;
+          
+          // if safe pointer argument, trace uses
+          if (originalArg.getType() != replaceArg.getType()) {
+
+            fast_assert(replaceArg.getNumUses() == 1, "Safe pointer argument should have only one extractval use so far.");
+            ExtractValueInst *cur = dyn_cast<ExtractValueInst>(*replaceArg.use_begin());
+            fast_assert(cur, "Found invalid type of use. Maybe passed directly to other function.");
+            
+            // Adding extract value instructions to entry block to have direct limits stored.
+            BasicBlock &entry = safePointerFunction->getEntryBlock();
+            ExtractValueInst *minLimit = ExtractValueInst::Create( &replaceArg, genArrayRef<unsigned int>(1), replaceArg.getName() + ".min", &(*entry.begin()) );
+            ExtractValueInst *maxLimit = ExtractValueInst::Create( &replaceArg, genArrayRef<unsigned int>(2), replaceArg.getName() + ".max", &(*entry.begin()) );
+            
+            // Init direct limits for current and do some analysis to resolve derived limits
+            valLimits[cur] = AreaLimit::Create(minLimit, maxLimit, false);
+            resolveUses(cur, valLimits, asLimits);
+          }
+          
+          originalArgIter++;
+        }
+      }
+      
+      ValueSet operands;
+      // collect values whose limits to trace
+      for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
+        LoadInst *load = *i;
+        operands.insert(load->getPointerOperand());
+      }
+      for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+        StoreInst *store = *i;
+        operands.insert(store->getPointerOperand());
+      }
+      
+      // optimize single area address space limits
+      for (ValueSet::iterator i = operands.begin(); i != operands.end(); i++) {
+        Value* val = *i;
+        DEBUG( dbgs() << "Tracing limits for: "; val->print(dbgs()); dbgs() << "\n"; );
+        PointerType *t = dyn_cast<PointerType>(val->getType());
+        AreaLimitSet &limitSet = asLimits[t->getAddressSpace()];
+        fast_assert(limitSet.size() > 0, "Pointer to address space without allocations.");
+        if ( limitSet.size() == 1 ) {
+          DEBUG( dbgs() << "Found single limits for AS: " << t->getAddressSpace() << "\n"; );
+          valLimits[val] = *(limitSet.begin());
+        }
+      }
+    }
+      
+    /**
+     * Goes through global variables and adds limits to bookkeepping
+     */
+    void findAddressSpaceLimits( Module &M, AreaLimitSetByAddressSpaceMap &asLimits ) {
+      LLVMContext& c = M.getContext();
+      for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
+
+        // collect only named addresses (for unnamed there cannot be relative references anywhere)
+        if (!g->hasUnnamedAddr()) {
+          DEBUG( dbgs() << "AS: " << g->getType()->getAddressSpace() << " Added global: "; g->print(dbgs()); dbgs() << "\n"; );
+          Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 0));
+          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 1));
+          asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValid, firstInvalid, false));
+        }
+      }
+    }
+      
+    /**
+     * Collect all allocas and global values for each address space and create one struct for each
+     * address space.
+     */
+    void consolidateStaticMemory( Module &M ) {
+      LLVMContext& c = M.getContext();
+      
+      ValueVectorByAddressSpaceMap staticAllocations;
+
+      for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
+        // collect only named addresses (for unnamed there cannot be relative references anywhere)
+        if (!g->hasUnnamedAddr()) {
+          DEBUG( dbgs()  << "Found global: "; g->print(dbgs());
+                 dbgs() << " of address space: " << g->getType()->getAddressSpace() << "\n"; );
+          staticAllocations[g->getType()->getAddressSpace()].push_back(g);
+        }
+      }
+
+      for (Module::iterator f = M.begin(); f != M.end(); f++) {
+        // skip declarations (they does not even have entry blocks)
+        if (f->isDeclaration()) continue;
+        BasicBlock &entry = f->getEntryBlock();
+        for (BasicBlock::iterator i = entry.begin(); i != entry.end(); i++) {
+          AllocaInst *alloca = dyn_cast<AllocaInst>(i);
+          if (alloca != NULL) {
+            staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
+          }
+        }
+      }
+      
+      // create struct for each address space, currently not doing any special ordering 
+      for (ValueVectorByAddressSpaceMap::iterator i = staticAllocations.begin(); i != staticAllocations.end(); i++) {
+        unsigned addressSpace = i->first;
+        std::vector<Value*> &values = i->second;
+        // TODO: sort types by alignment and size to minimize padding
+
+        // create struct type
+        std::vector< Type* > structElementTypes;
+        std::vector< Constant* > structInitData;
+        for (size_t valIndex = 0; valIndex < values.size(); valIndex++) {
+
+          // element type 
+          Value* val = values[valIndex];
+          structElementTypes.push_back(dyn_cast<PointerType>(val->getType())->getElementType());
+          
+          // initializer
+          Type* elementType = NULL;
+          Constant* initializer = NULL;
+          if ( AllocaInst* alloca = dyn_cast<AllocaInst>(val) ) {
+            elementType = alloca->getType()->getElementType();
+          } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(val) ) {
+            elementType = global->getType()->getElementType();
+            if (global->hasInitializer()) {
+              initializer = global->getInitializer();
+              global->setInitializer(NULL);
+            }
+          } else {
+            dbgs() << "Got unexpected static allocation: "; val->print(dbgs()); dbgs() << "\n";
+            fast_assert(false, "Unexpected type static allocation.");
+          }
+
+          if (!initializer) {
+            if (elementType->isAggregateType()) {
+              structInitData.push_back(ConstantAggregateZero::get(elementType));
+            } else {
+              structInitData.push_back(Constant::getNullValue(elementType));
+            }
+          } else {
+            structInitData.push_back(initializer);
+          }
+        }
+
+        ArrayRef< Type* > structElementTypesArrayRef( structElementTypes );
+        ArrayRef<Constant*> structElementData( structInitData );
+
+        
+        std::stringstream structName;
+        structName << "AddressSpace" << addressSpace << "StaticData";
+        StructType *addressSpaceStructType = StructType::get( c, structElementTypesArrayRef );
+        // NOTE: cant give name to struct literal type, would be nice to have for readability
+        // addressSpaceStructType->setName(structName.str() + "Type");
+
+        // create struct of generated type and add to module
+        Constant* addressSpaceDataInitializer = ConstantStruct::get( addressSpaceStructType, structElementData );
+        GlobalVariable *aSpaceStruct = new GlobalVariable
+          (M, addressSpaceStructType, false, GlobalValue::InternalLinkage, addressSpaceDataInitializer, 
+           structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
+        
+        // replace all uses of old allocas and globals value with new constant geps and remove original values
+        for (size_t valIndex = 0; valIndex < values.size(); valIndex++) {
+          Value* origVal = values[valIndex];
+
+          // get field of struct
+          Value* structVal = ConstantExpr::getInBoundsGetElementPtr
+            (dyn_cast<Constant>(aSpaceStruct), genIntArrayRef<Constant*>( c, 0, valIndex) );
+
+          structVal->takeName(origVal);
+             
+          DEBUG( dbgs() << "Orig val type: "; origVal->getType()->print(dbgs()); 
+                 dbgs() << " new val type: "; structVal->getType()->print(dbgs()); dbgs() << "\n"; );
+          DEBUG( dbgs() << "Orig val: "; origVal->print(dbgs()); 
+                 dbgs() << " new val: "; structVal->print(dbgs()); dbgs() << "\n"; );
+
+          origVal->replaceAllUsesWith(structVal);
+
+          if ( AllocaInst* alloca = dyn_cast<AllocaInst>(origVal) ) {
+            alloca->eraseFromParent();
+          } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
+            global->eraseFromParent();
+          }
+        }
+      }
+    }
+
     /**
      * Checks if given function declaration is one of webcl builtins
      * 
@@ -468,7 +808,7 @@ namespace WebCL {
      * kernel name and add implementation, that just resolves the last address of array and passes
      * it as limit to safepointer version of original kernel.
      */
-    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions) {
+    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions, AreaLimitSetByAddressSpaceMap &asLimits) {
       NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
       if (oclKernels != NULL) {
         for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
@@ -481,9 +821,10 @@ namespace WebCL {
           // compatible version.
           if (replacedFunctions.count(oldFun) > 0) {
             Function *smartKernel = replacedFunctions[oldFun];
-            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel);
+            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, asLimits);
             // make smartKernel to be internal linkage to allow better optimization
             smartKernel->setLinkage(GlobalValue::InternalLinkage);
+            // TODO: if found nvptx_kernel attribute, move it to new kernel
             md->replaceOperandWith(0, newKernelEntryFunction);
           }
 
@@ -501,7 +842,7 @@ namespace WebCL {
      * reserved in pointer. Function implementation will convert (pointer, count) to corresponding
      * smart pointer, which is used to make call to smartKernel.
      */
-    Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel) {
+    Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel, AreaLimitSetByAddressSpaceMap &asLimits) {
       LLVMContext &c = M.getContext();
 
       // create argument list for WebCl kernel
@@ -533,24 +874,31 @@ namespace WebCL {
         Argument* arg = a;
         arg->setName(origArg->getName());
         Type* t = arg->getType();
+        
         if ( t->isPointerTy() ) {
+          // create global unnamed variables for each limits got from kernel arguments
+          GlobalVariable *globalMin = new GlobalVariable( M, t, false, GlobalValue::PrivateLinkage, Constant::getNullValue(t) );
+          GlobalVariable *globalMax = new GlobalVariable( M, t, false, GlobalValue::PrivateLinkage, Constant::getNullValue(t) );
+          globalMin->setUnnamedAddr(true);
+          globalMax->setUnnamedAddr(true);
+          PointerType *pointerType = dyn_cast<PointerType>(t);
+          
+          // add addresses to limit set for the address space
+          DEBUG( dbgs() << "AS: " << pointerType->getAddressSpace() << " Adding indirect limits from kernel parameter: "; arg->print(dbgs()); dbgs() << "\n"; );
+          asLimits[pointerType->getAddressSpace()].insert( AreaLimit::Create(globalMin, globalMax, true) );
+          
           Value* elementCount = (++a);
           a->setName(origArg->getName() + ".size");
-          AllocaInst *argAlloca = blockBuilder.CreateAlloca(t, 0, arg->getName() + ".addr");
-          blockBuilder.CreateStore(arg, argAlloca);
-          LoadInst *pointerFirstAddr = blockBuilder.CreateLoad(argAlloca);
+          GetElementPtrInst *lastLimit = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(arg, elementCount));
+
+          blockBuilder.CreateStore(arg, globalMin);
+          blockBuilder.CreateStore(lastLimit, globalMax);
           
-          // get count - 1 element
-          Value *lastIndex = blockBuilder.CreateSub(elementCount, getConstInt(c, 1));
-          GetElementPtrInst *lastLimit = dyn_cast<GetElementPtrInst>
-            (blockBuilder.CreateGEP(pointerFirstAddr, lastIndex));
-          
-          // create instructions to smart pointers and pass reference to correct instructions to arg list
-          SmartPointer* tempPointer = createSmartPointer( t, argAlloca, pointerFirstAddr, lastLimit );
-          args.push_back(tempPointer->smart);
-          
-          // we don't need to keep array where all references are stored,
-          delete tempPointer;
+          // create smart pointer alloca to entry block of function, which is used as a argument to
+          // function call
+          Value* newArgument = convertArgumentToSmartStruct( arg,  arg, lastLimit, kernelBlock);
+
+          args.push_back(newArgument);
 
         } else {
           args.push_back(arg);
@@ -573,7 +921,59 @@ namespace WebCL {
       DEBUG( webClKernel->print(dbgs()) );
       return webClKernel;
     }
-    
+
+    /**
+     * Converts old argument to SafePointer with limits added.
+     *
+     * TODO: maybe we could generalize this and add some bookkeeping even that these really are 
+     *       used only inside function scope. But Would be nice to say that update smart pointer
+     *       which will store new values to argument struct just before function call.
+     *
+     *       Maybe it wont be needed and I can just skip messing with function signatures altogether..
+     *
+     * TODO: or just maybe we could create unnamed global variable and pass it to prevent polluting entry block too much
+     */
+    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, Instruction *beforeInstruction) {
+      DEBUG( dbgs() << "1-Converting arg: "; origArg->print(dbgs()); dbgs() << " min: "; minLimit->print(dbgs()); dbgs() << " max: "; maxLimit->print(dbgs()); dbgs() << "\n"; );
+      // create alloca to entry block of function for the value
+      Function* argFun = beforeInstruction->getParent()->getParent();
+      BasicBlock &entryBlock = argFun->getEntryBlock();
+      LLVMContext &c = argFun->getContext();
+      Type *smarArgType = getSmartStructType(c, origArg->getType());
+      AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock);
+      
+      // create temp smart pointer struct and initialize it with correct values
+      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 0), "", beforeInstruction);
+      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 1), "", beforeInstruction);
+      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 2), "", beforeInstruction);
+      new StoreInst(origArg, curGEP, beforeInstruction);
+      new StoreInst(minLimit, minGEP, beforeInstruction);
+      new StoreInst(maxLimit, maxGEP, beforeInstruction);
+      LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", beforeInstruction);
+      return smartArgVal;
+    }
+
+    // copy - paste refactor !
+    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, BasicBlock *initAtEndOf) {
+      DEBUG( dbgs() << "2-Converting arg: "; origArg->print(dbgs()); dbgs() << " min: "; minLimit->print(dbgs()); dbgs() << " max: "; maxLimit->print(dbgs()); dbgs() << "\n"; );      
+      // create alloca to entry block of function for the value
+      Function* argFun = initAtEndOf->getParent();
+      BasicBlock &entryBlock = argFun->getEntryBlock();
+      LLVMContext &c = argFun->getContext();
+      Type *smarArgType = getSmartStructType(c, origArg->getType());
+      AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock);
+      
+      // create temp smart pointer struct and initialize it with correct values
+      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 0), "", initAtEndOf);
+      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 1), "", initAtEndOf);
+      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 2), "", initAtEndOf);
+      new StoreInst(origArg, curGEP, initAtEndOf);
+      new StoreInst(minLimit, minGEP, initAtEndOf);
+      new StoreInst(maxLimit, maxGEP, initAtEndOf);
+      LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", initAtEndOf);
+      return smartArgVal;
+    }
+      
     /**
      * Paint all uses of argv of main function as safe ones, which does not require checks.
      *
@@ -652,207 +1052,40 @@ namespace WebCL {
       return false;
     }
     
-    /**
-     * TODO: FIX THE COMMENT AFTER STUFF WORKS Pass globals always through local variables.
-     *
-     * To be able to create SmartPointers with limits for global variables, we need to 
-     * pass them first through local variables.
-     * 
-     * NOTE: this is slow, hopefully post optimizations fixes the overhead and 
-     *       avoid using globals
-     */ 
-    void createSmartPointersForGlobals(Module &M, SmartPointerByValueMap &smartPointers) {
-
-      LLVMContext& c = M.getContext();
-
-      // save smart pointers created for globals here during the iteration of module
-      // NOTE: design would be more clear if we collect also original global values in analyse pass
-      //       the same way that we do for instructions, need to refactor if we are going to go through
-      //       globals somewhere else
-      std::set<Value*> ignore;
-
-      for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
-           
-        // if global, which has not been whitelisted to be ok
-        if ( !RunUnsafeMode ) {
-          if ( !isSafeGlobalValue(g) ) {
-            dbgs() << "This global variable are not supported in strict mode: "; g->print(dbgs()); dbgs() << "\n";
-            fast_assert( false, "Some global values are not supported in strict mode.");
-          }
-        } else {
-          // ignore globals in unsafe mode.
-          continue;
-        }
-        
-        DEBUG( dbgs() << "Found global: "; g->print(dbgs()); dbgs() << " Type: "; g->getType()->print(dbgs()); dbgs() << "\n" );
-
-        // HACK: to not to generate smart pointers for smart pointers...
-        if (ignore.count(g) > 0) continue;
-
-        // actually all globals are pointers, unnamed addresses does not need safe pointers
-        if ( g->getType()->isPointerTy() && !g->hasUnnamedAddr() ) {
-
-          SequentialType *globalArrayType = dyn_cast<SequentialType>(g->getType()->getElementType());
-          Constant *first = NULL;
-          Constant *last = NULL;
-          Type *elementType = NULL;
-
-          // limits for arrays
-          if (globalArrayType) {
-            // get element pointer (0, 0) and (0, lastIndex) since global is actually 2 dimensional array (pointer to array)
-            int lastIndex =  globalArrayType->getArrayNumElements() - 1;
-            first = ConstantExpr::getInBoundsGetElementPtr( g, genIntArrayRef<Constant*>(c, 0, 0) );
-            last = ConstantExpr::getInBoundsGetElementPtr( g,  genIntArrayRef<Constant*>(c, 0, lastIndex) );
-            elementType = globalArrayType->getElementType();
-          } else {
-            // limits for simple var
-            first = ConstantExpr::getInBoundsGetElementPtr( g, getConstInt(c, 0) );
-            last = ConstantExpr::getInBoundsGetElementPtr( g, getConstInt(c, 0) );
-            elementType = g->getType()->getElementType();            
-          }
-
-          StructType *smart_ptr_struct_type = getSmartPointerType(elementType->getPointerTo(), c);
-          Type* smart_ptr_struct_ptr_type = smart_ptr_struct_type->getPointerTo();
-
-          DEBUG( dbgs() << "first: "; first->print(dbgs()); dbgs() << "\n" );
-          DEBUG( dbgs() << "last: "; last->print(dbgs()); dbgs() << "\n" );          
-
-          ArrayRef<Constant*> structElementData = genArrayRef<Constant*>(c, first, first, last);                              
-          Constant* smartStructInitializer = ConstantStruct::get( smart_ptr_struct_type, structElementData );
-          DEBUG( dbgs() << "Smart init: "; smartStructInitializer->print(dbgs()); dbgs() << "\n" );
-
-          GlobalVariable *smartPtrStruct = new GlobalVariable
-            (smart_ptr_struct_type, false, GlobalValue::InternalLinkage,  smartStructInitializer, g->getName() + ".Smart");
-          
-          GlobalVariable *smartPtrStructPtr = new GlobalVariable
-            (smart_ptr_struct_ptr_type, false, GlobalValue::InternalLinkage, smartPtrStruct, g->getName() + ".SmartPtr");
-          
-          // add created global value smart pointers to book keeping
-          SmartPointer* s = new SmartPointer( ConstantExpr::getGetElementPtr(smartPtrStruct, genIntArrayRef<Constant*>(c, 0, 0)),
-                                              ConstantExpr::getGetElementPtr(smartPtrStruct, genIntArrayRef<Constant*>(c, 0, 1)), 
-                                              ConstantExpr::getGetElementPtr(smartPtrStruct, genIntArrayRef<Constant*>(c, 0, 2)), 
-                                              smartPtrStruct, smartPtrStructPtr );
-
-          // add smart pointer and put global values to module
-          smartPointers.insert( std::pair< Value*, SmartPointer* >( g, s ) );
-          GlobalVariable *smart = dyn_cast<GlobalVariable>(s->smart);
-          GlobalVariable *smart_ptr = dyn_cast<GlobalVariable>(s->smart_ptr);
-          fast_assert(smart && smart_ptr, "Unexpected types, could not cast.");
-          M.getGlobalList().insertAfter(g, smart_ptr); 
-          M.getGlobalList().insertAfter(g, smart); 
-
-          // add newly generated globals to ignore list so that we won't try generating smart pointers for them
-          ignore.insert( s->smart );
-          ignore.insert( s->smart_ptr );
-        }
-      }
-    }
-
-
-    /**
-     * Makes sure that each function argument has structure: 
-     * 
-     * NOTE: This must be run, before starting ClampPointers pass... could be 
-     * created as separate pass.
-     * 
-     * define i32 @foo(i32* %local_alloca) {
-     * entry:
-     *   %local_alloca.addr = alloca i32*, align 8* %arg.addr = alloca type
-     *   store i32* %local_alloca, i32** %local_alloca.addr
-     *   %first_use = load i32* %local_alloca.addr
-     *
-     * opt -O0 has this kind of entries already.
-     */ 
-    void normalizeArgumentPassing(Function *F) {
-      for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
-        Argument* arg = a;
-        DEBUG( dbgs() << "Checking argument: "; arg->print(dbgs()); dbgs() << " : " );
-        if ( arg->hasOneUse() ) {
-          if ( StoreInst *store = dyn_cast<StoreInst>(arg->use_back()) ) {
-            if ( AllocaInst *alloca = dyn_cast<AllocaInst>(store->getPointerOperand()) ) {
-              // ok, this argument looks fine.
-              DEBUG( dbgs() << "found alloca: "; alloca->print(dbgs()); dbgs() << "\n" );
-              continue;
-            }
-          }
-        }
-        
-        DEBUG( dbgs() << "Creating entry code: " );
-        Instruction &entryPoint = arg->getParent()->getEntryBlock().front();
-        AllocaInst *argAlloca = new AllocaInst(arg->getType(), arg->getName() + ".addr", &entryPoint);
-        DEBUG( argAlloca->print(dbgs()); dbgs() << " original arg: "; arg->print(dbgs()); dbgs() << "\n" );  
-        LoadInst *load = new LoadInst(argAlloca, "", &entryPoint);
-        arg->replaceAllUsesWith(load);
-        new StoreInst(arg, argAlloca, load);
-      }
-    }
-
 
     /**
      * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
      */
-    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, SmartPointerByValueMap &smartPointers, ValueSet &safeExceptions) {
+    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
       // check load instructions... 
       for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
-        addChecks((*i)->getPointerOperand(), *i, smartPointers, safeExceptions);
+        addChecks((*i)->getPointerOperand(), *i, valLimits, asLimits, safeExceptions);
       }   
       // check store instructions
       for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
-        addChecks((*i)->getPointerOperand(), *i, smartPointers, safeExceptions);
+        addChecks((*i)->getPointerOperand(), *i, valLimits, asLimits, safeExceptions);
       }
     }
 
     /**
      * If val touching pointer operand needs checks, then inject boundary check code.
      */
-    void addChecks(Value *ptrOperand, Instruction *inst, SmartPointerByValueMap &smartPointers, ValueSet &safeExceptions) {
+    void addChecks(Value *ptrOperand, Instruction *inst, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
       
-      // TODO: maybe all of these cases could be added directly to safeExceptions map...
+      // If no need to add checks, just skip
       if (safeExceptions.count(ptrOperand)) {
         DEBUG( dbgs() << "Skipping op that was listed in safe exceptions: "; inst->print(dbgs()); dbgs() << "\n" );        
         return;
-      } else if ( dyn_cast<AllocaInst>(ptrOperand) ) {
-        DEBUG( dbgs() << "Skipping direct alloca op: "; inst->print(dbgs()); dbgs() << "\n" );
-        return;
+      }
       
-      } else if ( dyn_cast<GlobalValue>(ptrOperand) ) {
-        DEBUG( dbgs() << "Skipping direct load from global value: "; inst->print(dbgs()); dbgs() << "\n" );
-        return;
-        
-      } else if ( ConstantExpr *constGep = dyn_cast<ConstantExpr>(ptrOperand) ) {        
-        Instruction* inst = getAsInstruction(constGep);
-        bool isGep = false;
-        bool isInBounds = false;
-        
-        if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
-          isGep = true;
-          isInBounds = gep->isInBounds();
-          // if we refer non array global / external variable, we assume that we have to refer always to 0 element
-          if ( !gep->getPointerOperand()->getType()->getSequentialElementType()->isArrayTy() ) {
-            isInBounds = gep->hasAllZeroIndices();
-          }
-        }
-        
-        delete inst;
-        
-        if (isGep) {
-          if (!isInBounds) {
-            dbgs() << "Cannot verify that expression is in limits: "; inst->print(dbgs());
-            fast_assert(isInBounds, "Constant expression out of bounds");
-          }
-          DEBUG( dbgs() << "Skipping constant expression, which is in limits: "; inst->print(dbgs()); dbgs() << "\n" );
-          return;
-        }
+      AreaLimitSet limits;
+      if ( valLimits.count(ptrOperand) != 0 ) {
+        limits.insert(valLimits[ptrOperand]);
+      } else {
+        unsigned int addressSpace = dyn_cast<PointerType>(ptrOperand->getType())->getAddressSpace();
+        limits.insert( asLimits[addressSpace].begin(), asLimits[addressSpace].end() );
       }
- 
-      // find out which limits load has to respect and add boundary checks
-      if ( smartPointers.count(ptrOperand) == 0 ) {
-        // TODO: add recognition for loading data from global table... test case try to clamp optimized version of performace test sources.
-        dbgs() << "When verifying: "; inst->print(dbgs()); dbgs() << "\n";
-        fast_assert(false, "Could not find limits to create protection!");
-      }
-
-      SmartPointer *limits = smartPointers[ptrOperand];
+      
       createLimitCheck(ptrOperand, limits, inst);
     }
     
@@ -867,12 +1100,13 @@ namespace WebCL {
      * ==== To
      *
      *   %0 = load i32** %some_label
-     *   %1 = load i32** %some_lable.Smart.Last
-     *   %2 = icmp ugt i32* %0, %1
-     *   br i1 %2, label %boundary.check.fail, label %check.first.limit
+     *   ; this checks if value is direct or indirect and does required casting and gets last valid address for clamp
+     *   %1 = AreaLimit.getMaxFor(%some_label)
+     *   %2 = AreaLimit.getMinFor(%some_label)
+     *   %3 = icmp ugt i32* %0, %1
+     *   br i1 %3, label %boundary.check.fail, label %check.first.limit
      * check.first.limit:      
-     *   %3 = load i32** %some_label.Smart.First
-     *   %4 = icmp ult i32* %0, %3
+     *   %4 = icmp ult i32* %0, %2
      *   br i1 %4, label %boundary.check.fail, label %boundary.check.ok
      * boundary.check.ok:
      *   %5 = load i32* %0
@@ -888,18 +1122,28 @@ namespace WebCL {
      * @param limits Smart pointer, whose limits pointer should respect
      * @param meminst Instruction which for check is injected
      */
-    void createLimitCheck(Value *ptr, SmartPointer *limits, Instruction *meminst) {
+    void createLimitCheck(Value *ptr, AreaLimitSet &limits, Instruction *meminst) {
+      
       DEBUG( dbgs() << "Creating limit check for: "; ptr->print(dbgs()); dbgs() << " of type: "; ptr->getType()->print(dbgs()); dbgs() << "\n" );
       static int id = 0;
       id++;
       char postfix_buf[64];
+    
       if ( dyn_cast<LoadInst>(meminst) ) {
         sprintf(postfix_buf, "load.%d", id);
       } else {
         sprintf(postfix_buf, "store.%d", id);
       }
       std::string postfix = postfix_buf;
-
+      
+      DEBUG( dbgs() << "Limits to check: \n" );
+      for (AreaLimitSet::iterator i = limits.begin(); i != limits.end(); i++) {
+        DEBUG( dbgs() << "### min: "; (*i)->min->print(dbgs()); dbgs() << "\n"; );
+        DEBUG( dbgs() << "### max: "; (*i)->max->print(dbgs()); dbgs() << "\n"; );
+      }
+      fast_assert(limits.size() == 1, "Current boundary check generation does not support multiple limits checking.");
+      AreaLimit *limit = *(limits.begin());
+      
       BasicBlock *BB = meminst->getParent();
       Function *F = BB->getParent();
       LLVMContext& c = F->getContext();
@@ -912,23 +1156,21 @@ namespace WebCL {
       BasicBlock* check_first_block = BasicBlock::Create( c, "check.first.limit." + postfix, F );
       IRBuilder<> check_first_builder( check_first_block );
 
-      // TODO: since in some cases e.g. when we have safe pointers done for struct type
-      //       we need to compare pointer value to different type of pointer it is better
-      //       to have also short cut in SmartPointer for getting last valid address for different
-      //       types of pointers e.g. float*, vector*.. that can be implemented as function...
+      // ------ get limits if require loading indirect address
 
-      // ------ add max boundary check code 
-      // *   %1 = load i32** %some_lable.Smart.Last
-      LoadInst* last_val = new LoadInst( limits->max, "", meminst );
-      
+      // *   %1 = instruction or value returning last valid value
+      Value *last_value_for_type = limit->lastValidAddressFor(ptr->getType(), meminst);
+      // *   %2 = value to compare to get first valid address
+      Value *first_valid_pointer = limit->firstValidAddressFor(ptr->getType(), meminst);
+
+      // ------ add max boundary check code
+
       // get limits for this certain type of pointer... basically does "((ptrType)(&last_val[1]))[-1]"
-      Instruction *max_value_for_type = limits->maxFor(c, last_val, ptr->getType());
-      
-      DEBUG( max_value_for_type->getType()->print(dbgs()); dbgs() << " VS. "; ptr->getType()->print(dbgs()); dbgs() << "\n" );
+      DEBUG( last_value_for_type->getType()->print(dbgs()); dbgs() << " VS. "; ptr->getType()->print(dbgs()); dbgs() << "\n" );
 
-      // *   %2 = icmp ugt i32* %0, %1
-      ICmpInst* cmp = new ICmpInst( meminst, CmpInst::ICMP_UGT, ptr, max_value_for_type, "" );
-      // *   br i1 %2, label %boundary.check.failed, label %check.first.limit
+      // *   %3 = icmp ugt i32* %0, %1
+      ICmpInst* cmp = new ICmpInst( meminst, CmpInst::ICMP_UGT, ptr, last_value_for_type, "" );
+      // *   br i1 %3, label %boundary.check.failed, label %check.first.limit
       BranchInst::Create( boundary_fail_block, check_first_block, cmp, meminst );
 
       // ------ break current BB to 3 parts, start, boundary_check_ok and if_end (meminst is left in ok block)
@@ -947,16 +1189,10 @@ namespace WebCL {
       // and add unconditional branch from boundary_fail_block to if.end 
       BranchInst::Create( end_block, boundary_fail_block );
 
-      // ------ add min boundary check code 
+      // ------ add min boundary check code
+      // * check.first.limit:
 
-      // * check.first.limit:      
-      // *   %3 = load i32** %some_label.Smart.First
-      LoadInst* first_val = new LoadInst( limits->min, "", check_first_block );
-      
-      // get limits for this certain type of pointer...
-      Instruction* first_valid_pointer = limits->minFor(c, first_val, ptr->getType());
-
-      // *   %4 = icmp ult i32* %0, %3
+      // *   %4 = icmp ult i32* %0, %2
       ICmpInst* cmp2 = new ICmpInst( *check_first_block, CmpInst::ICMP_ULT, ptr, first_valid_pointer, "" );
 
       // *   br i1 %4, label %boundary.check.failed, label %if.end
@@ -976,337 +1212,7 @@ namespace WebCL {
       boundary_fail_block->moveAfter(boundary_ok_block);
       end_block->moveAfter(boundary_fail_block);
 
-      DEBUG( dbgs() << "Created boundary check for: "; meminst->print(dbgs()); dbgs() << "\n" );
-    }
-    
-    void expandSmartPointersResolvingToCoverUses(SmartPointerByValueMap &smartPointers) {
-      SmartPointerByValueMap derivedUses;
-      for (SmartPointerByValueMap::iterator i = smartPointers.begin(); i != smartPointers.end(); i++) {
-        resolveUses(i->first, i->second, derivedUses);
-      }
-      
-      // expand smartPointers with derivedUses
-      for (SmartPointerByValueMap::iterator i = derivedUses.begin(); i != derivedUses.end(); i++) {
-        smartPointers[i->first] = i->second;
-      }      
-    }
-    
-    /**
-     * Traverses through uses of safe pointer and adds limits to derivedUses map.
-     *
-     * TODO: better description how uses derived uses are collected. e.g. some kind of tree...
-     *
-     */
-    void resolveUses(Value *val, SmartPointer *limits, SmartPointerByValueMap &derivedUses) {
-      for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
-        Value *use = *i;
-        
-        // ----- continue to next use if cannot be sure about the limits
-        if ( dyn_cast<GetElementPtrInst>(use) ) {
-          // all good for GEPs
-        } else if ( LoadInst *load = dyn_cast<LoadInst>(use) ) {
-          // we cannot be sure about limits unless the load is directly from alloca
-          if ( ! dyn_cast<AllocaInst>(load->getPointerOperand()) ) {
-            continue;
-          }
-        } else if ( dyn_cast<StoreInst>(use) ) {
-          // never care about stores... they does not return anything
-          continue;
-        } else if ( BitCastInst* bitCast = dyn_cast<BitCastInst>(use) ) {
-          // if bitcast does pointer -> pointer conversion it is ok...
-          if (!bitCast->getType()->isPointerTy()) { 
-            continue;
-          }
-        } else { 
-          // notify about unexpected cannot be resolved cases for debug
-          DEBUG( dbgs() << "Cannot resolve limit for: "; use->print(dbgs()); dbgs() << "\n" );
-          continue;
-        }
-
-        DEBUG( dbgs() << "Use: "; use->print(dbgs()); dbgs() << " respects limits of: "; limits->smart->print(dbgs()); dbgs() << "\n" );
-        derivedUses[use] = limits;
-        resolveUses(use, limits, derivedUses);                
-      }
-    }
-
-    /**
-     * Traces recursively up in SSA tree until finds element, which has information about limits.
-     *
-     * Currently stops if alloca or global value is found or a load.
-     *
-     * NOTE: this function does not feel safe enough... approach should be validated or reimplemented
-     * 
-     * @param trashcan When one gets getAsInstruction from constant expression, it creates dangling
-     *   instruction. Dangling instructions will crash the pass on exit, so we add created instruction
-     *   before trashcan instruction and let later optimization passes clean these up.
-     */
-    Value* findLimitingFactor(Value *op, Instruction *trashcan) {
-      if (dyn_cast<AllocaInst>(op) || dyn_cast<GlobalValue>(op)) {
-        return op;
-
-      } else if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(op)) {
-        return findLimitingFactor(gep->getPointerOperand(), trashcan);
-
-      } else if (ConstantExpr *constExp = dyn_cast<ConstantExpr>(op)) {
-
-        constExp->isGEPWithNoNotionalOverIndexing();
-        Instruction *newInst = getAsInstruction(constExp);
-        newInst->insertBefore(trashcan);
-        return findLimitingFactor(newInst, trashcan);
-
-      } else if (LoadInst *load = dyn_cast<LoadInst>(op)) {
-
-        // we are finding limiting factor for store to smart pointer, so we can accept that safe pointer of load can be it.
-        return load;
-
-      } else {
-        dbgs() << "Handling value: "; op->print(dbgs()); dbgs() << "\n";
-        dyn_cast<Constant>(op)->print(dbgs()); dbgs() << "\n";
-        fast_assert(false, "Don't know how to trace limiting operand for this structure.");
-      }
-    }
-
-    /**
-     * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
-     * 
-     * NOTE: maybe there should be better way to do this than used here... or generic version...
-     */
-    void fixStoreInstructions(StoreInstrSet &stores, SmartPointerByValueMap &smartPointers) {
-      
-      for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
-        StoreInst* store = *i;        
-        LLVMContext& c = store->getParent()->getContext();
-        
-        Value *src = store->getValueOperand();
-        Value *dest = store->getPointerOperand();
-        
-        if ( dest->getType()->isPointerTy() && dyn_cast<PointerType>(dest->getType())->getElementType()->isPointerTy() ) {
-
-          DEBUG( dbgs() << "Found store to fix: "; store->print(dbgs()); dbgs() << "\n" );
-          DEBUG( src->print(dbgs()); dbgs() << "\n" );
-
-          fast_assert (smartPointers.count(dest) > 0, "Cannot find smart pointer for destination");
-          SmartPointer *smartDest = smartPointers[dest];
- 
-          Value* limits = findLimitingFactor(src, store->getParent()->begin());
-          Value* first = NULL;
-          Value* last = NULL;
-
-          if (smartPointers.count(limits) > 0) {
-
-            SmartPointer *smartSrc = smartPointers[limits];
-            LoadInst *firstLoad = new LoadInst(smartSrc->min);
-            LoadInst *lastLoad = new LoadInst(smartSrc->max);
-            firstLoad->insertBefore(store);
-            lastLoad->insertBefore(store);
-            last = lastLoad;
-            first = firstLoad;
-
-          } else if ( LoadInst *load = dyn_cast<LoadInst>(limits) ) {
-
-            // external or global src of load... local ones has smart pointers created
-            if ( !dyn_cast<GlobalValue>(load->getPointerOperand()) || 
-                 !dyn_cast<GlobalValue>(load->getPointerOperand())->hasExternalLinkage() ) {
-              dbgs() << "Unexpected load selected to be limiting factor: "; load->print(dbgs()); dbgs() << "\n";
-              fast_assert(false, "Unexpected load instruction");
-            }
-
-            first = load;
-            last = load;
-            
-          } else if ( GlobalValue *globalVal = dyn_cast<GlobalValue>(limits) ) {
-            DEBUG( dbgs() << "Handling global: "; globalVal->print(dbgs()); dbgs() << " : " );
-            
-            // if array type of global
-            if (globalVal->getType()->getElementType()->isArrayTy()) {
-              DEBUG( dbgs() << "applying array limits.\n" );
-              int array_size = dyn_cast<ArrayType>(globalVal->getType()->getElementType())->getNumElements();
-              first = generateGEP(c, globalVal, 0, 0, store, "");
-              last = generateGEP(c, globalVal, 0, array_size-1, store, "");
-
-            } else if (globalVal->getType()->getElementType()->isStructTy()) {
-              dbgs() << "While handling: "; globalVal->print(dbgs()); dbgs() << "\n";
-              fast_assert(false, "Getting limits from struct type is not implemented.");
-
-            } else {
-              first = globalVal;
-              last = globalVal;
-            }
-
-          } else {
-            fast_assert(false, "Could not resolve limits from source operand, for smart pointer assignment.");
-          }
-          
-          // fix limits and cur in smart pointer assignment
-          DEBUG( dbgs() << "#### FOUND LIMITS:\n" );
-          DEBUG( first->print(dbgs()); dbgs() << " type: "; first->getType()->print(dbgs()); 
-                 dbgs() << " ---> "; 
-                 smartDest->min->print(dbgs()); dbgs() << " type: "; smartDest->min->getType()->print(dbgs()); dbgs() << "\n" );
-          DEBUG( last->print(dbgs()); dbgs() << " type: "; last->getType()->print(dbgs()); 
-                 dbgs() << " ---> "; 
-                 smartDest->max->print(dbgs()); dbgs() << " type: "; smartDest->max->getType()->print(dbgs()); dbgs() << "\n" );
-
-          StoreInst* firstStore = new StoreInst(first, smartDest->min);
-          StoreInst* lastStore = new StoreInst(last, smartDest->max);
-          StoreInst* curStore = new StoreInst(store->getValueOperand(), smartDest->cur);          
-
-          lastStore->insertAfter(store);
-          firstStore->insertAfter(store);
-          curStore->insertAfter(store);
-
-          DEBUG( dbgs() << "-- Created smart store:\n" );
-          DEBUG( store->print(dbgs()); dbgs() << "\n" );
-          DEBUG( curStore->print(dbgs()); dbgs() << "\n" );
-          DEBUG( firstStore->print(dbgs()); dbgs() << "\n" );
-          DEBUG( lastStore->print(dbgs()); dbgs() << "\n" );
-        }
-      }
-    }
-
-    StructType* getSmartPointerType(Type *type, LLVMContext &c) {
-          std::vector< Type* > types;
-          types.push_back( type );
-          types.push_back( type );
-          types.push_back( type );
-          ArrayRef< Type* > tref( types );
-          return StructType::get( c, tref );
-    }
-    
-    /**
-     * Creates smart pointer, before given alloca.
-     *
-     * For e.g. an alloca: 
-     *
-     * %int_table = alloca [8 x i32]
-     *
-     * Generate smart pointer stuff:
-     * 
-     * %int_table.Smart = alloca { i32*, i32*, i32* }
-     * %int_table.SmartPtr = alloca { i32*, i32*, i32* }*
-     * store { i32*, i32*, i32* }* %int_table.Smart, { i32*, i32*, i32* }** %int_table.SmartPtr
-     * %int_table.Smart.Cur = getelementptr { i32*, i32*, i32* }* %int_table.Smart, i32 0, i32 0
-     * %int_table.Smart.First = getelementptr { i32*, i32*, i32* }* %int_table.Smart, i32 0, i32 1
-     * %int_table.Smart.Last = getelementptr { i32*, i32*, i32* }* %int_table.Smart, i32 0, i32 2
-     * %int_table = alloca [8 x i32], align 16
-     * %int_table.Last = getelementptr [8 x i32]* %int_table, i32 0, i32 7 ( this is given in parameter for function )
-     * store i32* %int_table.Last, i32** %int_table.Smart.Last
-     * %int_table.First = getelementptr [8 x i32]* %int_table, i32 0, i32 0 ( this is given in parameter for function )
-     * store i32* %int_table.First, i32** %int_table.Smart.First
-     * store i32* %int_table.First, i32** %int_table.Smart.Cur
-     * 
-     * @param elementType Type which is used to generate smart pointer internal elements.
-     * @param alloca Alloca which will be "smartified"
-     * @param first Start limit. First valid memory address (e.g. gep or alloca intstruction).
-     * @param last End limit (e.g. gep or alloca intstruction). Last valid address.
-     */
-    SmartPointer* createSmartPointer(Type* elementType, AllocaInst* alloca, Instruction* first, Instruction* last) {
-
-          LLVMContext& c = alloca->getParent()->getContext();
-          StringRef allocaName = alloca->getName();
-
-          StructType *smart_ptr_struct_type = getSmartPointerType(elementType, c);
-          assert( smart_ptr_struct_type );
-          // I'm sorry.. 
-          Type* smart_ptr_struct_ptr_type = smart_ptr_struct_type->getPointerTo();
-
-          Twine name_data = allocaName + ".Smart";
-          AllocaInst* smart_ptr_struct_alloca = new AllocaInst( smart_ptr_struct_type, 0, name_data, alloca );
-          Twine name_ptr = allocaName + ".SmartPtr";
-          AllocaInst* smart_ptr_struct_ptr_alloca = new AllocaInst( smart_ptr_struct_ptr_type, 0, name_ptr, alloca );
-          StoreInst* smart_ptr_struct_ptr_store = new StoreInst( smart_ptr_struct_alloca, smart_ptr_struct_ptr_alloca );
-          smart_ptr_struct_ptr_store->insertAfter( smart_ptr_struct_ptr_alloca );
-          
-          Twine nameCur = Twine( "" ) + allocaName + ".Smart.Cur";
-          Twine nameFirst = Twine( "" ) + allocaName + ".Smart.First";
-          Twine nameLast = Twine( "" ) + allocaName + ".Smart.Last";
-          GetElementPtrInst* last_gep = generateGEP( c, smart_ptr_struct_alloca, 0, 2, alloca, nameLast );
-          GetElementPtrInst* first_gep = generateGEP( c, smart_ptr_struct_alloca, 0, 1, alloca, nameFirst );
-          GetElementPtrInst* cur_gep = generateGEP( c, smart_ptr_struct_alloca, 0, 0, alloca, nameCur );
-                    
-          SmartPointer* s = new SmartPointer( cur_gep, first_gep, last_gep, smart_ptr_struct_alloca, smart_ptr_struct_ptr_alloca );
-
-          StoreInst* init_cur_store = new StoreInst( first, cur_gep );
-          StoreInst* init_first_store = new StoreInst( first, first_gep );
-          StoreInst* init_last_store = new StoreInst( last, last_gep );
-          
-          init_last_store->insertAfter( last );
-          init_first_store->insertAfter( last );
-          init_cur_store->insertAfter( last );
-
-          return s;
-    }
-
-    /**
-     * Find all allocas that can be converted to smart pointers and add them to function
-     * 
-     * TODO: Generate safe pointers for everything
-     * 
-     * NOTE: replacing original alloca with smart.Cur everywhere is bad idea, dont do it.
-     * 
-     * e.g. 
-     *   %0 = gep %smart.Cur, 0, 4
-     *   call %0
-     *
-     * Would mean that we have to create copy of the smart pointer to pass it to function to 
-     * maintain previous functionality
-     */
-    void createSmartAllocas(AllocaInstrSet &allocas, SmartPointerByValueMap &smartPointers) {
-      
-      for (AllocaInstrSet::iterator i = allocas.begin(); i != allocas.end(); i++) {
-
-        AllocaInst* alloca = *i;
-        
-        LLVMContext& c = alloca->getParent()->getContext();
-        
-        Type* t = alloca->getAllocatedType();
-
-        DEBUG( dbgs() << "Creating smart pointer structures for: "; alloca->print(dbgs()); dbgs() << " ---- " );
-
-        // Treat array alloca special way, otherwise just treat pointer allocas.....
-        Type *ptrType = NULL;
-        Instruction *first = NULL;
-        Instruction *last = NULL;
-
-        if( ArrayType* a = dyn_cast< ArrayType >( t ) ) {
-          DEBUG( dbgs() << "It's an array!\n" );
-
-          Type* element_type = a->getElementType();
-          fast_assert( ( element_type->isIntegerTy() || element_type->isFloatingPointTy() ),
-                       "Currently pass supports only integer or float arrays.");
-
-          unsigned int array_size = a->getArrayNumElements();
-
-          ptrType = element_type->getPointerTo();
-          first = generateGEP(c, alloca, 0, 0, 0, "");
-          last = generateGEP(c, alloca, 0, array_size - 1, 0, "");
-          last->insertAfter(alloca);
-          first->insertAfter(alloca);
-
-        } else if (t->isPointerTy()) {
-
-          DEBUG( dbgs() << "It's a pointer!\n" );
-          LoadInst *alloca_load = new LoadInst(alloca);
-          alloca_load->insertAfter(alloca);
-          ptrType = t;
-          first = alloca_load;
-          last = alloca_load;
-
-        } else if (t->isIntegerTy() || t->isFloatingPointTy()) {
-
-          DEBUG( dbgs() << "It an integer or float!\n" );
-          ptrType = t->getPointerTo();
-          first = alloca;
-          last = alloca;
-          
-        } else {
-          DEBUG( dbgs() << "It is an unhandled type, some day we need to implement this to make system work correctly!\n" );
-        }
-
-        if (ptrType) {
-          SmartPointer* newSmartPointer = createSmartPointer(ptrType, alloca, first, last);
-          smartPointers.insert( std::pair< Value*, SmartPointer* >( alloca, newSmartPointer ) );
-        }
-      }
+      DEBUG( dbgs() << "Created boundary check for: "; meminst->print(dbgs()); dbgs() << "\n"; );
     }
 
     /**
@@ -1379,7 +1285,8 @@ namespace WebCL {
             }
             
             Function *newFun = safeBuiltins[oldFun];
-            convertCallToUseSmartPointerArgs(call, newFun, smartPointers);
+            ArgumentMap dummyArg;
+            convertCallToUseSmartPointerArgs(call, newFun, dummyArg);
           }
 
         } else {
@@ -1418,14 +1325,14 @@ namespace WebCL {
         }
 
         Function* newFun = replacedFunctions[oldFun];
-        convertCallToUseSmartPointerArgs(call, newFun, smartPointers);
+        convertCallToUseSmartPointerArgs(call, newFun, replacedArguments);
       }
     }
     
     /**
      * Converts call function to use new function as called function and changes all pointer parameters to be smart pointers.
      */
-    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, SmartPointerByValueMap &smartPointers) {
+    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, ArgumentMap &replacedArguments) {
 
       Function* oldFun = call->getCalledFunction();
       call->setCalledFunction(newFun);
@@ -1448,103 +1355,28 @@ namespace WebCL {
           
           DEBUG( dbgs() << "- op #" << op << " needs fixing: "; operand->print(dbgs()); dbgs() << "\n" );
           
-          // get load, which actually loads smart pointer from the end of label
-          if ( LoadInst* loadToFix = dyn_cast<LoadInst>(operand) ) {
-              
-            
-            Value* oldParam = loadToFix->getOperand(0);
-            
-            // we should not load value from end of pointer, but directly pass smart pointer instead...
-            if (smartPointers.count(oldParam) > 0) {
-              call->setOperand( op, smartPointers[oldParam]->smart );
-              } else {
-              dbgs() << "In function: ---- \n";
-              call->getParent()->print(dbgs());
-              dbgs() << "\n\nError while converting call:\n";
-              loadToFix->print(dbgs());
-              dbgs() << "\n";
-              call->print(dbgs());
-              dbgs() << " cannot find smart pointer for op: " << op << "\n"; 
-              fast_assert(false, "Cannot find smart pointer for the call operand. Maybe you tried to pass extern variable?");
-            }
-            
-          } else if ( GetElementPtrInst* gepToFix = dyn_cast<GetElementPtrInst>(operand) ) {
+          if ( Argument* arg = dyn_cast<Argument>(operand) ) {
+            // if operand is argument it should be found from replacement map
+            DEBUG( dbgs() << "Operand is argument of the same func!\n"; );
+            call->setOperand( op, replacedArguments[arg] );
 
-            // fixing passing parameter got from GEP e.g. passing table
-            Value *sourcePointer = gepToFix->getPointerOperand();
-            
-            // TODO: Make one universal resolving function which can always be used to trace
-            //       corresponding safe pointer for a value... ()
-            if (smartPointers.count(sourcePointer) == 0 ) {
-              if (LoadInst* load = dyn_cast<LoadInst>(sourcePointer)) {
-                sourcePointer = load->getPointerOperand();
-                if (smartPointers.count(sourcePointer) == 0) sourcePointer = NULL;
-              } else {
-                sourcePointer = NULL;
-              }
-              
-              if (!sourcePointer) {
-                dbgs() << "In BB:\n"; gepToFix->getParent()->print(dbgs());
-                dbgs() << "\nConverting: "; gepToFix->getPointerOperand()->print(dbgs()); dbgs() << "\n";
-                fast_assert(false, "Could not find smart pointer for GEP, which should have smart pointer..");
-              }
-            }
-            
-            SmartPointer *smartPtr = smartPointers[sourcePointer];
-            // update smartPointer .Cur to match the  
-            StoreInst *updateCur = new StoreInst(gepToFix, smartPtr->cur);
-            updateCur->insertAfter(gepToFix);
-            call->setOperand(op, smartPtr->smart);
-            
-          } else if (  ConstantExpr* constantExpr = dyn_cast<ConstantExpr>(operand) ) {
-            // fixing passing parameter got from GEP e.g. passing table
-            GetElementPtrInst *gepInst = dyn_cast<GetElementPtrInst>(getAsInstruction(constantExpr));
-            Value *sourcePointer = gepInst->getPointerOperand();
-            delete gepInst;
-            gepInst = NULL;
-
-            SmartPointer *smartPtr = smartPointers[sourcePointer];
-            // update smartPointer .Cur to match the  
-            //StoreInst *updateCur = new StoreInst(gepToFix, smartPtr->cur);
-            //updateCur->insertAfter(gepToFix);
-            call->setOperand(op, smartPtr->smart);
-                     
-          } else if ( AllocaInst* allocaSrc = dyn_cast<AllocaInst>(operand) ) {
-            
-            // value can be also e.g. alloca, which is read from caller function's arguments %param.addr... 
-            if (smartPointers.count(allocaSrc) > 0) {
-              SmartPointer *smartPtr = smartPointers[allocaSrc];
-              call->setOperand(op, smartPtr->smart);
-            } else {
-              // check if alloca is not integer type lets fail
-              dbgs() << "\n\nIn BB:\n";
-              call->getParent()->print(dbgs());
-              dbgs() << "\n\nError while converting call:\n";
-              allocaSrc->print(dbgs());
-              dbgs() << "\n";
-              call->print(dbgs());
-              dbgs() << "\nOld argument type:::\n";
-              oldArg->print(dbgs());
-              dbgs() << "\nNew argument type:::\n";
-              newArg->print(dbgs());
-              dbgs() << " cannot find smart pointer for alloca op: " << op << "\n"; 
-              fast_assert(false, "Could not find smart pointer for alloca");
-            }
-
+          } else if (ExtractValueInst *extract = dyn_cast<ExtractValueInst>(operand)) {
+            // TODO: REMOVE THIS HACK IT OPENS SECURITY HOLE, ALWAYS GET LIMITS FROM RESULT OF ANALYSIS
+            //       THIS WILL ALLOW UNSAFE CODE IF STRUCT IS GIVEN AS ARGUMENT AND THEN ONE ELEMENT OF
+            //       IT IS PASSED TO OTHER FUNCTION
+            Value* aggregateOp = extract->getAggregateOperand();
+            DEBUG( dbgs() << "Operand is extractval of argument of the same func: "; aggregateOp->print(dbgs()); dbgs() << "\n"; );
+            call->setOperand( op, aggregateOp );
+          
           } else {
-            
-            // NOTE: if we find lots of cases where earlier does not work we could think of adding 
-            // normalizing pass which would fix constructs to be suitable for this pass. 
-            // In llvm there might be already passes, which may work for doing it.
-            dbgs() << "In BB:\n";
-            call->getParent()->print(dbgs());
-            dbgs() << "\n\nError while converting call:\n";
-            call->print(dbgs());
-            dbgs() << " not able to find smart pointer for call operand: " << op << "  argument op: ";
-            call->getArgOperand(op)->print(dbgs());
-            dbgs() << "\n";
-            fast_assert(false, "Could not find smart pointer for op for converting call.");
-            
+            // TODO: find limits of this operand
+            // TODO: if not found, get limits of address space
+            // TODO: if multiple limits, set NULL limits and complain to user that their code might be a bit unefficient
+            // TODO: initialize safe pointer with limits and pass it to call
+            // for now, we just always pass NULL pointers to limits and check against address space limits
+            DEBUG( dbgs() << "Need to create limits for operand: "; operand->print(dbgs()); dbgs() << "\n"; );
+            call->setOperand( op, convertArgumentToSmartStruct( operand, NULL, NULL, call) );
+            fast_assert(false, "NEVER PASS NULLS AS LIMITS, ANALYSIS SHOULD ALREADY KNOW LIMITS! ");
           }
         }
         op++;
@@ -1555,44 +1387,10 @@ namespace WebCL {
     
     /**
      * Goes through all replaced functions and their arguments.
-     * 
-     * 1. For each function argument that was converted to smart pointer, fix smart pointer initialization.
      *
-     * 2. Go through all call instructions in program. If there has been used replaced safe pointer, fix call so that 
-     *    smart pointer is passed instead of normal pointer. And make sure that SmartPtr.Cur in passed struct has updated value.
-     *
-     * result: after this, old functions and their arguments should be able to be thrown away.
-     *
-     * TODO: get some example transformation from basic calls test case and split to 2 pieces
-     *
-     * define int32 foo(i32* %a) {
-     * entry: 
-     *   %a.addr = alloca i32*
-     *   store i32* %a, i32** %a.addr
-     *   %0 = im_using %a.addr
-     *   %1 = load *i32 %a.addr
-     *   %call = tail call i32 @some_func(i32* %1, i32 %0)
-     *
-     * -- converts to something like --- >
-     * 
-     * define i32 foo({i32*, i32*, i32*}* %a.Smart) {
-     * entry:
-     *   %a.addr = alloca i32*
-     * 
-     *   ; fixing %a.addr initialization and %a.addr.Smart.Cur
-     *   %0 = getelementpointer {i32*, i32*, i32*}* %a.Smart, i32 0, i32 0
-     *   store i32* %0, i32** %a.addr
-     *   store i32* %0, i32** %a.addr.Smart.Cur
-     * 
-     *   ; fixing %a.addr.Smart.First and %a.addr.Smart.Last values
-     *   %1 = getelementpointer {i32*, i32*, i32*}* %a.Smart, i32 0, i32 1
-     *   store i32* %1, i32** %a.addr.Smart.First
-     *   %2 = getelementpointer {i32*, i32*, i32*}* %a.Smart, i32 0, i32 2
-     *   store i32* %2, i32** %a.addr.Smart.Last
-     *   
-     *   ; maybe we just could replace all uses of original a.addr with a.addr.Smart.Cur
-     *   %call = tail call i32 @some_func({i32*,i32*,i32*} %a.Smart, i32 %0)
-     * 
+     * 1. Moves all basic blocks to new function
+     * 2. For each argument if necessary adds exctractvalue instruction to get passed pointer value
+     * 3. Replaces all uses of old function argument with extractvalue instruction or with new function argument if it was not pointer.
      */
     void moveOldFunctionImplementationsToNewSignatures(FunctionMap &replacedFunctions, 
                                                        ArgumentMap &replacedArguments, 
@@ -1619,9 +1417,8 @@ namespace WebCL {
 
           newArg->takeName(oldArg);
           oldArg->setName(newArg->getName() + ".orig");
-
-          // if argument types are not the same we need to find smart pointer that was generated for 
-          // argument and create initializations so that existing smart alloca will get correct values
+          
+          // non safe pointer argument... direct replace
           if (oldArg->getType() == newArg->getType()) {
             DEBUG( dbgs() << "type was not changed. Just replacing oldArg uses with newArg.\n" );
             // argument was not tampered, just replace uses to point the new function
@@ -1629,90 +1426,26 @@ namespace WebCL {
             continue;
           }
 
-          // create GEPs for initializing smart pointer
-          DEBUG( dbgs() << "1 " );
+          // if argument types are not the same we need to find smart pointer that was generated for
+          // argument and create initializations so that existing smart alloca will get correct values
+
+          // argument types are not the same we need to get .Cur element of the passed safe pointer, which is being
+          // used in function and replace all uses with that.
+
+          DEBUG( dbgs() << "1 newArg: "; newArg->print(dbgs()); );
           Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
           newArg->setName(paramName);
-            
-          // create GEPs for reading .Cur .First and .Last of parameter for initializations
-          DEBUG( dbgs() << "2 " );
-          GetElementPtrInst* paramLast = generateGEP(c, newArg, 0, 2, entryBlock.begin(), Twine("") + newArg->getName() + ".Last");
-          GetElementPtrInst* paramFirst = generateGEP(c, newArg, 0, 1, entryBlock.begin(), Twine("") + newArg->getName() + ".First");
-          GetElementPtrInst* paramCur = generateGEP(c, newArg, 0, 0, entryBlock.begin(), Twine("") + newArg->getName() + ".Cur");
 
-          DEBUG( dbgs() << "3 " );
-          LoadInst* paramLastVal = new LoadInst(paramLast, Twine("") + paramLast->getName() + ".LoadedVal");
-          paramLastVal->insertAfter(paramLast);
-          LoadInst* paramFirstVal = new LoadInst(paramFirst, Twine("") + paramFirst->getName() + ".LoadedVal");
-          paramFirstVal->insertAfter(paramFirst);
-          LoadInst* paramCurVal = new LoadInst(paramCur, Twine("") + paramCur->getName() + ".LoadedVal");
-          paramCurVal->insertAfter(paramCur);
+          // get value of passed smart_pointer.cur and replace all uses of original argument with it
+          ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
+                                                                 genArrayRef<unsigned int>(0),
+                                                                 Twine("") + newArg->getName() + ".Cur",
+                                                                 entryBlock.begin());
 
-          // find smart pointer of the %param.addr alloca which was generated by compiler
-          // it should be the only use of the original argument. 
-            
-          // We need to fix construct:
-          // define i32 @foo(i32* %orig_ptr_param) {
-          // entry:
-          // %orig_ptr_param.addr = alloca i32*
-          // store i32* %orig_ptr_param, i32** %orig_ptr_param.addr
-          // 
-          // To ---------> 
-          // define i32 @foo({ i32*, i32*, i32* }* %orig_ptr_param.SmartArg) { 
-          // entry:
-          // %orig_ptr_param.SmartArg.Cur = getelementptr { i32*, i32*, i32* }* %orig_ptr_param.SmartArg, i32 0, i32 0
-          // %orig_ptr_param.SmartArg.Cur.LoadedVal = load i32** %orig_ptr_param.SmartArg.Cur
-          // %orig_ptr_param.SmartArg.First = getelementptr { i32*, i32*, i32* }* %orig_ptr_param.SmartArg, i32 0, i32 1
-          // %orig_ptr_param.SmartArg.First.LoadedVal = load i32** %orig_ptr_param.SmartArg.First
-          // %orig_ptr_param.SmartArg.Last = getelementptr { i32*, i32*, i32* }* %orig_ptr_param.SmartArg, i32 0, i32 2
-          // %orig_ptr_param.SmartArg.Last.LoadedVal = load i32** %orig_ptr_param.SmartArg.Last
-          // 
-          // ; --- some smart pointer initializations for alloca has been done here ---
-          // 
-          // %orig_ptr_param.addr = alloca i32*
-          // store i32* %orig_ptr_param.SmartArg.Cur.LoadedVal, i32** %orig_ptr_param.addr
-          // store i32* %orig_ptr_param.SmartArg.Cur.LoadedVal, i32** %orig_ptr_param.addr.Smart.Cur
-          // store i32* %orig_ptr_param.SmartArg.First.LoadedVal, i32** %orig_ptr_param.addr.Smart.First
-          // store i32* %orig_ptr_param.SmartArg.Last.LoadedVal, i32** %orig_ptr_param.addr.Smart.Last
-
-          fast_assert(oldArg->hasOneUse(), 
-                 "Unknown construct where pointer argument has > 1 uses. (expecting just store instruction to %param.addr)");
-            
-          DEBUG( dbgs() << "4 " );
-          if (StoreInst* store = dyn_cast<StoreInst>( (*oldArg->use_begin()) )) {
-            AllocaInst *origAddrAlloca = dyn_cast<AllocaInst>(store->getPointerOperand());
-            assert(origAddrAlloca);
-            
-            DEBUG( dbgs() << "5 " );
-            StoreInst* newStore = new StoreInst( paramCurVal, origAddrAlloca );
-            ReplaceInstWithInst( store, newStore );
-              
-            // find smart pointer of %param.addr and initialize .Cur, .First and .Last elements
-            if (smartPointers.count(origAddrAlloca) == 0) {
-              dbgs() << "While handling\n";            
-              origAddrAlloca->print(dbgs()); dbgs() << "\n";
-              store->print(dbgs()); dbgs() << "\n";
-              fast_assert(false, "Could not find smart pointer for alloca.");
-            }
-
-            DEBUG( dbgs() << "6 " );
-            SmartPointer* smartAlloca = smartPointers[origAddrAlloca];
-            StoreInst* initCurStore = new StoreInst( paramCurVal, smartAlloca->cur);
-            StoreInst* initFirstStore = new StoreInst( paramFirstVal, smartAlloca->min);
-            StoreInst* initLastStore = new StoreInst( paramLastVal, smartAlloca->max);              
-
-            initLastStore->insertAfter(newStore);
-            initFirstStore->insertAfter(newStore);
-            initCurStore->insertAfter(newStore);
-
-            DEBUG( dbgs() << "done! \n" );
-
-          } else {
-            dbgs() << "\n"; oldArg->use_begin()->print(dbgs()); dbgs() << "\n";
-            fast_assert(false, 
-                        "Unknown construct where pointer argument's use is not StoreInst");
-          }
-                
+          // this potentially will not work if there is store to arg... probably that case is impossible to happen and smart pointer arguments are read-only
+          DEBUG( dbgs() << "Replacing old arg: "; oldArg->getType()->print(dbgs()); dbgs() << " with: "; newArgCur->getType()->print(dbgs()); dbgs() << "\n"; );
+          oldArg->replaceAllUsesWith(newArgCur);
+                    
         } // -- end arguments for loop
       }  
     }
@@ -1758,7 +1491,7 @@ namespace WebCL {
         // TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)
         
         if( !dontTouchArguments && t->isPointerTy() ) {
-          Type* smart_array_struct = getSmartPointerType( c, t );
+          Type* smart_array_struct = getSmartStructType( c, t );
           param_types.push_back( smart_array_struct );          
         } else {
           fast_assert( (!t->isArrayTy()), "Passing array in arguments is not implemented." );
