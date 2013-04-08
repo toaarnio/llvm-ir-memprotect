@@ -464,9 +464,10 @@ namespace WebCL {
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
       makeBuiltinCallsSafe(externalCalls);
 
-      DEBUG( dbgs() << "\n --------------- FINAL OUTPUT --------------\n" );
-      M.print(dbgs(), NULL);
-      DEBUG( dbgs() << "\n --------------- FINAL OUTPUT END --------------\n" );
+      // Helps if pass fails on validation after pass has ended
+      // DEBUG( dbgs() << "\n --------------- FINAL OUTPUT --------------\n" );
+      // M.print(dbgs(), NULL);
+      // DEBUG( dbgs() << "\n --------------- FINAL OUTPUT END --------------\n" );
 
       return true;
     }
@@ -1411,9 +1412,9 @@ namespace WebCL {
                    "Handling function returning array type is not implemented." );
       fast_assert( (!F->isVarArg()), "Variable argument functions are not supported.");
 
-      // check if main or kernel and in that case do not change signature 
+      // TODO: check if needed and if necessary to mask from strict version
+      // check if main or kernel and in that case do not change signature
       bool dontTouchArguments = false;
-
       if (RunUnsafeMode && F->getName() == "main") {
         dontTouchArguments = true;
       }
@@ -1440,10 +1441,11 @@ namespace WebCL {
       FunctionType *new_function_type = FunctionType::get( function_type->getReturnType(), param_types, false );
 
       Function *new_function = Function::Create( new_function_type, F->getLinkage() );
-      new_function->copyAttributesFrom( F );      
+      new_function->copyAttributesFrom( F );
+      
       F->getParent()->getFunctionList().insert( F, new_function );
       new_function->setName( F->getName() + "__smart_ptrs__" );
-      
+
       // add new function to book keepig to show what was replaced
       functionMapping.insert( std::pair< Function*, Function* >( F, new_function ) );
 
@@ -1454,11 +1456,17 @@ namespace WebCL {
       for( Function::arg_iterator 
              a = F->arg_begin(), 
              E = F->arg_end(), 
-             a_new = new_function->arg_begin(); a != E; ++a, ++a_new ) {     
+             a_new = new_function->arg_begin(); a != E; ++a, ++a_new ) {             
+
+        // remove attribute which does not make sense for non-pointer argument
+        // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
+        new_function->removeAttribute(a_new->getArgNo()+1, Attributes::get(c, genArrayRef(llvm::Attributes::NoCapture)));
         
         argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) ); 
         DEBUG( dbgs() << "Mapped orig arg: "; a->print(dbgs()); dbgs() << " -----> "; a_new->print(dbgs()); dbgs() << "\n" );
+        
       }
+      DEBUG( dbgs() << "\nNew signature: "; new_function->print(dbgs()); dbgs() << "\n" );
 
       return new_function;
     }

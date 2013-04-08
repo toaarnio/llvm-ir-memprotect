@@ -1,6 +1,6 @@
 // RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
 // RUN: echo "Check that supported types compile fine." &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
+// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: echo "Creating init for external variables" &&
 // RUN: echo "#include <stdint.h>" >> $OUT_FILE.externals.ok.c &&
 // RUN: echo "int8_t e_i8 = 1; int16_t e_i16 = 2; int32_t e_i32 = 3;" >> $OUT_FILE.externals.ok.c &&
