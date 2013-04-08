@@ -229,57 +229,6 @@ namespace WebCL {
       ModulePass( ID ) {
     }
 
-    /// An allocation of contiguous array of memory.
-    struct SmartPointer {
-      SmartPointer( Value* _current, Value* _min, Value* _max, Value* _smart, Value* _smart_ptr ) :
-        cur( _current ),
-        min( _min ),
-        max( _max ),
-        smart( _smart ),
-        smart_ptr( _smart_ptr ) {
-      }
-
-      Value* cur; // Used only to be able to pass pointer value with limits to function call
-      Value* min; // Contains first valid address
-      Value* max; // Contains last valid address (not last  valid + 1)
-      Value* smart;
-      Value* smart_ptr;
-      
-      // returns last valid address for given type
-      Instruction* maxFor(LLVMContext &c, LoadInst *maxValue, Type *type) {
-        Instruction *retVal = maxValue;
-        if (type != maxValue->getType()) {
-          DEBUG( dbgs() << "Resolving types "; maxValue->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
-          // go to end, cast pointer to required type, rewind one elem and return addr 
-          // (would be easier if max stores first invalid addr)
-          Instruction *firstInvalidAddr = GetElementPtrInst::Create( maxValue, getConstInt(c, 1) );
-          Instruction *bitCast = new BitCastInst(firstInvalidAddr, type);
-          Instruction *lastValid = GetElementPtrInst::Create( bitCast, getConstInt(c, -1) );          
-          lastValid->insertAfter(maxValue);
-          bitCast->insertAfter(maxValue);
-          firstInvalidAddr->insertAfter(maxValue);
-
-          retVal = lastValid;
-          DEBUG( dbgs() << "Resolved: "; retVal->print(dbgs()); dbgs() << " Type: "; retVal->getType()->print(dbgs()); dbgs() << "\n" );
-        }
-        return retVal;
-      }
-
-      // adds type cast to min address if necessary
-      Instruction* minFor(LLVMContext &c, LoadInst *minValue, Type *type) {
-        Instruction *retVal = minValue;
-        if (type != minValue->getType()) {
-          DEBUG( dbgs() << "Resolving types "; minValue->getType()->print(dbgs()); dbgs() << " to "; type->print(dbgs()); dbgs() << "\n" ); 
-          // cast pointer to required type
-          Instruction *bitCast = new BitCastInst(minValue, type);
-          bitCast->insertAfter(minValue);
-          retVal = bitCast;
-        }
-        return retVal;
-      }
-
-    };
-
     // area limits for certain value to respect
     // values should be always stored in correct
     // pointer type
@@ -375,7 +324,6 @@ namespace WebCL {
     typedef std::set< LoadInst* > LoadInstrSet;
     typedef std::set< StoreInst* > StoreInstrSet;
     typedef std::set< Value* > ValueSet;
-    typedef std::map< Value*, SmartPointer* > SmartPointerByValueMap;
     typedef std::vector< Value* > ValueVector;
     typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap; 
 
@@ -407,14 +355,7 @@ namespace WebCL {
       return gep;
     }
 
-    /// Helper function for generating smart pointer struct pointer type
-    Type* getSmartPointerType( LLVMContext& c, Type* t ) {
-      StructType* s = this->getSmartStructType( c, t );
-      Type* smart_array_pointer_type = s->getPointerTo();
-      return smart_array_pointer_type;
-    }
-
-    /// Helper function for generating smart pointer struct type
+    /// Helper function for generating smart pointer struct type for passing function arguments
     StructType* getSmartStructType( LLVMContext& c, Type* t ) {
       std::vector< Type* > types;
       types.push_back( t );
@@ -453,9 +394,6 @@ namespace WebCL {
       StoreInstrSet stores;
       LoadInstrSet loads;
       
-      // smartpointers sorted by value e.g. i32* %a ->  {i32*, i32*, i32*}* %safe_a
-      SmartPointerByValueMap smartPointers;
-
       // limits for values and address spaces
       AreaLimitByValueMap valueLimits;
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
@@ -501,7 +439,7 @@ namespace WebCL {
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
       // gets rid of old functions, replaces calls to old functions and fix call arguments to 
       // use smart pointers in call parameters
-      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, smartPointers); // TODO: remove unused smartPointers argument
+      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments);
       
       DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
       createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
@@ -510,7 +448,7 @@ namespace WebCL {
       findLimits(replacedFunctions, loads, stores, valueLimits, addressSpaceLimits);
       
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
-      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, smartPointers);
+      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls);
       
       // ##########################################################################################
       // #### At this point code should be again perfectly executable and runs with new function 
@@ -524,7 +462,7 @@ namespace WebCL {
       addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
 
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
-      makeBuiltinCallsSafe(externalCalls, smartPointers);
+      makeBuiltinCallsSafe(externalCalls);
 
       DEBUG( dbgs() << "\n --------------- FINAL OUTPUT --------------\n" );
       M.print(dbgs(), NULL);
@@ -1219,7 +1157,7 @@ namespace WebCL {
      * Goes through external function calls and if call is unsafe opencl call convert it to safe webcl implementation
      * which operates with smart pointers
      */
-    void makeBuiltinCallsSafe(CallInstrSet &calls, SmartPointerByValueMap &smartPointers) {
+    void makeBuiltinCallsSafe(CallInstrSet &calls) {
       std::string unsafeBuiltins_tmp[] = {
         "fract", "frexp", "lgamma_r", "modf", "remquo", "sincos", 
         "vload2", "vload3", "vload4", "vload8", "vload16", 
@@ -1309,8 +1247,7 @@ namespace WebCL {
      */
     void fixCallsToUseChangedSignatures(FunctionMap &replacedFunctions, 
                                         ArgumentMap &replacedArguments, 
-                                        CallInstrSet &calls, 
-                                        SmartPointerByValueMap &smartPointers) {
+                                        CallInstrSet &calls) {
 
       for (CallInstrSet::iterator i = calls.begin(); i != calls.end(); i++) {
         CallInst *call = *i;
@@ -1393,8 +1330,7 @@ namespace WebCL {
      * 3. Replaces all uses of old function argument with extractvalue instruction or with new function argument if it was not pointer.
      */
     void moveOldFunctionImplementationsToNewSignatures(FunctionMap &replacedFunctions, 
-                                                       ArgumentMap &replacedArguments, 
-                                                       SmartPointerByValueMap &smartPointers) {
+                                                       ArgumentMap &replacedArguments) {
             
       for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
         // loop through arguments and if type has changed, then create label to access original arg 
