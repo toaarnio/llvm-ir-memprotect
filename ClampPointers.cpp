@@ -267,7 +267,7 @@ namespace WebCL {
         
         if ( Instruction *inst = dyn_cast<Instruction>(limit) ) {
           // this should be removed by other optimizations if not necessary
-          BitCastInst *type_fixed_limit = new BitCastInst(inst, type, "", checkStart);
+          CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(inst, type, "", checkStart);
           ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntArrayRef<Value*>(c, offset), "", checkStart);
           
         } else if ( Constant *constant = dyn_cast<Constant>(limit) ) {
@@ -288,7 +288,7 @@ namespace WebCL {
 
       // TODO: add bookkeeping for freeing memory here
       static AreaLimit* Create( Value* _min, Value* _max, bool _indirect) {
-        DEBUG( dbgs() << "Creating limits min: "; _min->print(dbgs()); dbgs() << " max: "; _max->print(dbgs()); dbgs() << " indirect: " << _indirect << "\n"; );
+        DEBUG( dbgs() << "Creating limits:\nmin: "; _min->print(dbgs()); dbgs() << "\nmax: "; _max->print(dbgs()); dbgs() << "\nindirect: " << _indirect << "\n"; );
         return new AreaLimit(_min, _max, _indirect);
       }
 
@@ -390,6 +390,7 @@ namespace WebCL {
       // maybe could be just one map of sets sorted by opcode
       CallInstrSet internalCalls;
       CallInstrSet externalCalls;
+      CallInstrSet allCalls;
       AllocaInstrSet allocas;
       StoreInstrSet stores;
       LoadInstrSet loads;
@@ -434,6 +435,8 @@ namespace WebCL {
 
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
         sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
+        allCalls.insert(internalCalls.begin(), internalCalls.end());
+        allCalls.insert(externalCalls.begin(), externalCalls.end());
       }
       
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
@@ -445,10 +448,10 @@ namespace WebCL {
       createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
 
       DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY LOAD/STORE OPERAND --------------\n" );
-      findLimits(replacedFunctions, loads, stores, valueLimits, addressSpaceLimits);
+      findLimits(replacedFunctions, loads, stores, allCalls, valueLimits, addressSpaceLimits);
       
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
-      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls);
+      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, valueLimits);
       
       // ##########################################################################################
       // #### At this point code should be again perfectly executable and runs with new function 
@@ -462,7 +465,7 @@ namespace WebCL {
       addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
 
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
-      makeBuiltinCallsSafe(externalCalls);
+      makeBuiltinCallsSafe(externalCalls, valueLimits);
 
       // Helps if pass fails on validation after pass has ended
       // DEBUG( dbgs() << "\n --------------- FINAL OUTPUT --------------\n" );
@@ -507,11 +510,11 @@ namespace WebCL {
           }
           continue;
         
-        } else if ( BitCastInst* bitCast = dyn_cast<BitCastInst>(use) ) {
-          // if bitcast is not from pointer to pointer in same address space, cannot resolve
-          if (!bitCast->getType()->isPointerTy() ||
-              dyn_cast<PointerType>(bitCast->getType())->getAddressSpace() != dyn_cast<PointerType>(val->getType())->getAddressSpace()) {
-            DEBUG( dbgs() << "## Found bitcast that cannot preserve limits.\n" );
+        } else if ( CastInst* cast = dyn_cast<CastInst>(use) ) {
+          // if cast is not from pointer to pointer in same address space, cannot resolve
+          if (!cast->getType()->isPointerTy() ||
+              dyn_cast<PointerType>(cast->getType())->getAddressSpace() != dyn_cast<PointerType>(val->getType())->getAddressSpace()) {
+            DEBUG( dbgs() << "## Found cast that cannot preserve limits.\n" );
             continue;
           }
           DEBUG( dbgs() << "## Found valid pointer cast, keep on tracking.\n" );
@@ -536,6 +539,7 @@ namespace WebCL {
     void findLimits(FunctionMap &replacedFunctions,
                     LoadInstrSet &loads,
                     StoreInstrSet &stores,
+                    CallInstrSet &allCalls,
                     AreaLimitByValueMap &valLimits,
                     AreaLimitSetByAddressSpaceMap &asLimits) {
     
@@ -576,9 +580,21 @@ namespace WebCL {
         LoadInst *load = *i;
         operands.insert(load->getPointerOperand());
       }
+
       for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
         StoreInst *store = *i;
         operands.insert(store->getPointerOperand());
+      }
+
+      // add original call operands to list for resolving limits.
+      for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
+        CallInst *call = *i;
+        for (size_t op = 0; op < call->getNumOperands(); op++) {
+          Value *operand = call->getOperand(op);
+          if (operand->getType()->isPointerTy()) {
+            operands.insert(operand);
+          }
+        }
       }
       
       // optimize single area address space limits
@@ -605,8 +621,8 @@ namespace WebCL {
         // collect only named addresses (for unnamed there cannot be relative references anywhere)
         if (!g->hasUnnamedAddr()) {
           DEBUG( dbgs() << "AS: " << g->getType()->getAddressSpace() << " Added global: "; g->print(dbgs()); dbgs() << "\n"; );
-          Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 0));
-          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 1));
+          Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
+          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
           asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValid, firstInvalid, false));
         }
       }
@@ -835,7 +851,7 @@ namespace WebCL {
           
           // create smart pointer alloca to entry block of function, which is used as a argument to
           // function call
-          Value* newArgument = convertArgumentToSmartStruct( arg,  arg, lastLimit, kernelBlock);
+          Value* newArgument = convertArgumentToSmartStruct( arg,  arg, lastLimit, false, kernelBlock);
 
           args.push_back(newArgument);
 
@@ -872,29 +888,48 @@ namespace WebCL {
      *
      * TODO: or just maybe we could create unnamed global variable and pass it to prevent polluting entry block too much
      */
-    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, Instruction *beforeInstruction) {
-      DEBUG( dbgs() << "1-Converting arg: "; origArg->print(dbgs()); dbgs() << " min: "; minLimit->print(dbgs()); dbgs() << " max: "; maxLimit->print(dbgs()); dbgs() << "\n"; );
+    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, bool isIndirect, Instruction *beforeInstruction) {
+      DEBUG( dbgs() << "1-Converting arg: "; origArg->print(dbgs());
+             dbgs() << "\nmin: "; minLimit->print(dbgs());
+             dbgs() << "\nmax: "; maxLimit->print(dbgs()); dbgs() << "\n"; );
+
+      fast_assert(origArg->getType()->isPointerTy(), "Cannot pass non pointer as smart pointer.");
+      
       // create alloca to entry block of function for the value
       Function* argFun = beforeInstruction->getParent()->getParent();
       BasicBlock &entryBlock = argFun->getEntryBlock();
       LLVMContext &c = argFun->getContext();
       Type *smarArgType = getSmartStructType(c, origArg->getType());
-      AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock);
+      AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock.front());
       
       // create temp smart pointer struct and initialize it with correct values
       GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 0), "", beforeInstruction);
       GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 1), "", beforeInstruction);
       GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 2), "", beforeInstruction);
+      Value *minValue = minLimit;
+      Value *maxValue = maxLimit;
+      // if indirect limit, we need to load value first
+      if (isIndirect) {
+        minValue = new LoadInst(minLimit, "", beforeInstruction);
+        maxValue = new LoadInst(maxLimit, "", beforeInstruction);
+      }
+      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg->getType(), "", beforeInstruction);
+      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg->getType(), "", beforeInstruction);
       new StoreInst(origArg, curGEP, beforeInstruction);
-      new StoreInst(minLimit, minGEP, beforeInstruction);
-      new StoreInst(maxLimit, maxGEP, beforeInstruction);
+      new StoreInst(castedMinAddress, minGEP, beforeInstruction);
+      new StoreInst(castedMaxAddress, maxGEP, beforeInstruction);
       LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", beforeInstruction);
       return smartArgVal;
     }
 
     // copy - paste refactor !
-    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, BasicBlock *initAtEndOf) {
-      DEBUG( dbgs() << "2-Converting arg: "; origArg->print(dbgs()); dbgs() << " min: "; minLimit->print(dbgs()); dbgs() << " max: "; maxLimit->print(dbgs()); dbgs() << "\n"; );      
+    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, bool isIndirect, BasicBlock *initAtEndOf) {
+      DEBUG( dbgs() << "2-Converting arg: "; origArg->print(dbgs());
+             dbgs() << "\nmin: "; minLimit->print(dbgs());
+             dbgs() << "\nmax: "; maxLimit->print(dbgs()); dbgs() << "\n"; );
+
+      fast_assert(origArg->getType()->isPointerTy(), "Cannot pass non pointer as smart pointer.");
+      
       // create alloca to entry block of function for the value
       Function* argFun = initAtEndOf->getParent();
       BasicBlock &entryBlock = argFun->getEntryBlock();
@@ -906,9 +941,18 @@ namespace WebCL {
       GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 0), "", initAtEndOf);
       GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 1), "", initAtEndOf);
       GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 2), "", initAtEndOf);
+      Value *minValue = minLimit;
+      Value *maxValue = maxLimit;
+      // if indirect limit, we need to load value first
+      if (isIndirect) {
+        minValue = new LoadInst(minLimit, "", initAtEndOf);
+        maxValue = new LoadInst(maxLimit, "", initAtEndOf);
+      }
+      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg->getType(), "", initAtEndOf);
+      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg->getType(), "", initAtEndOf);
       new StoreInst(origArg, curGEP, initAtEndOf);
-      new StoreInst(minLimit, minGEP, initAtEndOf);
-      new StoreInst(maxLimit, maxGEP, initAtEndOf);
+      new StoreInst(castedMinAddress, minGEP, initAtEndOf);
+      new StoreInst(castedMaxAddress, maxGEP, initAtEndOf);
       LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", initAtEndOf);
       return smartArgVal;
     }
@@ -1115,10 +1159,11 @@ namespace WebCL {
       // ------ break current BB to 3 parts, start, boundary_check_ok and if_end (meminst is left in ok block)
 
       // ------ this block actually contains the load/store instruction and branch to if.end block
+      // dbgs() << "Going to split:\n"; BB->print(dbgs()); dbgs() << "\nfrom: "; meminst->print(dbgs()); dbgs() << "\n";
       BasicBlock* boundary_ok_block = BB->splitBasicBlock(meminst, "boundary.check.ok." + postfix);
 
       // leave meminst to ok block and split it again to create if.end block
-      BasicBlock* end_block = 
+      BasicBlock* end_block =
         boundary_ok_block->splitBasicBlock(boundary_ok_block->begin()->getNextNode(),
                                            "if.end.boundary.check." + postfix);
       
@@ -1158,7 +1203,7 @@ namespace WebCL {
      * Goes through external function calls and if call is unsafe opencl call convert it to safe webcl implementation
      * which operates with smart pointers
      */
-    void makeBuiltinCallsSafe(CallInstrSet &calls) {
+    void makeBuiltinCallsSafe(CallInstrSet &calls, AreaLimitByValueMap &valLimits) {
       std::string unsafeBuiltins_tmp[] = {
         "fract", "frexp", "lgamma_r", "modf", "remquo", "sincos", 
         "vload2", "vload3", "vload4", "vload8", "vload16", 
@@ -1225,7 +1270,7 @@ namespace WebCL {
             
             Function *newFun = safeBuiltins[oldFun];
             ArgumentMap dummyArg;
-            convertCallToUseSmartPointerArgs(call, newFun, dummyArg);
+            convertCallToUseSmartPointerArgs(call, newFun, dummyArg, valLimits);
           }
 
         } else {
@@ -1248,7 +1293,8 @@ namespace WebCL {
      */
     void fixCallsToUseChangedSignatures(FunctionMap &replacedFunctions, 
                                         ArgumentMap &replacedArguments, 
-                                        CallInstrSet &calls) {
+                                        CallInstrSet &calls,
+                                        AreaLimitByValueMap &valLimits) {
 
       for (CallInstrSet::iterator i = calls.begin(); i != calls.end(); i++) {
         CallInst *call = *i;
@@ -1263,14 +1309,14 @@ namespace WebCL {
         }
 
         Function* newFun = replacedFunctions[oldFun];
-        convertCallToUseSmartPointerArgs(call, newFun, replacedArguments);
+        convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, valLimits);
       }
     }
     
     /**
      * Converts call function to use new function as called function and changes all pointer parameters to be smart pointers.
      */
-    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, ArgumentMap &replacedArguments) {
+    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, ArgumentMap &replacedArguments, AreaLimitByValueMap &valLimits) {
 
       Function* oldFun = call->getCalledFunction();
       call->setCalledFunction(newFun);
@@ -1295,7 +1341,7 @@ namespace WebCL {
           
           if ( Argument* arg = dyn_cast<Argument>(operand) ) {
             // if operand is argument it should be found from replacement map
-            DEBUG( dbgs() << "Operand is argument of the same func!\n"; );
+            DEBUG( dbgs() << "Operand is argument of the same func! Passing it through.\n"; );
             call->setOperand( op, replacedArguments[arg] );
 
           } else if (ExtractValueInst *extract = dyn_cast<ExtractValueInst>(operand)) {
@@ -1304,17 +1350,18 @@ namespace WebCL {
             //       IT IS PASSED TO OTHER FUNCTION
             Value* aggregateOp = extract->getAggregateOperand();
             DEBUG( dbgs() << "Operand is extractval of argument of the same func: "; aggregateOp->print(dbgs()); dbgs() << "\n"; );
+            // TODO: to make this secure we have to check that operand argument is listed in replaced argument map and is really generated by us (types in replaced arguments must been changed)
             call->setOperand( op, aggregateOp );
           
           } else {
-            // TODO: find limits of this operand
-            // TODO: if not found, get limits of address space
-            // TODO: if multiple limits, set NULL limits and complain to user that their code might be a bit unefficient
-            // TODO: initialize safe pointer with limits and pass it to call
-            // for now, we just always pass NULL pointers to limits and check against address space limits
-            DEBUG( dbgs() << "Need to create limits for operand: "; operand->print(dbgs()); dbgs() << "\n"; );
-            call->setOperand( op, convertArgumentToSmartStruct( operand, NULL, NULL, call) );
-            fast_assert(false, "NEVER PASS NULLS AS LIMITS, ANALYSIS SHOULD ALREADY KNOW LIMITS! ");
+            AreaLimit *limit = NULL;
+            if (valLimits.count(operand) > 0) {
+              limit = valLimits[operand];
+            } else {
+              DEBUG( dbgs() << "In basic block: \n"; call->getParent()->print(dbgs()); dbgs() << "\nin call:\n"; call->print(dbgs()); dbgs() << "\nOperand:"; operand->print(dbgs()); dbgs() << "\n"; );
+              fast_assert(false, "Could not resolve limits for a value passed as operand. Try to make code less obscure, write better limit analysis or do not change signature of this method at all and check against all limits of address space.");
+            }
+            call->setOperand( op, convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call) );
           }
         }
         op++;
