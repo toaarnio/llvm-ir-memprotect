@@ -15,6 +15,7 @@
 // RUN: echo "double e_fd_table[8] = {70.0}; " >> $OUT_FILE.externals.ok.c &&
 //
 // RUN: clang -c $OUT_FILE.externals.ok.c -O0 -emit-llvm -o $OUT_FILE.externals.ok.bc &&
+// RUN: llvm-link $OUT_FILE.bc $OUT_FILE.externals.ok.bc -o  $OUT_FILE.linked.bc &&
 // RUN: llvm-link $OUT_FILE.clamped.ll $OUT_FILE.externals.ok.bc -o  $OUT_FILE.clamped.linked.bc &&
 // RUN: ( lli $OUT_FILE.clamped.linked.bc;
 // RUN:   ( [ $? == 205 ] && echo "OK: running code did result 205 as expected.") ||

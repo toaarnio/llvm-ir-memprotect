@@ -395,6 +395,9 @@ namespace WebCL {
       StoreInstrSet stores;
       LoadInstrSet loads;
       
+      // all load/store/call pointer operands
+      ValueSet checkOperands;
+
       // limits for values and address spaces
       AreaLimitByValueMap valueLimits;
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
@@ -435,8 +438,33 @@ namespace WebCL {
 
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
         sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
+        // combine call sets
         allCalls.insert(internalCalls.begin(), internalCalls.end());
         allCalls.insert(externalCalls.begin(), externalCalls.end());
+        
+        // collect values whose limits must be traced
+        for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
+          LoadInst *load = *i;
+          checkOperands.insert(load->getPointerOperand());
+        }
+        
+        for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+          StoreInst *store = *i;
+          checkOperands.insert(store->getPointerOperand());
+        }
+        
+        // add original call operands to list for resolving limits.
+        for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
+          CallInst *call = *i;
+          for (size_t op = 0; op < call->getNumOperands(); op++) {
+            Value *operand = call->getOperand(op);
+            // ignore function pointers... no need to check them
+            if ( operand->getType()->isPointerTy() && !operand->getType()->getPointerElementType()->isFunctionTy() ) {
+              checkOperands.insert(operand);
+            }
+          }
+        }
+        
       }
       
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
@@ -448,7 +476,7 @@ namespace WebCL {
       createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
 
       DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY LOAD/STORE OPERAND --------------\n" );
-      findLimits(replacedFunctions, loads, stores, allCalls, valueLimits, addressSpaceLimits);
+      findLimits(replacedFunctions, checkOperands, valueLimits, addressSpaceLimits);
       
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
       fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, valueLimits);
@@ -459,7 +487,7 @@ namespace WebCL {
       // ##########################################################################################
 
       DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED TODO: collect direct loads etc. who shouldnt need checks --------------\n" );
-      collectSafeExceptions(replacedFunctions, safeExceptions);
+      collectSafeExceptions(checkOperands, replacedFunctions, safeExceptions);
 
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
       addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
@@ -537,9 +565,7 @@ namespace WebCL {
      * Call operands are not a problem anymore, since they has been converted to pass structs, not direct pointers.
      */
     void findLimits(FunctionMap &replacedFunctions,
-                    LoadInstrSet &loads,
-                    StoreInstrSet &stores,
-                    CallInstrSet &allCalls,
+                    ValueSet &checkOperands,
                     AreaLimitByValueMap &valLimits,
                     AreaLimitSetByAddressSpaceMap &asLimits) {
     
@@ -574,35 +600,15 @@ namespace WebCL {
         }
       }
       
-      ValueSet operands;
-      // collect values whose limits to trace
-      for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
-        LoadInst *load = *i;
-        operands.insert(load->getPointerOperand());
-      }
-
-      for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
-        StoreInst *store = *i;
-        operands.insert(store->getPointerOperand());
-      }
-
-      // add original call operands to list for resolving limits.
-      for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
-        CallInst *call = *i;
-        for (size_t op = 0; op < call->getNumOperands(); op++) {
-          Value *operand = call->getOperand(op);
-          if (operand->getType()->isPointerTy()) {
-            operands.insert(operand);
-          }
-        }
-      }
-      
+   
       // optimize single area address space limits
-      for (ValueSet::iterator i = operands.begin(); i != operands.end(); i++) {
+      for (ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
         Value* val = *i;
         DEBUG( dbgs() << "Tracing limits for: "; val->print(dbgs()); dbgs() << "\n"; );
         PointerType *t = dyn_cast<PointerType>(val->getType());
         AreaLimitSet &limitSet = asLimits[t->getAddressSpace()];
+        // allow no limit values in unsafe mode (e.g. externals)
+        if (limitSet.size() == 0 && RunUnsafeMode) continue;
         fast_assert(limitSet.size() > 0, "Pointer to address space without allocations.");
         if ( limitSet.size() == 1 ) {
           DEBUG( dbgs() << "Found single limits for AS: " << t->getAddressSpace() << "\n"; );
@@ -618,8 +624,8 @@ namespace WebCL {
       LLVMContext& c = M.getContext();
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
 
-        // collect only named addresses (for unnamed there cannot be relative references anywhere)
-        if (!g->hasUnnamedAddr()) {
+        // collect only named addresses (for unnamed there cannot be relative references anywhere) and externals are allowed only in unrestricted mode.
+        if (!g->hasUnnamedAddr() && !g->hasExternalLinkage()) {
           DEBUG( dbgs() << "AS: " << g->getType()->getAddressSpace() << " Added global: "; g->print(dbgs()); dbgs() << "\n"; );
           Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
           Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
@@ -638,8 +644,8 @@ namespace WebCL {
       ValueVectorByAddressSpaceMap staticAllocations;
 
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
-        // collect only named addresses (for unnamed there cannot be relative references anywhere)
-        if (!g->hasUnnamedAddr()) {
+        // collect only named linked addresses (for unnamed there cannot be relative references anywhere) externals are allowed only in special case.
+        if (!g->hasUnnamedAddr() && !g->hasExternalLinkage()) {
           DEBUG( dbgs()  << "Found global: "; g->print(dbgs());
                  dbgs() << " of address space: " << g->getType()->getAddressSpace() << "\n"; );
           staticAllocations[g->getType()->getAddressSpace()].push_back(g);
@@ -989,6 +995,66 @@ namespace WebCL {
     }
 
     /**
+     * Resolving from GEP if it is safe.
+     * 
+     * NOTE: really bad algorithm. find out proper analysis for this later. probably some analysis pass could be exploited.
+     */
+    bool isSafeGEP(GetElementPtrInst *gep) {
+      DEBUG( dbgs() << "GEP: resolving limits.. there must be easier way"; );
+      
+      // TODO: if gep refers to gep do recursively...
+      if ( GlobalValue *baseVal = dyn_cast<GlobalValue>(gep->getPointerOperand()) ) {
+        // TODO: try validity of this check... naive case where one clearly overindexes types with constant indices
+        
+        // if unsafe mode allow loading externals without any checks
+        return gep->hasAllConstantIndices() && gep->isInBounds() && (!baseVal->hasExternalLinkage() || RunUnsafeMode);
+      }
+      
+      // check recursively if safe based on safe value....
+      if ( !isSafeAddressToLoad(gep->getPointerOperand()) ) {
+        DEBUG( dbgs() << ".. unknown baseval type, some general resolving method would be nice"; );
+        return false;
+      }
+      return true;
+    }
+      
+    bool isSafeAddressToLoad(Value *operand) {
+      bool isSafe = false;
+      
+      DEBUG( dbgs() << "Checking if safe to load: "; operand->print(dbgs()); dbgs() << " ... "; );
+
+      if ( ConstantExpr *constExpr = dyn_cast<ConstantExpr>(operand) ) {
+        
+        Instruction* inst = getAsInstruction(constExpr);
+        if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
+          isSafe = isSafeGEP(gep);
+        } else {
+          DEBUG( dbgs() << "... unhandled const expr, maybe could be supported if implemented"; );
+        }
+        delete inst;
+
+      } else if ( GlobalValue *globalVal = dyn_cast<GlobalValue>(operand) ) {
+        DEBUG( dbgs() << "loading directly global value.. "; );
+        isSafe = true;
+      } else if ( ConstantStruct *constStruct = dyn_cast<ConstantStruct>(operand) ) {
+        DEBUG( dbgs() << "ConstantStruct value.. maybe if support implemented"; );
+      } else if ( ConstantVector *constVec = dyn_cast<ConstantVector>(operand) ) {
+        DEBUG( dbgs() << "ConstantVector value.. maybe if support implemented"; );
+      } else if ( ConstantArray *constArr = dyn_cast<ConstantArray>(operand) ) {
+        DEBUG( dbgs() << "ConstantArray value.. maybe if support implemented"; );
+      } else if ( ConstantDataSequential *constData = dyn_cast<ConstantDataSequential>(operand) ) {
+        DEBUG( dbgs() << "ConstantDataSequential value.. maybe if support implemented"; );
+      } else if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(operand) ) {
+        isSafe = isSafeGEP(gep);
+      } else {
+        dbgs() << "maybe some day in future my friend";
+      }
+      
+      DEBUG( dbgs() << "... returning: " << (isSafe ? "safe!" : "unsafe") << "\n"; );
+      return isSafe;
+    }
+      
+    /**
      * Collects values, which can be handled without modifying.
      * 
      * e.g. main function arguments (int8** is not currently supported 
@@ -996,7 +1062,16 @@ namespace WebCL {
      *
      * Note: this is quite dirty symbol name based hack...
      */
-    void collectSafeExceptions(FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
+    void collectSafeExceptions(ValueSet &checkOperands, FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
+
+      for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
+        Value *operand = *i;
+
+        if (isSafeAddressToLoad(operand)) {
+          safeExceptions.insert(operand);
+        }
+      }
+      
       if (RunUnsafeMode) {
         for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
           Function *check = i->second;
@@ -1010,32 +1085,14 @@ namespace WebCL {
             }
           }
         }
-      } else {
-        DEBUG( dbgs() << "No exceptions added in strict mode. \n" );
+
+        // don't check loadning externals...
+        for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
+          Value *operand = *i;
+        }
       }
     }
     
-    /**
-     * Returns true if pointer limits can be safely resolved for the global value.
-     *
-     * Used to whitelist supported IR constructs.
-     */
-    bool isSafeGlobalValue(GlobalValue *g) {
-      
-      // if address of global value is not important 
-      if ( g->hasUnnamedAddr() ) {
-        return true;
-      }
-      
-      // if variable is internal and we should be able to resolve safely its limits
-      if ( g->hasInternalLinkage() ) {
-        return true;
-      }
-
-      return false;
-    }
-    
-
     /**
      * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
      */
