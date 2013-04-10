@@ -407,7 +407,7 @@ namespace WebCL {
       consolidateStaticMemory( M );
 
       DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
-      findAddressSpaceLimits( M, addressSpaceLimits );
+      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits );
 
       
       // ####### Analyze all functions
@@ -464,7 +464,6 @@ namespace WebCL {
             }
           }
         }
-        
       }
       
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
@@ -608,11 +607,39 @@ namespace WebCL {
         PointerType *t = dyn_cast<PointerType>(val->getType());
         AreaLimitSet &limitSet = asLimits[t->getAddressSpace()];
         // allow no limit values in unsafe mode (e.g. externals)
-        if (limitSet.size() == 0 && RunUnsafeMode) continue;
+        if (limitSet.size() == 0 && RunUnsafeMode) {
+          DEBUG( dbgs() << "unrestricted mode and no limits found... skipping\n"; );
+          continue;
+        }
+
         fast_assert(limitSet.size() > 0, "Pointer to address space without allocations.");
         if ( limitSet.size() == 1 ) {
           DEBUG( dbgs() << "Found single limits for AS: " << t->getAddressSpace() << "\n"; );
           valLimits[val] = *(limitSet.begin());
+
+        } else {
+          // TODO: try one more time resolving limits from val... e.g.  in case if direct access to getelementptr...
+          //       so this goes back to this recursively finding limits...
+          // float* getelementptr inbounds ({ [10 x float] }* @AddressSpace0StaticData, i32 0, i32 0, i64 0)
+          //
+          // for now just do this ad-hoc hack to get current test cases running, if more sophisticated algorithm is needed
+          // please implement.. maybe we can run some analysis pass for it...
+          if (ConstantExpr *expr = dyn_cast<ConstantExpr>(val)) {
+            Instruction *inst = getAsInstruction(expr);
+            
+            if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst)) {
+              if (valLimits.count(gep->getPointerOperand())) {
+                DEBUG( dbgs() << "Found constant GEP limits from base value limits! \n"; );
+                valLimits[val] = valLimits[gep->getPointerOperand()];
+              }
+            }
+            
+            delete inst;
+          }
+        }
+
+        if (valLimits.count(val) == 0) {
+          DEBUG( dbgs() << "Could not find single limits! \n"; );
         }
       }
     }
@@ -620,7 +647,7 @@ namespace WebCL {
     /**
      * Goes through global variables and adds limits to bookkeepping
      */
-    void findAddressSpaceLimits( Module &M, AreaLimitSetByAddressSpaceMap &asLimits ) {
+    void findAddressSpaceLimits( Module &M, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits ) {
       LLVMContext& c = M.getContext();
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
 
@@ -633,8 +660,10 @@ namespace WebCL {
           // pointercast all limits to float* to make result more readable
           Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
           Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
-          asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValid, firstInvalid, false));
-
+          AreaLimit *gvLimits = AreaLimit::Create(firstValid, firstInvalid, false);
+          asLimits[g->getType()->getAddressSpace()].insert(gvLimits);
+          // make sure that references to this global variable always respects its own limits
+          valLimits[g] = gvLimits;
           /* GlobalAlias does not support GEP... if the support is added, then uncommenting this will improve readability of produced code greatly
           // requires an extra alias for GEP and for Cast or llvm-as throws error: "Aliasee should be either GlobalValue or bitcast of GlobalValue"
           GlobalAlias *firstInvalidAliasTemp = new GlobalAlias(firstInvalid->getType(), GlobalValue::InternalLinkage,
