@@ -660,9 +660,15 @@ namespace WebCL {
 
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
         // collect only named linked addresses (for unnamed there cannot be relative references anywhere) externals are allowed only in special case.
-        if (!g->hasUnnamedAddr() && !g->hasExternalLinkage()) {
-          DEBUG( dbgs()  << "Found global: "; g->print(dbgs());
-                 dbgs() << " of address space: " << g->getType()->getAddressSpace() << "\n"; );
+        DEBUG( dbgs()  << "Found global: "; g->print(dbgs());
+               dbgs() << " of address space: " << g->getType()->getAddressSpace(); );
+
+        if ( g->hasUnnamedAddr() ) {
+          DEBUG( dbgs() << " ### Ignored because unnamed address \n"; );
+        } else if ( g->hasExternalLinkage() && g->isDeclaration() ) {
+          DEBUG( dbgs() << " ### Ignored because extern linkage \n"; );
+        } else {
+          DEBUG( dbgs() << " ### Collected to address space structure \n"; );
           staticAllocations[g->getType()->getAddressSpace()].push_back(g);
         }
       }
@@ -1039,7 +1045,7 @@ namespace WebCL {
       // TODO: try validity of this check... naive case where one clearly overindexes types with constant indices
       if ( GlobalValue *baseVal = dyn_cast<GlobalValue>(gep->getPointerOperand()) ) {
         DEBUG( dbgs() << "hasExternalLinkage: " << baseVal->hasExternalLinkage() << "\n"; );
-        return (!baseVal->hasExternalLinkage() || RunUnsafeMode);
+        return ( !(baseVal->hasExternalLinkage() && baseVal->isDeclaration()) || RunUnsafeMode);
       }
       
       // check recursively if safe based on safe value....
@@ -1083,7 +1089,7 @@ namespace WebCL {
       } else if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(operand) ) {
         isSafe = isSafeGEP(gep);
       } else {
-        dbgs() << "maybe some day in future my friend";
+        DEBUG( dbgs() << "unhandled case"; );
       }
       
       DEBUG( dbgs() << "... returning: " << (isSafe ? "safe!" : "unsafe") << "\n"; );
