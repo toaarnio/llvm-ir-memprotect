@@ -631,16 +631,20 @@ namespace WebCL {
           aliasName << "AS" << g->getType()->getAddressSpace();
           PointerType *castType = PointerType::get(Type::getFloatTy(c), g->getType()->getAddressSpace());
           // pointercast all limits to float* to make result more readable
-          Constant *firstValid = ConstantExpr::getPointerCast( ConstantExpr::getGetElementPtr(g, getConstInt(c,0)), castType );
+          Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
           Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
+          asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValid, firstInvalid, false));
 
+          /* GlobalAlias does not support GEP... if the support is added, then uncommenting this will improve readability of produced code greatly
           // requires an extra alias for GEP and for Cast or llvm-as throws error: "Aliasee should be either GlobalValue or bitcast of GlobalValue"
           GlobalAlias *firstInvalidAliasTemp = new GlobalAlias(firstInvalid->getType(), GlobalValue::InternalLinkage,
                                                                aliasName.str() + ".temp", firstInvalid, &M);
-          GlobalAlias *firstValidAlias = new GlobalAlias(firstValid->getType(), GlobalValue::InternalLinkage, aliasName.str() + ".min", firstValid, &M);
+          GlobalAlias *firstValidAlias = new GlobalAlias(firstValid->getType(), GlobalValue::InternalLinkage, aliasName.str() + ".min",
+                                                         ConstantExpr::getPointerCast(firstValid, castType), &M);
           GlobalAlias *firstInvalidAlias = new GlobalAlias(castType, GlobalValue::InternalLinkage, aliasName.str() + ".max",
                                                            ConstantExpr::getPointerCast(firstInvalidAliasTemp, castType), &M);
           asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValidAlias, firstInvalidAlias, false));
+          */
         }
       }
     }
@@ -741,9 +745,8 @@ namespace WebCL {
           Constant *structVal = ConstantExpr::getInBoundsGetElementPtr
             (dyn_cast<Constant>(aSpaceStruct), genIntArrayRef<Constant*>( c, 0, valIndex) );
           
-          // structVal->takeName(origVal);
-
-          GlobalAlias *fieldAlias = new GlobalAlias(structVal->getType(), GlobalValue::InternalLinkage, "", structVal, &M);
+          // Currently LLVM IR does not support GEP in alias. If support is added, uncommenting this will greatly improve readability of produced code
+          // for alias: GlobalAlias *fieldAlias = new GlobalAlias(structVal->getType(), GlobalValue::InternalLinkage, "", structVal, &M);
           
           DEBUG( dbgs() << "Orig val type: "; origVal->getType()->print(dbgs()); 
                  dbgs() << " new val type: "; structVal->getType()->print(dbgs()); dbgs() << "\n"; );
@@ -751,18 +754,21 @@ namespace WebCL {
                  dbgs() << " new val: "; structVal->print(dbgs()); dbgs() << "\n"; );
 
           // use alias everywhere
-          origVal->replaceAllUsesWith(fieldAlias);
+          // for alias: origVal->replaceAllUsesWith(fieldAlias);
+          origVal->replaceAllUsesWith(structVal);
           
           // set name according to original value type and remove original
           if ( AllocaInst* alloca = dyn_cast<AllocaInst>(origVal) ) {
-            fieldAlias->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
+            // for alias: fieldAlias->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
+            structVal->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
             alloca->eraseFromParent();
           } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
-            fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
+            // for alias: fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
+            structVal->setName(aSpaceStruct->getName() + "." + origVal->getName());
             global->eraseFromParent();
           }
           
-          DEBUG( dbgs() << "Alias: "; fieldAlias->print(dbgs()); dbgs() << "\n"; );
+          //DEBUG( dbgs() << "Alias: "; fieldAlias->print(dbgs()); dbgs() << "\n"; );
         }
       }
     }
@@ -1019,14 +1025,21 @@ namespace WebCL {
      * NOTE: really bad algorithm. find out proper analysis for this later. probably some analysis pass could be exploited.
      */
     bool isSafeGEP(GetElementPtrInst *gep) {
-      DEBUG( dbgs() << "GEP: resolving limits.. there must be easier way"; );
-      
-      // TODO: if gep refers to gep do recursively...
+      DEBUG( dbgs() << "GEP: resolving limits.. "; );
+      if (!gep->hasAllConstantIndices()) {
+        DEBUG( dbgs() << "not constant indices\n"; );
+        return false;
+      }
+
+      if (!gep->isInBounds()) {
+        DEBUG( dbgs() << "not inbounds\n"; );
+        return false;
+      }
+
+      // TODO: try validity of this check... naive case where one clearly overindexes types with constant indices
       if ( GlobalValue *baseVal = dyn_cast<GlobalValue>(gep->getPointerOperand()) ) {
-        // TODO: try validity of this check... naive case where one clearly overindexes types with constant indices
-        
-        // if unsafe mode allow loading externals without any checks
-        return gep->hasAllConstantIndices() && gep->isInBounds() && (!baseVal->hasExternalLinkage() || RunUnsafeMode);
+        DEBUG( dbgs() << "hasExternalLinkage: " << baseVal->hasExternalLinkage() << "\n"; );
+        return (!baseVal->hasExternalLinkage() || RunUnsafeMode);
       }
       
       // check recursively if safe based on safe value....
@@ -1034,6 +1047,7 @@ namespace WebCL {
         DEBUG( dbgs() << ".. unknown baseval type, some general resolving method would be nice"; );
         return false;
       }
+      
       return true;
     }
       
@@ -1055,8 +1069,8 @@ namespace WebCL {
       } else if ( GlobalAlias *globalAlias = dyn_cast<GlobalAlias>(operand) ) {
         DEBUG( dbgs() << "loading directly global alias.. "; );
         isSafe = true;      
-      } else if ( GlobalValue *globalVal = dyn_cast<GlobalValue>(operand) ) {
-        DEBUG( dbgs() << "loading directly global value.. "; );
+      } else if ( GlobalVariable *globalVal = dyn_cast<GlobalVariable>(operand) ) {
+        DEBUG( dbgs() << "loading directly global variable .. "; );
         isSafe = true;
       } else if ( ConstantStruct *constStruct = dyn_cast<ConstantStruct>(operand) ) {
         DEBUG( dbgs() << "ConstantStruct value.. maybe if support implemented"; );
@@ -1108,10 +1122,10 @@ namespace WebCL {
           }
         }
 
-        // don't check loadning externals...
-        for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
-          Value *operand = *i;
-        }
+        // TODO: don't check loading externals...
+        // for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
+        //   Value *operand = *i;
+        // }
       }
     }
     
