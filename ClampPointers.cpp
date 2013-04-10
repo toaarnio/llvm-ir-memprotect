@@ -272,7 +272,7 @@ namespace WebCL {
           
         } else if ( Constant *constant = dyn_cast<Constant>(limit) ) {
           Constant *type_fixed_limit = ConstantExpr::getBitCast(constant, type);
-          ret_limit = ConstantExpr::getGetElementPtr( type_fixed_limit, genIntArrayRef<Constant*>(c, offset));
+          ret_limit = ConstantExpr::getGetElementPtr( type_fixed_limit, getConstInt(c, offset) );
           
         } else {
           fast_assert(false, "Couldnt resolve type of the limit value.");
@@ -496,9 +496,9 @@ namespace WebCL {
       makeBuiltinCallsSafe(externalCalls, valueLimits);
 
       // Helps if pass fails on validation after pass has ended
-      // DEBUG( dbgs() << "\n --------------- FINAL OUTPUT --------------\n" );
-      // M.print(dbgs(), NULL);
-      // DEBUG( dbgs() << "\n --------------- FINAL OUTPUT END --------------\n" );
+      dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
+      M.print(dbgs(), NULL);
+      dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
 
       return true;
     }
@@ -627,9 +627,20 @@ namespace WebCL {
         // collect only named addresses (for unnamed there cannot be relative references anywhere) and externals are allowed only in unrestricted mode.
         if (!g->hasUnnamedAddr() && !g->hasExternalLinkage()) {
           DEBUG( dbgs() << "AS: " << g->getType()->getAddressSpace() << " Added global: "; g->print(dbgs()); dbgs() << "\n"; );
-          Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
+          std::stringstream aliasName;
+          aliasName << "AS" << g->getType()->getAddressSpace();
+          PointerType *castType = PointerType::get(Type::getFloatTy(c), g->getType()->getAddressSpace());
+          // pointercast all limits to float* to make result more readable
+          Constant *firstValid = ConstantExpr::getPointerCast( ConstantExpr::getGetElementPtr(g, getConstInt(c,0)), castType );
           Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
-          asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValid, firstInvalid, false));
+
+          // requires an extra alias for GEP and for Cast or llvm-as throws error: "Aliasee should be either GlobalValue or bitcast of GlobalValue"
+          GlobalAlias *firstInvalidAliasTemp = new GlobalAlias(firstInvalid->getType(), GlobalValue::InternalLinkage,
+                                                               aliasName.str() + ".temp", firstInvalid, &M);
+          GlobalAlias *firstValidAlias = new GlobalAlias(firstValid->getType(), GlobalValue::InternalLinkage, aliasName.str() + ".min", firstValid, &M);
+          GlobalAlias *firstInvalidAlias = new GlobalAlias(castType, GlobalValue::InternalLinkage, aliasName.str() + ".max",
+                                                           ConstantExpr::getPointerCast(firstInvalidAliasTemp, castType), &M);
+          asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValidAlias, firstInvalidAlias, false));
         }
       }
     }
@@ -727,23 +738,31 @@ namespace WebCL {
           Value* origVal = values[valIndex];
 
           // get field of struct
-          Value* structVal = ConstantExpr::getInBoundsGetElementPtr
+          Constant *structVal = ConstantExpr::getInBoundsGetElementPtr
             (dyn_cast<Constant>(aSpaceStruct), genIntArrayRef<Constant*>( c, 0, valIndex) );
+          
+          // structVal->takeName(origVal);
 
-          structVal->takeName(origVal);
-             
+          GlobalAlias *fieldAlias = new GlobalAlias(structVal->getType(), GlobalValue::InternalLinkage, "", structVal, &M);
+          
           DEBUG( dbgs() << "Orig val type: "; origVal->getType()->print(dbgs()); 
                  dbgs() << " new val type: "; structVal->getType()->print(dbgs()); dbgs() << "\n"; );
           DEBUG( dbgs() << "Orig val: "; origVal->print(dbgs()); 
                  dbgs() << " new val: "; structVal->print(dbgs()); dbgs() << "\n"; );
 
-          origVal->replaceAllUsesWith(structVal);
-
+          // use alias everywhere
+          origVal->replaceAllUsesWith(fieldAlias);
+          
+          // set name according to original value type and remove original
           if ( AllocaInst* alloca = dyn_cast<AllocaInst>(origVal) ) {
+            fieldAlias->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
             alloca->eraseFromParent();
           } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
+            fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
             global->eraseFromParent();
           }
+          
+          DEBUG( dbgs() << "Alias: "; fieldAlias->print(dbgs()); dbgs() << "\n"; );
         }
       }
     }
@@ -1033,6 +1052,9 @@ namespace WebCL {
         }
         delete inst;
 
+      } else if ( GlobalAlias *globalAlias = dyn_cast<GlobalAlias>(operand) ) {
+        DEBUG( dbgs() << "loading directly global alias.. "; );
+        isSafe = true;      
       } else if ( GlobalValue *globalVal = dyn_cast<GlobalValue>(operand) ) {
         DEBUG( dbgs() << "loading directly global value.. "; );
         isSafe = true;
