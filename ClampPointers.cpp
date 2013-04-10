@@ -496,9 +496,9 @@ namespace WebCL {
       makeBuiltinCallsSafe(externalCalls, valueLimits);
 
       // Helps if pass fails on validation after pass has ended
-      dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
-      M.print(dbgs(), NULL);
-      dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
+      //dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
+      //M.print(dbgs(), NULL);
+      //dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
 
       return true;
     }

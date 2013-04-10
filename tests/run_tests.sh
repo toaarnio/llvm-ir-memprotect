@@ -29,6 +29,8 @@ cd $current_dir;
 export OCLANG=$PWD/oclang.sh
 export RUN_KERNEL=$PWD/run_kernel.sh
 
+failed_tests=""
+
 # if test file not given in $1 then find the tests
 if [ -z $1 ]; then
     tests=$(ls -1 test_*.c test_*.ll test_*.cl 2> /dev/null);
@@ -53,6 +55,7 @@ function run_test {
         echo "TEST FAILED! intermediate files should be found in run_temp directory";
         echo $test_command
         echo ">>>>>>>>>> !!! !!! FAIL";
+        failed_tests="$failed_tests $1";
     fi
 }
 
@@ -61,3 +64,6 @@ rm -f $temp_dir/*
 for test_file in $tests;do
     run_test $test_file;
 done;
+
+echo "Failed tests: $failed_tests";
+
