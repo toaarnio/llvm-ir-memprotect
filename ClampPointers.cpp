@@ -574,6 +574,7 @@ namespace WebCL {
     bool resolveAncestors(Value *val, AreaLimitByValueMap &valLimits, int recursion_level = 0) {
       Value *next = NULL;
       DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+      
       if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(val) ) {
         DEBUG( dbgs() << "Found GEP: "; val->print(dbgs()); dbgs() << " tracing to baseval.\n"; );
         next = gep->getPointerOperand();
@@ -696,9 +697,20 @@ namespace WebCL {
     void findAddressSpaceLimits( Module &M, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits ) {
       LLVMContext& c = M.getContext();
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
-
-        // collect only named addresses (for unnamed there cannot be relative references anywhere) and externals are allowed only in unrestricted mode.
-        if (!g->hasUnnamedAddr() && !g->hasExternalLinkage()) {
+        
+        // for now unnamed addresses are kept ouside from general address space limits, because they might pollute it
+        // unnecessarily. If unnamed address requires limits, they are created on demand.
+        // this should work, because there shouldn't be any other than direct references to this kind of globals
+        if ( g->hasUnnamedAddr() ) {
+          DEBUG( dbgs() << "Found unnamed address, adding limits to bookkeeping\n"; );
+          Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 0, 0));
+          // NOTE: this works, but could be safer to check element type of global and get limits from number of element
+          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 1, 0));
+          valLimits[g] = AreaLimit::Create(firstValid, firstInvalid, false);
+        }
+        
+        // collect only named addresses which are not externs
+        if (!g->hasUnnamedAddr() && !(g->hasExternalLinkage() && g->isDeclaration())) {
           DEBUG( dbgs() << "AS: " << g->getType()->getAddressSpace() << " Added global: "; g->print(dbgs()); dbgs() << "\n"; );
           std::stringstream aliasName;
           aliasName << "AS" << g->getType()->getAddressSpace();
