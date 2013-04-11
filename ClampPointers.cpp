@@ -465,6 +465,7 @@ namespace WebCL {
           }
         }
       }
+      // ####### analyze is done
       
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
       // gets rid of old functions, replaces calls to old functions and fix call arguments to 
@@ -710,6 +711,22 @@ namespace WebCL {
           AllocaInst *alloca = dyn_cast<AllocaInst>(i);
           if (alloca != NULL) {
             staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
+          }
+        }
+      }
+      
+      // simple fix of alignment of mem intrinsics
+      for (Module::iterator f = M.begin(); f != M.end(); f++) {
+        if (f->isIntrinsic()) {
+          if (f->getName().find("llvm.mem") == 0) {
+            for ( Function::use_iterator use = f->use_begin(); use != f->use_end(); use++ ) {
+              if ( CallInst *call = dyn_cast<CallInst>(*use) ) {
+                // we can set alignment argument to 1 which is always valid argument, later optimization passes sets
+                // alignment back to optimal value
+                call->setOperand(3, getConstInt(c, 1));
+                DEBUG( dbgs() << "After: "; call->print(dbgs()); dbgs() << "\n"; );
+              };
+            }
           }
         }
       }
