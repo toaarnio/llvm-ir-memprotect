@@ -506,26 +506,32 @@ namespace WebCL {
     /**
      * Resolves uses of value and limits that it should respect
      *
-     * Do simple data dependency analysis to be able to resolve limits which
-     * values should respect in case of same address space has more 
-     * than allocated 1 areas.
+     * Does also simple data dependency analysis to be able to 
+     * resolve limits which values should respect in case of same 
+     * address space has more than allocated 1 areas.
      *
      * Follows uses of val and in case of storing to memory, keep track if
      * there is always only single limits for that location.
+     *
+     * TODO: needs more clear implementation
      */
-    void resolveUses(Value *val, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits) {
+    void resolveUses(Value *val, AreaLimitByValueMap &valLimits, int recursion_level = 0) {
       
       // check all uses of value until cannot trace anymore
       for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
         Value *use = *i;
-        
+       
         // ----- continue to next use if cannot be sure about the limits
         if ( dyn_cast<GetElementPtrInst>(use) ) {
-          DEBUG( dbgs() << "Found GEP: "; use->print(dbgs()); dbgs() << "\n## Preserving original limits KEEP ON TRACKING\n"; );
+          DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+          DEBUG( dbgs() << "Found GEP: "; use->print(dbgs()); dbgs() << "  ## Preserving original limits KEEP ON TRACKING\n"; );
         } else if ( LoadInst *load = dyn_cast<LoadInst>(use) ) {
-          DEBUG( dbgs() << "Found LOAD: "; use->print(dbgs()); dbgs() << "\n## If we reached here we should have already resolved limits from somewhere. Keep on resolving.\n"; );
+          DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+          DEBUG( dbgs() << "Found LOAD: "; use->print(dbgs()); dbgs() << "  ## If we reached here we should have already resolved limits of pointer operand from somewhere.\n"; );
+          
         } else if ( StoreInst *store = dyn_cast<StoreInst>(use) ) {
-          DEBUG( dbgs() << "Found STORE: "; use->print(dbgs()); dbgs() << "\n## If we are storing pointer, also pass VAL limits to destination address. DEPENDENCY ANALYSIS\n" );
+          DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+          DEBUG( dbgs() << "Found STORE: "; use->print(dbgs()); dbgs() << "  ## If we are storing pointer, also pass VAL limits to destination address.\n" );
           
           // first check if use is actually in value operand and in that case set limits for destination pointer
           if (store->getValueOperand() == val) {
@@ -534,7 +540,7 @@ namespace WebCL {
                           "Dependency analysis cannot resolve single limits for a memory address. This is a bit nasty problem to resolve, since we cannot pass multiple possible limits to functions safe pointer argument. SPIR + removing all safe pointer argument hassling could help this some day. For now avoid assigning pointers from different ranges to the same variable.");
             }
             valLimits[store->getPointerOperand()] = valLimits[val];
-            resolveUses(store->getPointerOperand(), valLimits, asLimits);
+            resolveUses(store->getPointerOperand(), valLimits, recursion_level + 1);
           }
           continue;
         
@@ -542,21 +548,75 @@ namespace WebCL {
           // if cast is not from pointer to pointer in same address space, cannot resolve
           if (!cast->getType()->isPointerTy() ||
               dyn_cast<PointerType>(cast->getType())->getAddressSpace() != dyn_cast<PointerType>(val->getType())->getAddressSpace()) {
-            DEBUG( dbgs() << "## Found cast that cannot preserve limits.\n" );
+            DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+            DEBUG( dbgs() << "  ## Found cast that cannot preserve limits.\n" );
             continue;
           }
-          DEBUG( dbgs() << "## Found valid pointer cast, keep on tracking.\n" );
-        
+          DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+          DEBUG( dbgs() << "  ## Found valid pointer cast, keep on tracking.\n" );
+                  
         } else {
           // notify about unexpected cannot be resolved cases for debug
-          DEBUG( dbgs() << "#### Cannot resolve limit for: "; use->print(dbgs()); dbgs() << "\n" );
+          DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+          DEBUG( dbgs() << "  #### Cannot resolve limit for: "; use->print(dbgs()); dbgs() << "\n");
           continue;
         }
         
         // limits of use are directly derived from value
         valLimits[use] = valLimits[val];
-        resolveUses(use, valLimits, asLimits);
+        resolveUses(use, valLimits, recursion_level + 1);
       }
+    }
+    
+    /**
+     * Traces from leafs to root if limit is found and then adds limits to each step.
+     */
+    bool resolveAncestors(Value *val, AreaLimitByValueMap &valLimits, int recursion_level = 0) {
+      Value *next = NULL;
+      DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+      if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(val) ) {
+        DEBUG( dbgs() << "Found GEP: "; val->print(dbgs()); dbgs() << " tracing to baseval.\n"; );
+        next = gep->getPointerOperand();
+      } else if ( LoadInst *load = dyn_cast<LoadInst>(val) ) {
+        DEBUG( dbgs() << "Found LOAD: "; val->print(dbgs()); dbgs() << " tracing to memaddr.\n"; );
+        next = load->getPointerOperand();
+      } else if ( StoreInst *store = dyn_cast<StoreInst>(val) ) {
+        DEBUG( dbgs() << "Found STORE: "; val->print(dbgs()); dbgs() << " cant be, store does not return value.\n" );
+        fast_assert(false, "No way! I dont have any idea how code can reach this point.");
+      } else if ( CastInst* cast = dyn_cast<CastInst>(val) ) {
+        // if cast is not from pointer to pointer in same address space, cannot resolve
+        if (!cast->getType()->isPointerTy() ||
+            dyn_cast<PointerType>(cast->getType())->getAddressSpace() != dyn_cast<PointerType>(val->getType())->getAddressSpace()) {
+          DEBUG( dbgs() << "  ## non pointer result or wrong address space.\n" );
+          return false;
+        } else {
+          DEBUG( dbgs() << " tracing to src op.\n" );
+          next = cast->getOperand(0);
+        }
+      } else if ( ConstantExpr *expr = dyn_cast<ConstantExpr>(val) ) {
+          
+          Instruction* inst = getAsInstruction(expr);
+          if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
+            DEBUG( dbgs() << "... constant GEP, following to baseval.\n"; );
+            next = gep->getPointerOperand();
+          } else {
+            DEBUG( dbgs() << "... unhandled const expr, maybe could be supported if implemented\n"; );
+          }
+          delete inst;
+      }
+      
+      if (next) {
+        if (valLimits.count(next) > 0) {
+          valLimits[val] = valLimits[next];
+          return true;
+        } else {
+          if (resolveAncestors(next, valLimits, recursion_level + 1)) {
+            valLimits[val] = valLimits[next];
+            return true;
+          }
+        }
+      }
+      return false;
     }
   
     /**
@@ -570,6 +630,7 @@ namespace WebCL {
                     AreaLimitSetByAddressSpaceMap &asLimits) {
     
       // first trace all uses of function arguments to find their limits
+      DEBUG( dbgs() << "----- Tracing function pointer argument uses \n"; );
       for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
         Function *originalFunc = i->first;
         Function *safePointerFunction = i->second;
@@ -582,7 +643,7 @@ namespace WebCL {
           // if safe pointer argument, trace uses
           if (originalArg.getType() != replaceArg.getType()) {
 
-            fast_assert(replaceArg.getNumUses() == 1, "Safe pointer argument should have only one extractval use so far.");
+            fast_assert(replaceArg.getNumUses() == 1, "Safe pointer argument should have only one extractval use as far as expected currently... (the original use of arg)");
             ExtractValueInst *cur = dyn_cast<ExtractValueInst>(*replaceArg.use_begin());
             fast_assert(cur, "Found invalid type of use. Maybe passed directly to other function.");
             
@@ -593,15 +654,15 @@ namespace WebCL {
             
             // Init direct limits for current and do some analysis to resolve derived limits
             valLimits[cur] = AreaLimit::Create(minLimit, maxLimit, false);
-            resolveUses(cur, valLimits, asLimits);
+            resolveUses(cur, valLimits);
           }
           
           originalArgIter++;
         }
       }
       
-   
       // optimize single area address space limits
+      DEBUG( dbgs() << "----- Tracing call/load/store operands: \n"; );
       for (ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
         Value* val = *i;
         DEBUG( dbgs() << "Tracing limits for: "; val->print(dbgs()); dbgs() << "\n"; );
@@ -617,30 +678,14 @@ namespace WebCL {
         if ( limitSet.size() == 1 ) {
           DEBUG( dbgs() << "Found single limits for AS: " << t->getAddressSpace() << "\n"; );
           valLimits[val] = *(limitSet.begin());
-
-        } else {
-          // TODO: try one more time resolving limits from val... e.g.  in case if direct access to getelementptr...
-          //       so this goes back to this recursively finding limits...
-          // float* getelementptr inbounds ({ [10 x float] }* @AddressSpace0StaticData, i32 0, i32 0, i64 0)
-          //
-          // for now just do this ad-hoc hack to get current test cases running, if more sophisticated algorithm is needed
-          // please implement.. maybe we can run some analysis pass for it...
-          if (ConstantExpr *expr = dyn_cast<ConstantExpr>(val)) {
-            Instruction *inst = getAsInstruction(expr);
-            
-            if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst)) {
-              if (valLimits.count(gep->getPointerOperand())) {
-                DEBUG( dbgs() << "Found constant GEP limits from base value limits! \n"; );
-                valLimits[val] = valLimits[gep->getPointerOperand()];
-              }
-            }
-            
-            delete inst;
-          }
+          continue;
         }
-
-        if (valLimits.count(val) == 0) {
-          DEBUG( dbgs() << "Could not find single limits! \n"; );
+        
+        if ( resolveAncestors(val, valLimits) ) {
+          DEBUG( dbgs() << "Traced limits successful!\n"; );
+          fast_assert( valLimits.count(val) > 0, "Obviously limits should have been added to set.");
+        } else {
+          DEBUG( dbgs() << "Could not trace the limits!\n"; );
         }
       }
     }
@@ -1102,7 +1147,10 @@ namespace WebCL {
       
       return true;
     }
-      
+    
+    /** 
+     * This might be possible to refactor with findAncestors...
+     */
     bool isSafeAddressToLoad(Value *operand) {
       bool isSafe = false;
       
@@ -1264,7 +1312,7 @@ namespace WebCL {
       }
       std::string postfix = postfix_buf;
       
-      DEBUG( dbgs() << "Limits to check: \n" );
+      DEBUG( dbgs() << " Possible limits to check: \n" );
       for (AreaLimitSet::iterator i = limits.begin(); i != limits.end(); i++) {
         DEBUG( dbgs() << "### min: "; (*i)->min->print(dbgs()); dbgs() << "\n"; );
         DEBUG( dbgs() << "### max: "; (*i)->max->print(dbgs()); dbgs() << "\n"; );
