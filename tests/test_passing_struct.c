@@ -1,10 +1,7 @@
-// RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
-// RUN: echo "Check that unsupported code cannot be compiled TODO: this can be made to work" &&
-// RUN: (
-// RUN:   opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll > $OUT_FILE.stdout.txt 2>&1;
-// RUN:     ([ $? != 0 ] && echo "Compilation aborted as expected" && grep "On line" $OUT_FILE.stdout.txt) || 
-// RUN:     (echo "Clamping should have aborted unsupported case, however pass resulted:" && cat $OUT_FILE.clamped.ll && false) 
-// RUN: ) 
+// RUN: clang -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
+// RUN: echo "Check passing struct in function argument as value." &&
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
+// RUN: lli $OUT_FILE.clamped.ll; [ $? = 3 ]
 
 struct OkStruct {
   int first;
