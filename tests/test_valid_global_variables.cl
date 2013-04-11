@@ -1,9 +1,12 @@
-// RUN: $OCLANG $TEST_SRC -S -O0 -o $OUT_FILE.ll &&
+// RUN: $OCLANG $TEST_SRC -S -O3 -o $OUT_FILE.ll &&
 // RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: echo "Testing that when run with global work group size 5 only 1,2,3 prints non-zero" &&
-// RUN: RESULT=`$RUN_KERNEL $OUT_FILE.clamped.ll test 5 "(float,{1,2,3,4}):(int,4):(float,{1,2,3,4}):(int,4)"` &&
+// RUN: RESULT=`$RUN_KERNEL $OUT_FILE.clamped.ll test 5 "(float,{1,2,3,10}):(int,4):(float,{1,2,3,10}):(int,4)"` &&
 // RUN: echo $RESULT | grep "1.000000 1, 2.000000 2, 3.000000 3, 0.000000 0, 0.000000 0," || 
 // RUN: (echo "Failed result: $RESULT" && false)
+
+// NOTE: if run without -O3 test_struct is put to address space with other static
+// allocations, which causes that reading data allows 4 to be read from table index var
 
 struct test_struct {
   int i;
