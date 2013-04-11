@@ -260,7 +260,7 @@ namespace WebCL {
         // load indirect value
         Value *limit = val;
         if (isIndirect) {
-          limit = new LoadInst(min, "", checkStart);
+          limit = new LoadInst(val, "", checkStart);
         }
                 
         Value *ret_limit = NULL;
