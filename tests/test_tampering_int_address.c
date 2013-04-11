@@ -1,13 +1,10 @@
 // RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
-// RUN: echo "Check that unsupported code cannot be compiled" &&
-// RUN: (
-// RUN:   opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll > $OUT_FILE.stdout.txt 2>&1;
-// RUN:     ([ $? != 0 ] && echo "Compilation aborted as expected" && grep "On line" $OUT_FILE.stdout.txt) || 
-// RUN:     (echo "Clamping should have aborted unsupported case, however pass resulted:" && cat $OUT_FILE.clamped.ll && false) 
-// RUN: ) 
+// RUN: echo "Check taking reference from int and returning next value" &&
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
+// RUN: lli $OUT_FILE.clamped.ll; [ $? = 0 ]
 
-extern int ext_val;
+volatile int val = 5;
 
 int main(void) {
-  return *(&ext_val + 1);
+  return *(&val + 1);
 }
