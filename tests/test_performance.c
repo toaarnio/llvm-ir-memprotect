@@ -18,17 +18,17 @@
 
 // The output is a 44100Hz 16bit stereo PCM file.
 
-// TODO: add internalize public API to maximize inlining optimizations
+// NOTE: for now looks like -O3 cripples safe exception load/store analysis
 
-// RUN: clang -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
+// RUN: clang -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
-// RUN: opt -O3 $OUT_FILE.bc -o $OUT_FILE.O3.bc &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.bc -o $OUT_FILE.clamped.bc &&
-// RUN: opt -O3 $OUT_FILE.clamped.bc -o $OUT_FILE.clamped.optimized.bc &&
-// RUN: echo "Running original:" &&
-// RUN: time lli $OUT_FILE.O3.bc && 
-// RUN: echo "Running clamped:" &&
-// RUN: time lli $OUT_FILE.clamped.optimized.bc
+// RUN: opt -S -O3 $OUT_FILE.ll -o $OUT_FILE.O3.ll &&
+// RUN: opt -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
+// RUN: opt -S -O3 $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.O3.ll &&
+// RUN: echo "Running original.O3:" &&
+// RUN: time lli $OUT_FILE.O3.ll && 
+// RUN: echo "Running clamped.O3:" &&
+// RUN: time lli $OUT_FILE.clamped.O3.ll
 
 #include <math.h>
 #include <stdio.h>
