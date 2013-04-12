@@ -19,14 +19,22 @@
 // The output is a 44100Hz 16bit stereo PCM file.
 
 // NOTE: for now looks like -O3 cripples safe exception load/store analysis
+// TODO: get times from unclamped versions and compare to clamped ones and expect perf hit to be max 30%
 
 // RUN: clang -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
 // RUN: opt -S -O3 $OUT_FILE.ll -o $OUT_FILE.O3.ll &&
 // RUN: opt -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
+// RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
 // RUN: opt -S -O3 $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.O3.ll &&
+// RUN: echo "Running original.O0:" &&
+// RUN: time lli $OUT_FILE.ll && 
 // RUN: echo "Running original.O3:" &&
 // RUN: time lli $OUT_FILE.O3.ll && 
+// RUN: echo "Running clamped.O0:" &&
+// RUN: time lli $OUT_FILE.clamped.ll &&
+// RUN: echo "Running O3.clamped:" &&
+// RUN: time lli $OUT_FILE.O3.clamped.ll &&
 // RUN: echo "Running clamped.O3:" &&
 // RUN: time lli $OUT_FILE.clamped.O3.ll
 

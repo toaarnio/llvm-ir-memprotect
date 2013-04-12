@@ -7,6 +7,8 @@
  * Center Tampere (http://webcl.nokiaresearch.com).
  */
 
+// TODO: Write complete "proof summary" here and refer later sections
+
 #include "llvm/Pass.h"
 #include "llvm/Function.h"
 #include "llvm/Module.h"
@@ -32,18 +34,13 @@
 
 using namespace llvm;
 
+// Declares **-allow-unsafe-exceptions** switch for the pass. Makes it possible to run normal C programs with external dependencies through this pass (only for testing).
 static cl::opt<bool>
 RunUnsafeMode("allow-unsafe-exceptions",
-        cl::desc("Will not add boundary checks to main() arguments and allows calling external functions."),
+        cl::desc("Will not change main() function signature allowing program to be ran. Adds main function arguments to safe exceptions list and allows calling external functions / extern variables."),
         cl::init(false), cl::Hidden);
 
-#define UNUSED( x ) \
-  (void)x;
-
-/**
- * Exits fast on expected assertion position. Prevents tests from blocking
- * for a few seconds after each tested error case.
- */
+// Fast assert macro, which will not dump stack-trace to make tests run faster.
 #define fast_assert( condition, message ) do {                       \
     if ( condition == false ) {                                      \
       dbgs() << "\nOn line: " << __LINE__ << " " << message << "\n"; \
@@ -51,17 +48,13 @@ RunUnsafeMode("allow-unsafe-exceptions",
     }                                                                \
   } while(0)
 
-/**
- * LLVM 3.2 didn't support getAsInstruction() yet
- * so for now we have copypasted it from trunk
- */
+// LLVM 3.2 didn't support ConstantExpt::getAsInstruction() yet
+// so for now we have copypasted it from trunk. This will be removed in future llvm.
 Instruction *getAsInstruction(ConstantExpr *expr) {
   SmallVector<Value*,4> ValueOperands;
   for (ConstantExpr::op_iterator I = expr->op_begin(), E = expr->op_end(); I != E; ++I)
     ValueOperands.push_back(cast<Value>(I));
-  
   ArrayRef<Value*> Ops(ValueOperands);
-  
   switch (expr->getOpcode()) {
   case Instruction::Trunc:
   case Instruction::ZExt:
@@ -75,8 +68,7 @@ Instruction *getAsInstruction(ConstantExpr *expr) {
   case Instruction::PtrToInt:
   case Instruction::IntToPtr:
   case Instruction::BitCast:
-    return CastInst::Create((Instruction::CastOps)expr->getOpcode(),
-                            Ops[0], expr->getType());
+    return CastInst::Create((Instruction::CastOps)expr->getOpcode(), Ops[0], expr->getType());
   case Instruction::Select:
     return SelectInst::Create(Ops[0], Ops[1], Ops[2]);
   case Instruction::InsertElement:
@@ -89,46 +81,41 @@ Instruction *getAsInstruction(ConstantExpr *expr) {
     return ExtractValueInst::Create(Ops[0], expr->getIndices());
   case Instruction::ShuffleVector:
     return new ShuffleVectorInst(Ops[0], Ops[1], Ops[2]);
-    
   case Instruction::GetElementPtr:
     if (cast<GEPOperator>(expr)->isInBounds())
       return GetElementPtrInst::CreateInBounds(Ops[0], Ops.slice(1));
     else
       return GetElementPtrInst::Create(Ops[0], Ops.slice(1));
-    
   case Instruction::ICmp:
   case Instruction::FCmp:
-    return CmpInst::Create((Instruction::OtherOps)expr->getOpcode(),
-                           expr->getPredicate(), Ops[0], Ops[1]);
-    
+    return CmpInst::Create((Instruction::OtherOps)expr->getOpcode(), expr->getPredicate(), Ops[0], Ops[1]);
   default:
     assert(expr->getNumOperands() == 2 && "Must be binary operator?");
     BinaryOperator *BO =
-      BinaryOperator::Create((Instruction::BinaryOps)expr->getOpcode(),
-                             Ops[0], Ops[1]);
+      BinaryOperator::Create((Instruction::BinaryOps)expr->getOpcode(), Ops[0], Ops[1]);
     if (isa<OverflowingBinaryOperator>(BO)) {
       assert(false && "Not supported hopefully never needed until llvm 3.3 is out.");
-      //BO->setHasNoUnsignedWrap(expr->SubclassOptionalData &
-      //                         OverflowingBinaryOperator::NoUnsignedWrap);
-      //BO->setHasNoSignedWrap(expr->SubclassOptionalData &
-      //                       OverflowingBinaryOperator::NoSignedWrap);
     }
     if (isa<PossiblyExactOperator>(BO)) {
       assert(false && "Not supported hopefully never needed until llvm 3.3 is out.");
-      // BO->setIsExact(expr->SubclassOptionalData & PossiblyExactOperator::IsExact);
     }
     return BO;
   }
 }
 
+// # WebCL to OpenCL instrumentation
+// Detailed description of the algorithm is documented in [virtual bool runOnModule( Module &M )](#runOnModule)
 namespace WebCL {
 
-  /**
-   * Returns demangled function name without parameter list.
-   *
-   * @param name Mangled function name or non-mangled
-   * @return Demangled function name or the passed argument if mangling is not recognized.
-   */
+  // ### Common helper functions
+  
+  // Returns demangled function name without argument type prefix.
+  //
+  // Mangled symbol format is _Z{name_length}{function_name}{prefix} e.g. for
+  // `_Z7vstore4Dv4_fyPU10AS16776960f` function will return `vstore4`
+  //
+  // `std::string name` Mangled function name or non-mangled
+  // `returns` Demangled function name or the passed argument if mangling is not recognized.
   std::string extractItaniumDemangledFunctionName(std::string name) {
     bool isMangled = name.find("_Z") == 0;
     std::string retVal = name;
@@ -143,14 +130,15 @@ namespace WebCL {
     return retVal;
   }
 
-  /**
-   * Creates mangled name (own mangling scheme) to be able to select correct safe builtin to call.
-   * All calls to functions with names mangled by this algorithm should be inlined and removed afterwards 
-   * by dce.
-   * 
-   * Scheme steals mangle suffix from original Itanium Mangled function call and add it to our version which
-   * is safe to call.
-   */
+  // Creates mangled name (own mangling scheme) to be able to select correct safe builtin function implementations to call.
+  // All calls to functions with names mangled by this algorithm should be inlined and removed afterwards by dce.
+  //
+  // Scheme steals mangle suffix from original Itanium Mangled function call and add it to our version which
+  // is safe to call.
+  //
+  // `Function* function` The function whose argument list prefix should be added to the returned name.
+  // `std::string base` Base where mangle suffix will be added.
+  // `returns` Function name which implements safe builtin implementation for the `function` arg.
   std::string customMangle(Function* function, std::string base) {
     std::stringstream ss;
     std::string origName = function->getName();
@@ -163,10 +151,12 @@ namespace WebCL {
     return ss.str();
   }
   
+  // Helper to create 32bit ConstantInt
   ConstantInt* getConstInt(LLVMContext &context, int i) {
     return ConstantInt::get(Type::getInt32Ty(context), i);
   }
 
+  // Helpers to create on the fly ArrayRef from integers
   template <class T>
   ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1) {
     std::vector<T> temp;
@@ -191,6 +181,7 @@ namespace WebCL {
     return ArrayRef<T>(temp);
   }
   
+  // Helpers to create array refs of any type of Values
   template <class T>
   ArrayRef<T> genArrayRef(T v1) {
     std::vector<T> temp;
@@ -215,12 +206,14 @@ namespace WebCL {
     return ArrayRef<T>(temp);
   }    
   
-  /// Module pass that implements algorithm for restricting memory
-  /// accesses to locally reserved addresses.  
-  ///
-  /// TODO: add detailed description of algorithm
-  /// 
-
+  // Creates SmartPointer struct type for given pointer type. This structure type
+  // is used to pass pointer with limits to the functions.
+  StructType* getSmartStructType( LLVMContext& c, Type* t ) {
+    return StructType::get( c, genArrayRef<Type*>(t,t,t) );
+  }
+ 
+ 
+  // ## LLVM Module pass
   struct ClampPointers :
     public ModulePass {
     static char ID;
@@ -229,9 +222,10 @@ namespace WebCL {
       ModulePass( ID ) {
     }
 
-    // area limits for certain value to respect
-    // values should be always stored in correct
-    // pointer type
+    // **AreaLimit** class holds information of single memory area allocation. Limits of the area
+    // can be stored directly as constant expressions for *min* and *max* or they can be indirect
+    // references to the limits. In case of indirect memory area, the *min* and *max* contains memory
+    // addresses where limit addresses are stored.
     struct AreaLimit {
     private:
       AreaLimit( Value* _min, Value* _max, bool _indirect ) :
@@ -240,24 +234,22 @@ namespace WebCL {
       indirect( _indirect ) {
       }
       
-      /**
-       * Returns valid address relative to val and offset for certain type.
-       *
-       * If val is indirect, first add load instruction to get indirect address value and then
-       * do the pointer cast / address arithmetic to get the correct address for given type.
-       *
-       * @param val Direct or indirect base address which from offset is computed
-       * @param isIndirect True if we require load before doing offset artihmetics
-       * @param offset Offset how many addresses we roll from val
-       * @param type Type which kind of pointer we are going to access
-       * @param checkStart Position where necessary loads and arithmetict will be added.
-       */
-
+      
+      // **AreaLimit::getValidAddressFor** Returns valid address relative to val and offset for given type of memory access access.
+      //
+      // If val is indirect, first add load instruction to get indirect address value and then
+      // do the pointer cast / address arithmetic to get the correct address for given type.
+      // basically does following: `return ((type)(isIndirect ? *val : val) + offset);`
+      //
+      // `Value *val` Direct or indirect base address which from `offset` is computed.
+      // `bool isIndirect` True if we require adding a load instruction before doing address computing.
+      // `int offset` Positive or negative offset how many addresses we roll from val.
+      // `Type type` Type which kind of pointer we are going to access.
+      // `Instruction *checkStart` Position where necessary loads and pointer arithmetics will be added.
       Value* getValidAddressFor(Value *val, bool isIndirect, int offset, Type *type, Instruction *checkStart) {
         
         LLVMContext &c = checkStart->getParent()->getParent()->getContext();
         
-        // load indirect value
         Value *limit = val;
         if (isIndirect) {
           limit = new LoadInst(val, "", checkStart);
@@ -266,7 +258,7 @@ namespace WebCL {
         Value *ret_limit = NULL;
         
         if ( Instruction *inst = dyn_cast<Instruction>(limit) ) {
-          // this should be removed by other optimizations if not necessary
+          /* bitcast can be removed by later optimizations if not necessary */
           CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(inst, type, "", checkStart);
           ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntArrayRef<Value*>(c, offset), "", checkStart);
           
@@ -286,34 +278,33 @@ namespace WebCL {
       Value* max; // Contains last valid address
       bool indirect; // true if min and max are indirect pointers (requires load for getting address)
 
-      // TODO: add bookkeeping for freeing memory here
+      // **AreaLimit::Create** AreaLimit factory. TODO: add bookkeeping and cleanup for freeing allocated memory.
       static AreaLimit* Create( Value* _min, Value* _max, bool _indirect) {
-        DEBUG( dbgs() << "Creating limits:\nmin: "; _min->print(dbgs()); dbgs() << "\nmax: "; _max->print(dbgs()); dbgs() << "\nindirect: " << _indirect << "\n"; );
+        DEBUG( dbgs() << "Creating limits:\nmin: "; _min->print(dbgs());
+               dbgs() << "\nmax: "; _max->print(dbgs()); dbgs() << "\nindirect: " << _indirect << "\n"; );
         return new AreaLimit(_min, _max, _indirect);
       }
 
-      /**
-       * Returns first valid address inside of these limits for given type of memory access.
-       *
-       * @param type Type of memory access which is going to be done inside these limits.
-       * @param checkStart Instruction before that we add new instructions if necessary.
-       */
+      // **AreaLimit::firstValidAddressFor and lastValidAddressFor** Returns first and last valid address
+      // inside of AreaLimit for given type of memory access.
+      //
+      // Min and max are first loaded (in case of indirect limits) and then casted to given type
+      // for being able to get the exact correct address. Actually it is possible that
+      // `lastValidAddressFor < firstValidAddressFor` which means that requested type actually cannot
+      // be accessed because it is too big. Limits are inclusive.
+      //
+      // `Type *type` Type of memory access which is going to be done inside these limits.
+      // `Instruction *checkStart` We add new instructions before this if necessary.
       Value* firstValidAddressFor(Type *type, Instruction *checkStart) {
         return getValidAddressFor(min, indirect, 0, type, checkStart);
       }
 
-      /**
-       * Returns last valid address inside of these limits for given type of memory access.
-       *
-       * @param type Type of memory access which is going to be done inside these limits.
-       * @param checkStart Instruction before that we add new instructions if necessary.
-       */
       Value* lastValidAddressFor(Type *type, Instruction *checkStart) {
         return getValidAddressFor(max, indirect, -1, type, checkStart);
       }
 
     };
-      
+    
     typedef std::map< Function*, Function* > FunctionMap;
     typedef std::map< Argument*, Argument* > ArgumentMap;
     typedef std::set< Function* > FunctionSet;
@@ -325,69 +316,25 @@ namespace WebCL {
     typedef std::set< StoreInst* > StoreInstrSet;
     typedef std::set< Value* > ValueSet;
     typedef std::vector< Value* > ValueVector;
-    typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap; 
-
+    typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
     typedef std::set< AreaLimit* > AreaLimitSet;
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
       
-    /// Helper function for generating a single-index GEP instruction from a value.
-    GetElementPtrInst* generateGEP( LLVMContext& ctx, Value* ptr, int a, Instruction* i, Twine t = "" ) {
-      Twine name = t;
-      ConstantInt* c_0 = getConstInt(ctx, a);
-      std::vector< Value* > values;
-      values.push_back( c_0 );
-      ArrayRef< Value* > ref( values );
-      GetElementPtrInst* gep = GetElementPtrInst::Create( ptr, ref, name, i );
-      return gep;
-    }
-
-    /// Helper function for generating a two-index GEP instruction from a value.
-    GetElementPtrInst* generateGEP( LLVMContext& c, Value* ptr, int a, int b, Instruction* i, Twine t = "" ) {
-      Twine name = t;
-      ConstantInt* c_0 = getConstInt(c, a);
-      ConstantInt* c_1 = getConstInt(c, b);
-      std::vector< Value* > values;
-      values.push_back( c_0 );
-      values.push_back( c_1 );
-      ArrayRef< Value* > ref( values );
-      GetElementPtrInst* gep = GetElementPtrInst::Create( ptr, ref, name, i );
-      return gep;
-    }
-
-    /// Helper function for generating smart pointer struct type for passing function arguments
-    StructType* getSmartStructType( LLVMContext& c, Type* t ) {
-      std::vector< Type* > types;
-      types.push_back( t );
-      types.push_back( t );
-      types.push_back( t );
-
-      ArrayRef< Type* > tref( types );
-
-      StructType *smart_array_struct = StructType::get( c, tref );
-      assert( smart_array_struct );
-      return smart_array_struct;
-    }
-
-    /**
-     * First analyze original code and then do transformations, 
-     * until code is again runnable with using smart pointers.
-     * 
-     * Then analyse uses of smart pointers to get limits for them and 
-     * add boundary checks.
-     */
+    // ## <a id="runOnModule"></a> Run On Module
+    //  
+    // 1. Collect static memory allocations from the module and combine them to contiguous area.
+    // 2. Create new function signatures and fix calls to use new signatures, which passes also limits for pointers.
+    // 3. Add boundary checks where ever necessary.
+    // 4. Fix calls to unsafe builtin functions to call safe versions instead.
     virtual bool runOnModule( Module &M ) {
       
-      // map of functions which has been replaced with new ones
+      // Functions which has been replaced with new ones.
       FunctionMap replacedFunctions;
-      // map of function arguments, which are replaced with new ones
+      // Function arguments mapping to find replacement arguments for old function arguments.
       ArgumentMap replacedArguments;
-      
-      // set of values, which won't need boundary checks to memory accesses
-      ValueSet safeExceptions;
-      
-      // set of different interesting instructions in the program
-      // maybe could be just one map of sets sorted by opcode
+
+      // Sets of different type of instructions we are interested in.
       CallInstrSet internalCalls;
       CallInstrSet externalCalls;
       CallInstrSet allCalls;
@@ -395,27 +342,36 @@ namespace WebCL {
       StoreInstrSet stores;
       LoadInstrSet loads;
       
-      // all load/store/call pointer operands
-      ValueSet checkOperands;
+      // All values which might require that limits are resolved. Basically all load/store/call
+      // pointer operands are added here. Call pointer operands needs to be resolved, because we need
+      // to know which limits we have to pass with a pointer.
+      ValueSet resolveLimitsOperands;
 
-      // limits for values and address spaces
+      // Bookkeeping of which limits certain value respects.
       AreaLimitByValueMap valueLimits;
+      // Bookkeeping of all available limits of address spaces.
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
 
-      // TODO: MAYBE THIS COULD BE MOVED TO COMPLETELY SEPARATE PASS
+      // Set where is collected all values, which will not require boundary checks to
+      // memory accesses. These have been resolved to be safe accesses in compile time.
+      ValueSet safeExceptions;
+
+      // Collect all allocas and global variables for each address space to struct to be able to
+      // resolve static area reference limits easily. See example in [consolidateStaticMemory( Module &M )](#consolidateStaticMemory).
       DEBUG( dbgs() << "\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n" );
       consolidateStaticMemory( M );
 
+      
       DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
       findAddressSpaceLimits( M, valueLimits, addressSpaceLimits );
 
       
       // ####### Analyze all functions
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-
-        // allow calling external functions with original signatures (this pass should be ran just 
+        
+        // allow calling external functions with original signatures (this pass should be ran just
         // for fully linked code)
-        if ( i->isIntrinsic() || i->isDeclaration() ) {         
+        if ( i->isIntrinsic() || i->isDeclaration() ) {
           if (RunUnsafeMode) {
             DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
             continue;
@@ -445,12 +401,12 @@ namespace WebCL {
         // collect values whose limits must be traced
         for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
           LoadInst *load = *i;
-          checkOperands.insert(load->getPointerOperand());
+          resolveLimitsOperands.insert(load->getPointerOperand());
         }
         
         for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
           StoreInst *store = *i;
-          checkOperands.insert(store->getPointerOperand());
+          resolveLimitsOperands.insert(store->getPointerOperand());
         }
         
         // add original call operands to list for resolving limits.
@@ -460,7 +416,7 @@ namespace WebCL {
             Value *operand = call->getOperand(op);
             // ignore function pointers... no need to check them
             if ( operand->getType()->isPointerTy() && !operand->getType()->getPointerElementType()->isFunctionTy() ) {
-              checkOperands.insert(operand);
+              resolveLimitsOperands.insert(operand);
             }
           }
         }
@@ -476,7 +432,7 @@ namespace WebCL {
       createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
 
       DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY LOAD/STORE OPERAND --------------\n" );
-      findLimits(replacedFunctions, checkOperands, valueLimits, addressSpaceLimits);
+      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits);
       
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
       fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, valueLimits);
@@ -487,7 +443,7 @@ namespace WebCL {
       // ##########################################################################################
 
       DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED TODO: collect direct loads etc. who shouldnt need checks --------------\n" );
-      collectSafeExceptions(checkOperands, replacedFunctions, safeExceptions);
+      collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions);
 
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
       addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
