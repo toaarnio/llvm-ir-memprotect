@@ -212,6 +212,28 @@ namespace WebCL {
     return StructType::get( c, genVector<Type*>(t,t,t) );
   }
  
+
+  template<typename T>
+  struct LocationKind {
+    enum { initAtEnd = 0 };
+    static Instruction* AllocInstLocation(BasicBlock* block) {
+      return &block->front();
+    }
+    static Function* getParent(T* instruction) {
+      return instruction->getParent()->getParent();
+    }
+  };
+
+  template<>
+  struct LocationKind<llvm::BasicBlock> {
+    enum { initAtEnd = 1 };
+    static BasicBlock* AllocInstLocation(BasicBlock* block) {
+      return block;
+    }
+    static Function* getParent(BasicBlock* block) {
+      return block->getParent();
+    }
+  };
  
   // ## LLVM Module pass
   struct ClampPointers :
@@ -985,75 +1007,43 @@ namespace WebCL {
      *
      * TODO: or just maybe we could create unnamed global variable and pass it to prevent polluting entry block too much
      */
-    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, bool isIndirect, Instruction *beforeInstruction) {
-      DEBUG( dbgs() << "1-Converting arg: "; origArg->print(dbgs());
+    template <typename Location>
+    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, bool isIndirect, Location* location) {
+      typedef LocationKind<Location> LK;
+
+      DEBUG( dbgs() << (LK::initAtEnd ? "2" : "1") << "-Converting arg: "; origArg->print(dbgs());
              dbgs() << "\nmin: "; minLimit->print(dbgs());
              dbgs() << "\nmax: "; maxLimit->print(dbgs()); dbgs() << "\n"; );
 
       fast_assert(origArg->getType()->isPointerTy(), "Cannot pass non pointer as smart pointer.");
       
       // create alloca to entry block of function for the value
-      Function* argFun = beforeInstruction->getParent()->getParent();
+      Function* argFun = LK::getParent(location);
       BasicBlock &entryBlock = argFun->getEntryBlock();
       LLVMContext &c = argFun->getContext();
       Type *smarArgType = getSmartStructType(c, origArg->getType());
-      AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock.front());
+      AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", LK::AllocInstLocation(&entryBlock));
       
       // create temp smart pointer struct and initialize it with correct values
-      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 0), "", beforeInstruction);
-      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 1), "", beforeInstruction);
-      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 2), "", beforeInstruction);
+      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 0), "", location);
+      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 1), "", location);
+      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 2), "", location);
       Value *minValue = minLimit;
       Value *maxValue = maxLimit;
       // if indirect limit, we need to load value first
       if (isIndirect) {
-        minValue = new LoadInst(minLimit, "", beforeInstruction);
-        maxValue = new LoadInst(maxLimit, "", beforeInstruction);
+        minValue = new LoadInst(minLimit, "", location);
+        maxValue = new LoadInst(maxLimit, "", location);
       }
-      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg->getType(), "", beforeInstruction);
-      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg->getType(), "", beforeInstruction);
-      new StoreInst(origArg, curGEP, beforeInstruction);
-      new StoreInst(castedMinAddress, minGEP, beforeInstruction);
-      new StoreInst(castedMaxAddress, maxGEP, beforeInstruction);
-      LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", beforeInstruction);
+      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg->getType(), "", location);
+      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg->getType(), "", location);
+      new StoreInst(origArg, curGEP, location);
+      new StoreInst(castedMinAddress, minGEP, location);
+      new StoreInst(castedMaxAddress, maxGEP, location);
+      LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", location);
       return smartArgVal;
     }
 
-    // copy - paste refactor !
-    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, bool isIndirect, BasicBlock *initAtEndOf) {
-      DEBUG( dbgs() << "2-Converting arg: "; origArg->print(dbgs());
-             dbgs() << "\nmin: "; minLimit->print(dbgs());
-             dbgs() << "\nmax: "; maxLimit->print(dbgs()); dbgs() << "\n"; );
-
-      fast_assert(origArg->getType()->isPointerTy(), "Cannot pass non pointer as smart pointer.");
-      
-      // create alloca to entry block of function for the value
-      Function* argFun = initAtEndOf->getParent();
-      BasicBlock &entryBlock = argFun->getEntryBlock();
-      LLVMContext &c = argFun->getContext();
-      Type *smarArgType = getSmartStructType(c, origArg->getType());
-      AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock);
-      
-      // create temp smart pointer struct and initialize it with correct values
-      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 0), "", initAtEndOf);
-      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 1), "", initAtEndOf);
-      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 2), "", initAtEndOf);
-      Value *minValue = minLimit;
-      Value *maxValue = maxLimit;
-      // if indirect limit, we need to load value first
-      if (isIndirect) {
-        minValue = new LoadInst(minLimit, "", initAtEndOf);
-        maxValue = new LoadInst(maxLimit, "", initAtEndOf);
-      }
-      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg->getType(), "", initAtEndOf);
-      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg->getType(), "", initAtEndOf);
-      new StoreInst(origArg, curGEP, initAtEndOf);
-      new StoreInst(castedMinAddress, minGEP, initAtEndOf);
-      new StoreInst(castedMaxAddress, maxGEP, initAtEndOf);
-      LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", initAtEndOf);
-      return smartArgVal;
-    }
-      
     /**
      * Paint all uses of argv of main function as safe ones, which does not require checks.
      *
