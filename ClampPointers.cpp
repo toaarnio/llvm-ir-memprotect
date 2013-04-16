@@ -42,7 +42,7 @@ RunUnsafeMode("allow-unsafe-exceptions",
 
 // Fast assert macro, which will not dump stack-trace to make tests run faster.
 #define fast_assert( condition, message ) do {                       \
-    if ( condition == false ) {                                      \
+    if ( (condition) == false ) {                                    \
       dbgs() << "\nOn line: " << __LINE__ << " " << message << "\n"; \
       exit(1);                                                       \
     }                                                                \
