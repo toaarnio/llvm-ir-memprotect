@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #set -x
 
 SCRIPT_PATH=$(pushd `dirname $0` > /dev/null && pwd && popd > /dev/null)
