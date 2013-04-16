@@ -156,60 +156,60 @@ namespace WebCL {
     return ConstantInt::get(Type::getInt32Ty(context), i);
   }
 
-  // Helpers to create on the fly ArrayRef from integers
+  // Helpers to create on the fly vectors from integers
   template <class T>
-  ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1) {
+  std::vector<T> genIntVector(LLVMContext &context, int i1) {
     std::vector<T> temp;
     temp.push_back(getConstInt(context, i1));
-    return ArrayRef<T>(temp);
+    return temp;
   }
 
   template <class T>
-  ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1, int i2) {
+  std::vector<T> genIntVector(LLVMContext &context, int i1, int i2) {
     std::vector<T> temp;
     temp.push_back(getConstInt(context, i1));
     temp.push_back(getConstInt(context, i2));
-    return ArrayRef<T>(temp);
+    return temp;
   }    
   
   template <class T>
-  ArrayRef<T> genIntArrayRef(LLVMContext &context, int i1, int i2, int i3) {
+  std::vector<T> genIntVector(LLVMContext &context, int i1, int i2, int i3) {
     std::vector<T> temp;
     temp.push_back(getConstInt(context, i1));
     temp.push_back(getConstInt(context, i2));
     temp.push_back(getConstInt(context, i3));
-    return ArrayRef<T>(temp);
+    return temp;
   }
   
   // Helpers to create array refs of any type of Values
   template <class T>
-  ArrayRef<T> genArrayRef(T v1) {
+  std::vector<T> genVector(T v1) {
     std::vector<T> temp;
     temp.push_back(v1);
-    return ArrayRef<T>(temp);
+    return temp;
   }
 
   template <class T>
-  ArrayRef<T> genArrayRef(T v1, T v2) {
+  std::vector<T> genVector(T v1, T v2) {
     std::vector<T> temp;
     temp.push_back(v1);
     temp.push_back(v2);
-    return ArrayRef<T>(temp);
+    return temp;
   }    
   
   template <class T>
-  ArrayRef<T> genArrayRef(T v1, T v2, T v3) {
+  std::vector<T> genVector(T v1, T v2, T v3) {
     std::vector<T> temp;
     temp.push_back(v1);
     temp.push_back(v2);
     temp.push_back(v3);
-    return ArrayRef<T>(temp);
+    return temp;
   }    
   
   // Creates SmartPointer struct type for given pointer type. This structure type
   // is used to pass pointer with limits to the functions.
   StructType* getSmartStructType( LLVMContext& c, Type* t ) {
-    return StructType::get( c, genArrayRef<Type*>(t,t,t) );
+    return StructType::get( c, genVector<Type*>(t,t,t) );
   }
  
  
@@ -260,7 +260,7 @@ namespace WebCL {
         if ( Instruction *inst = dyn_cast<Instruction>(limit) ) {
           /* bitcast can be removed by later optimizations if not necessary */
           CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(inst, type, "", checkStart);
-          ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntArrayRef<Value*>(c, offset), "", checkStart);
+          ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntVector<Value*>(c, offset), "", checkStart);
           
         } else if ( Constant *constant = dyn_cast<Constant>(limit) ) {
           Constant *type_fixed_limit = ConstantExpr::getBitCast(constant, type);
@@ -606,8 +606,8 @@ namespace WebCL {
             
             // Adding extract value instructions to entry block to have direct limits stored.
             BasicBlock &entry = safePointerFunction->getEntryBlock();
-            ExtractValueInst *minLimit = ExtractValueInst::Create( &replaceArg, genArrayRef<unsigned int>(1), replaceArg.getName() + ".min", &(*entry.begin()) );
-            ExtractValueInst *maxLimit = ExtractValueInst::Create( &replaceArg, genArrayRef<unsigned int>(2), replaceArg.getName() + ".max", &(*entry.begin()) );
+            ExtractValueInst *minLimit = ExtractValueInst::Create( &replaceArg, genVector<unsigned int>(1), replaceArg.getName() + ".min", &(*entry.begin()) );
+            ExtractValueInst *maxLimit = ExtractValueInst::Create( &replaceArg, genVector<unsigned int>(2), replaceArg.getName() + ".max", &(*entry.begin()) );
             
             // Init direct limits for current and do some analysis to resolve derived limits
             valLimits[cur] = AreaLimit::Create(minLimit, maxLimit, false);
@@ -659,9 +659,9 @@ namespace WebCL {
         // this should work, because there shouldn't be any other than direct references to this kind of globals
         if ( g->hasUnnamedAddr() ) {
           DEBUG( dbgs() << "Found unnamed address, adding limits to bookkeeping\n"; );
-          Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 0, 0));
+          Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntVector<Constant*>(c, 0, 0));
           // NOTE: this works, but could be safer to check element type of global and get limits from number of element
-          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntArrayRef<Constant*>(c, 1, 0));
+          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntVector<Constant*>(c, 1, 0));
           valLimits[g] = AreaLimit::Create(firstValid, firstInvalid, false);
         }
         
@@ -808,7 +808,7 @@ namespace WebCL {
 
           // get field of struct
           Constant *structVal = ConstantExpr::getInBoundsGetElementPtr
-            (dyn_cast<Constant>(aSpaceStruct), genIntArrayRef<Constant*>( c, 0, valIndex) );
+            (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex) );
           
           // Currently LLVM IR does not support GEP in alias. If support is added, uncommenting this will greatly improve readability of produced code
           // for alias: GlobalAlias *fieldAlias = new GlobalAlias(structVal->getType(), GlobalValue::InternalLinkage, "", structVal, &M);
@@ -999,9 +999,9 @@ namespace WebCL {
       AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock.front());
       
       // create temp smart pointer struct and initialize it with correct values
-      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 0), "", beforeInstruction);
-      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 1), "", beforeInstruction);
-      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 2), "", beforeInstruction);
+      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 0), "", beforeInstruction);
+      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 1), "", beforeInstruction);
+      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 2), "", beforeInstruction);
       Value *minValue = minLimit;
       Value *maxValue = maxLimit;
       // if indirect limit, we need to load value first
@@ -1034,9 +1034,9 @@ namespace WebCL {
       AllocaInst *smartArgStructAlloca = new AllocaInst(smarArgType, origArg->getName() + ".SmartPassing", &entryBlock);
       
       // create temp smart pointer struct and initialize it with correct values
-      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 0), "", initAtEndOf);
-      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 1), "", initAtEndOf);
-      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef<Value*>(c, 0, 2), "", initAtEndOf);
+      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 0), "", initAtEndOf);
+      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 1), "", initAtEndOf);
+      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 2), "", initAtEndOf);
       Value *minValue = minLimit;
       Value *maxValue = maxLimit;
       // if indirect limit, we need to load value first
@@ -1583,7 +1583,7 @@ namespace WebCL {
 
           // get value of passed smart_pointer.cur and replace all uses of original argument with it
           ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
-                                                                 genArrayRef<unsigned int>(0),
+                                                                 genVector<unsigned int>(0),
                                                                  Twine("") + newArg->getName() + ".Cur",
                                                                  entryBlock.begin());
 
@@ -1668,7 +1668,7 @@ namespace WebCL {
 
         // remove attribute which does not make sense for non-pointer argument
         // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
-        new_function->removeAttribute(a_new->getArgNo()+1, Attributes::get(c, genArrayRef(llvm::Attributes::NoCapture)));
+        new_function->removeAttribute(a_new->getArgNo()+1, Attributes::get(c, genVector(llvm::Attributes::NoCapture)));
         
         argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) ); 
         DEBUG( dbgs() << "Mapped orig arg: "; a->print(dbgs()); dbgs() << " -----> "; a_new->print(dbgs()); dbgs() << "\n" );
