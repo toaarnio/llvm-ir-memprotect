@@ -35,7 +35,7 @@ work_group_size=$1
 shift
 arg_list=$@
 
-TEMP_DIR=$(mktemp -d -t krunner);
+TEMP_DIR=$(mktemp -d -t krunnerXXXX);
 KRUNNER_C=$TEMP_DIR/krunner.c
 KRUNNER_BC=$TEMP_DIR/krunner.bc
 KRUNNER_LINKED_BC=$TEMP_DIR/krunner_linked.bc
