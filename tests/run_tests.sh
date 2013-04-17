@@ -2,6 +2,7 @@
 
 #set -x
 
+[ -z "$GCOV" ] && GCOV=gcov
 current_dir=$(pwd)
 temp_dir=$current_dir/run_temp
 mkdir -p $temp_dir
@@ -48,6 +49,9 @@ function run_test {
     cd $temp_dir;
     TEST_SRC=$current_dir/$1;
     OUT_FILE=$temp_dir/$1;
+    if [ -r ../../Debug+Coverage+Asserts/ClampPointers.gcno ]; then
+	( cd ../../Debug+Coverage+Asserts/ && rm -f *.gcda )
+    fi
     test_command=$(get_run_command $TEST_SRC);
     if eval $test_command; then
         echo ">>>>>>>>>> OK";
@@ -56,6 +60,13 @@ function run_test {
         echo $test_command
         echo ">>>>>>>>>> !!! !!! FAIL";
         failed_tests="$failed_tests $1";
+    fi
+    if [ -r ../../Debug+Coverage+Asserts/ClampPointers.gcno ]; then
+	(   ORIGPWD="$PWD"
+            cd ../../Debug+Coverage+Asserts/ &&
+	    cp -a ../ClampPointers.cpp . &&
+	    "$GCOV" ClampPointers.cpp >/dev/null &&
+	    cp -v ClampPointers.cpp.gcov "$ORIGPWD/../$test_file".gcov )
     fi
 }
 
