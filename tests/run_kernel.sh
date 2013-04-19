@@ -45,7 +45,7 @@ echo "// automatically generated runner for testing kernel." > $KRUNNER_C;
 echo "#pragma clang diagnostic ignored \"-Wimplicit-function-declaration\""  >> $KRUNNER_C;
 echo "uint workitem_count = $work_group_size;" >> $KRUNNER_C;
 echo "uint current_global_id = 0;" >> $KRUNNER_C;
-echo "size_t get_global_id(uint dim) { return current_global_id; }\n" >> $KRUNNER_C;
+echo "size_t get_global_id(uint dim) { return current_global_id; }" >> $KRUNNER_C;
 
 # create kernel runner main()
 IFS=":";
