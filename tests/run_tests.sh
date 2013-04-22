@@ -76,7 +76,7 @@ for test_file in $tests;do
     run_test $test_file;
 done;
 
-if [ ! -z $failed_tests ]; then
+if [ ! -z "$failed_tests" ]; then
     echo "###################### FAIL ###################################";
     echo "## Failed tests: $failed_tests";
 else
