@@ -315,6 +315,7 @@ namespace WebCL {
     typedef std::set< LoadInst* > LoadInstrSet;
     typedef std::set< StoreInst* > StoreInstrSet;
     typedef std::set< Value* > ValueSet;
+    typedef std::set< int > IntSet;
     typedef std::vector< Value* > ValueVector;
     typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
     typedef std::set< AreaLimit* > AreaLimitSet;
@@ -1487,6 +1488,7 @@ namespace WebCL {
       int op = 0;
       Function::arg_iterator newArgIter = newFun->arg_begin();
       for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
+        LLVMContext& c = newFun->getContext();
         Argument* oldArg = a;
         Argument* newArg = newArgIter;
         newArgIter++;
@@ -1523,6 +1525,8 @@ namespace WebCL {
               fast_assert(false, "Could not resolve limits for a value passed as operand. Try to make code less obscure, write better limit analysis or do not change signature of this method at all and check against all limits of address space.");
             }
             call->setOperand( op, convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call) );
+            int argIdx = a->getArgNo() + 1; // removeAttribute does know about arg# 0 (the return value), thus +1
+            call->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
           }
         }
         op++;
@@ -1629,6 +1633,7 @@ namespace WebCL {
       
       // convert function signature to use pointer structs instead of direct pointers
       std::vector< Type* > param_types;
+      IntSet safeTypeArgNos; // argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute
       for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
         Argument* arg = a;
         Type* t = arg->getType();
@@ -1637,7 +1642,8 @@ namespace WebCL {
         
         if( !dontTouchArguments && t->isPointerTy() ) {
           Type* smart_array_struct = getSmartStructType( c, t );
-          param_types.push_back( smart_array_struct );          
+          param_types.push_back( smart_array_struct );
+          safeTypeArgNos.insert(a->getArgNo());
         } else {
           fast_assert( (!t->isArrayTy()), "Passing array in arguments is not implemented." );
           param_types.push_back( t );
@@ -1668,7 +1674,11 @@ namespace WebCL {
 
         // remove attribute which does not make sense for non-pointer argument
         // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
-        new_function->removeAttribute(a_new->getArgNo()+1, Attributes::get(c, genVector(llvm::Attributes::NoCapture)));
+        int argIdx = a_new->getArgNo()+1;
+        new_function->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)));
+        if (safeTypeArgNos.count(a_new->getArgNo())) {
+          new_function->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
+        }
         
         argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) ); 
         DEBUG( dbgs() << "Mapped orig arg: "; a->print(dbgs()); dbgs() << " -----> "; a_new->print(dbgs()); dbgs() << "\n" );
