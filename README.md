@@ -4,6 +4,10 @@ LLVM-IR-MemProtect
 This is an LLVM module for adding run-time protection against
 out-of-bounds memory accesses into LLVM IR bitcode.
 
+Compiling annotated source documents:
+    
+       docco -c docs/custom.css ClampPointers.cpp
+
 Instructions
 ============
 
@@ -89,7 +93,7 @@ Instructions
 * Allow only calling builtins
 * Convert builtin calls to safe versions
 
-# TODO
+# TODO:
 
 ## Unimplemented cases: 
 

@@ -5,7 +5,7 @@
   <title>ClampPointers.cpp</title>
   <meta http-equiv="content-type" content="text/html; charset=UTF-8">
   <meta name="viewport" content="width=device-width, target-densitydpi=160dpi, initial-scale=1.0; maximum-scale=1.0; user-scalable=0;">
-  <link rel="stylesheet" media="all" href="docco.css" />
+  <link rel="stylesheet" media="all" href="custom.css" />
 </head>
 <body>
   <div id="container">
@@ -48,7 +48,7 @@
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-2">&#182;</a>
               </div>
-              <p>TODO: Write complete &quot;proof summary&quot; here and refer later sections</p>
+              <p><a href="#runOnModule">Go directly to algorithm</a> TODO: Write complete &quot;proof summary&quot; here and refer later sections</p>
 
             </div>
             
@@ -109,7 +109,7 @@ RunUnsafeMode(<span class="string">"allow-unsafe-exceptions"</span>,
             </div>
             
             <div class="content"><div class='highlight'><pre><span class="preprocessor">#define fast_assert( condition, message ) do {                       \</span>
-    <span class="keyword">if</span> ( condition == <span class="keyword">false</span> ) {                                      \
+    <span class="keyword">if</span> ( (condition) == <span class="keyword">false</span> ) {                                    \
       dbgs() &lt;&lt; <span class="string">"\nOn line: "</span> &lt;&lt; __LINE__ &lt;&lt; <span class="string">" "</span> &lt;&lt; message &lt;&lt; <span class="string">"\n"</span>; \
       exit(<span class="number">1</span>);                                                       \
     }                                                                \
@@ -252,9 +252,10 @@ so for now we have copypasted it from trunk. This will be removed in future llvm
                 <a class="pilcrow" href="#section-9">&#182;</a>
               </div>
               <p>Creates mangled name (own mangling scheme) to be able to select correct safe builtin function implementations to call.
-All calls to functions with names mangled by this algorithm should be inlined and removed afterwards by dce.</p>
+All calls to functions with names mangled by this algorithm should be inlined and removed afterwards by later optimizations.</p>
 <p>Scheme steals mangle suffix from original Itanium Mangled function call and add it to our version which
-is safe to call.</p>
+is safe to call. This way we get an unique name for each function which for we need to write safe implementation and know
+easily to which implementation to call when converting builtin calls to safe-builtin calls.</p>
 <p><code>Function* function</code> The function whose argument list prefix should be added to the returned name.
 <code>std::string base</code> Base where mangle suffix will be added.
 <code>returns</code> Function name which implements safe builtin implementation for the <code>function</code> arg.</p>
@@ -299,32 +300,32 @@ is safe to call.</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-11">&#182;</a>
               </div>
-              <p>Helpers to create on the fly ArrayRef from integers</p>
+              <p>Helpers to create on the fly vectors from integers</p>
 
             </div>
             
             <div class="content"><div class='highlight'><pre>  <span class="keyword">template</span> &lt;<span class="keyword">class</span> T&gt;
-  ArrayRef&lt;T&gt; genIntArrayRef(LLVMContext &amp;context, <span class="keyword">int</span> i1) {
+  <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> genIntVector(LLVMContext &amp;context, <span class="keyword">int</span> i1) {
     <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> temp;
     temp.push_back(getConstInt(context, i1));
-    <span class="keyword">return</span> ArrayRef&lt;T&gt;(temp);
+    <span class="keyword">return</span> temp;
   }
 
   <span class="keyword">template</span> &lt;<span class="keyword">class</span> T&gt;
-  ArrayRef&lt;T&gt; genIntArrayRef(LLVMContext &amp;context, <span class="keyword">int</span> i1, <span class="keyword">int</span> i2) {
+  <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> genIntVector(LLVMContext &amp;context, <span class="keyword">int</span> i1, <span class="keyword">int</span> i2) {
     <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> temp;
     temp.push_back(getConstInt(context, i1));
     temp.push_back(getConstInt(context, i2));
-    <span class="keyword">return</span> ArrayRef&lt;T&gt;(temp);
+    <span class="keyword">return</span> temp;
   }    
   
   <span class="keyword">template</span> &lt;<span class="keyword">class</span> T&gt;
-  ArrayRef&lt;T&gt; genIntArrayRef(LLVMContext &amp;context, <span class="keyword">int</span> i1, <span class="keyword">int</span> i2, <span class="keyword">int</span> i3) {
+  <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> genIntVector(LLVMContext &amp;context, <span class="keyword">int</span> i1, <span class="keyword">int</span> i2, <span class="keyword">int</span> i3) {
     <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> temp;
     temp.push_back(getConstInt(context, i1));
     temp.push_back(getConstInt(context, i2));
     temp.push_back(getConstInt(context, i3));
-    <span class="keyword">return</span> ArrayRef&lt;T&gt;(temp);
+    <span class="keyword">return</span> temp;
   }</pre></div></div>
             
         </li>
@@ -341,27 +342,27 @@ is safe to call.</p>
             </div>
             
             <div class="content"><div class='highlight'><pre>  <span class="keyword">template</span> &lt;<span class="keyword">class</span> T&gt;
-  ArrayRef&lt;T&gt; genArrayRef(T v1) {
+  <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> genVector(T v1) {
     <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> temp;
     temp.push_back(v1);
-    <span class="keyword">return</span> ArrayRef&lt;T&gt;(temp);
+    <span class="keyword">return</span> temp;
   }
 
   <span class="keyword">template</span> &lt;<span class="keyword">class</span> T&gt;
-  ArrayRef&lt;T&gt; genArrayRef(T v1, T v2) {
+  <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> genVector(T v1, T v2) {
     <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> temp;
     temp.push_back(v1);
     temp.push_back(v2);
-    <span class="keyword">return</span> ArrayRef&lt;T&gt;(temp);
+    <span class="keyword">return</span> temp;
   }    
   
   <span class="keyword">template</span> &lt;<span class="keyword">class</span> T&gt;
-  ArrayRef&lt;T&gt; genArrayRef(T v1, T v2, T v3) {
+  <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> genVector(T v1, T v2, T v3) {
     <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt;T&gt;</span> temp;
     temp.push_back(v1);
     temp.push_back(v2);
     temp.push_back(v3);
-    <span class="keyword">return</span> ArrayRef&lt;T&gt;(temp);
+    <span class="keyword">return</span> temp;
   }</pre></div></div>
             
         </li>
@@ -379,8 +380,31 @@ is used to pass pointer with limits to the functions.</p>
             </div>
             
             <div class="content"><div class='highlight'><pre>  StructType* getSmartStructType( LLVMContext&amp; c, Type* t ) {
-    <span class="keyword">return</span> StructType::get( c, genArrayRef&lt;Type*&gt;(t,t,t) );
-  }</pre></div></div>
+    <span class="keyword">return</span> StructType::get( c, genVector&lt;Type*&gt;(t,t,t) );
+  }
+ 
+
+  <span class="keyword">template</span>&lt;<span class="keyword">typename</span> T&gt;
+  <span class="keyword">struct</span> LocationKind {
+    <span class="keyword">enum</span> { initAtEnd = <span class="number">0</span> };
+    <span class="keyword">static</span> Instruction* AllocInstLocation(BasicBlock* block) {
+      <span class="keyword">return</span> &amp;block-&gt;front();
+    }
+    <span class="keyword">static</span> Function* getParent(T* instruction) {
+      <span class="keyword">return</span> instruction-&gt;getParent()-&gt;getParent();
+    }
+  };
+
+  <span class="keyword">template</span>&lt;&gt;
+  <span class="keyword">struct</span> LocationKind&lt;llvm::BasicBlock&gt; {
+    <span class="keyword">enum</span> { initAtEnd = <span class="number">1</span> };
+    <span class="keyword">static</span> BasicBlock* AllocInstLocation(BasicBlock* block) {
+      <span class="keyword">return</span> block;
+    }
+    <span class="keyword">static</span> Function* getParent(BasicBlock* block) {
+      <span class="keyword">return</span> block-&gt;getParent();
+    }
+  };</pre></div></div>
             
         </li>
         
@@ -462,7 +486,7 @@ basically does following: <code>return ((type)(isIndirect ? *val : val) + offset
         <span class="keyword">if</span> ( Instruction *inst = dyn_cast&lt;Instruction&gt;(limit) ) {
           <span class="comment">/* bitcast can be removed by later optimizations if not necessary */</span>
           CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(inst, type, <span class="string">""</span>, checkStart);
-          ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntArrayRef&lt;Value*&gt;(c, offset), <span class="string">""</span>, checkStart);
+          ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntVector&lt;Value*&gt;(c, offset), <span class="string">""</span>, checkStart);
           
         } <span class="keyword">else</span> <span class="keyword">if</span> ( Constant *constant = dyn_cast&lt;Constant&gt;(limit) ) {
           Constant *type_fixed_limit = ConstantExpr::getBitCast(constant, type);
@@ -539,6 +563,7 @@ be accessed because it is too big. Limits are inclusive.</p>
     <span class="keyword">typedef</span> <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">set</span>&lt; LoadInst* &gt;</span> LoadInstrSet;
     <span class="keyword">typedef</span> <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">set</span>&lt; StoreInst* &gt;</span> StoreInstrSet;
     <span class="keyword">typedef</span> <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">set</span>&lt; Value* &gt;</span> ValueSet;
+    <span class="keyword">typedef</span> <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">set</span>&lt; <span class="keyword">int</span> &gt;</span> IntSet;
     <span class="keyword">typedef</span> <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt; Value* &gt;</span> ValueVector;
     <span class="keyword">typedef</span> <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">map</span>&lt; <span class="keyword">unsigned</span>, ValueVector &gt;</span> ValueVectorByAddressSpaceMap;
     <span class="keyword">typedef</span> <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">set</span>&lt; AreaLimit* &gt;</span> AreaLimitSet;
@@ -555,10 +580,14 @@ be accessed because it is too big. Limits are inclusive.</p>
                 <a class="pilcrow" href="#section-19">&#182;</a>
               </div>
               <h2><a id="runOnModule"></a> Run On Module</h2>
+<p>This function does the top-level algorithm for instrumentation.</p>
 <ol>
 <li>Collect static memory allocations from the module and combine them to contiguous area.</li>
+<li>Collects information of original instructions which are not created by the pass.</li>
 <li>Create new function signatures and fix calls to use new signatures, which passes also limits for pointers.</li>
-<li>Add boundary checks where ever necessary.</li>
+<li>Analyzes original code to find limits for all load/store/call operand should respect.</li>
+<li>Analyzes original code and resolves if memory access limits can be verified compile time.</li>
+<li>Add boundary checks to loads/stores if instruction was not proved to be valid in compile time.</li>
 <li>Fix calls to unsafe builtin functions to call safe versions instead.</li>
 </ol>
 
@@ -575,7 +604,7 @@ be accessed because it is too big. Limits are inclusive.</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-20">&#182;</a>
               </div>
-              <p>Functions which has been replaced with new ones.</p>
+              <p>Functions which has been replaced with new ones when signatures are modified.</p>
 
             </div>
             
@@ -694,11 +723,7 @@ resolve static area reference limits easily. See example in <a href="#consolidat
             </div>
             
             <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n"</span> );
-      consolidateStaticMemory( M );
-
-      
-      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n"</span> );
-      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits );</pre></div></div>
+      consolidateStaticMemory( M );</pre></div></div>
             
         </li>
         
@@ -706,14 +731,19 @@ resolve static area reference limits easily. See example in <a href="#consolidat
         <li id="section-28">
             <div class="annotation">
               
-              <div class="pilwrap for-h6">
+              <div class="pilwrap ">
                 <a class="pilcrow" href="#section-28">&#182;</a>
               </div>
-              <h6># Analyze all functions</h6>
+              <p>Find out static limits of each address space structure and adds limits to <code>addressSpaceLimits</code>
+map sorted by address space number. Also adds the address space struct to value limits so that
+if lookups traces limits all the way up to address space allocation struct, then limits are
+found from limit map as normally <code>valueLimits[pointerOperand]</code>. <a href="#findAddressSpaceLimits">findAddressSpaceLimits( Module &amp;M,
+AreaLimitByValueMap &amp;valLimits, AreaLimitSetByAddressSpaceMap &amp;asLimits )</a>.</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>      <span class="keyword">for</span>( Module::iterator i = M.begin(); i != M.end(); ++i ) {</pre></div></div>
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n"</span> );
+      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits );</pre></div></div>
             
         </li>
         
@@ -724,31 +754,22 @@ resolve static area reference limits easily. See example in <a href="#consolidat
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-29">&#182;</a>
               </div>
-              <p>allow calling external functions with original signatures (this pass should be ran just
-for fully linked code)</p>
+              <p><strong>Analyze all original functions.</strong> Goes through all functions in module
+and creates new function signature for them and collects information of instructions
+that we will need in later transformations.
+If function is intrinsic or WebCL builtin declaration (we know how it will behave) we
+just skip it. If function is unknown external call compilation will fail.</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>        <span class="keyword">if</span> ( i-&gt;isIntrinsic() || i-&gt;isDeclaration() ) {
+            <div class="content"><div class='highlight'><pre>      <span class="keyword">for</span>( Module::iterator i = M.begin(); i != M.end(); ++i ) {
+
+        <span class="keyword">if</span> ( i-&gt;isIntrinsic() || i-&gt;isDeclaration() ) {
           <span class="keyword">if</span> (RunUnsafeMode) {
             DEBUG( dbgs() &lt;&lt; <span class="string">"Skipping: "</span> &lt;&lt; i-&gt;getName() &lt;&lt; <span class="string">" which is intrinsic and/or declaration\n"</span> );
             <span class="keyword">continue</span>;
-          }</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-30">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-30">&#182;</a>
-              </div>
-              <p>if ok builtin, skip this function (only analyze functions which has implementation available)</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>          <span class="keyword">if</span> (!isWebClBuiltin(i)) {
+          }
+          <span class="keyword">if</span> (!isWebClBuiltin(i)) {
             dbgs() &lt;&lt; <span class="string">"Found: "</span> &lt;&lt; i-&gt;getName() &lt;&lt; <span class="string">" which is intrinsic and/or declaration\n"</span>;
             fast_assert(<span class="keyword">false</span>, <span class="string">"Calling external functions is not allowed in strict mode. "</span>
                         <span class="string">"Also intrinsics should be lowered before runnin pass."</span>);
@@ -761,20 +782,37 @@ for fully linked code)</p>
         </li>
         
         
+        <li id="section-30">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-30">&#182;</a>
+              </div>
+              <p>Creates new signatures for internal functions in the program and adds mapping between
+old and new functions. Also creates mapping between old and new function arguments.
+<a href="#createNewFunctionSignature">Function<em> createNewFunctionSignature(Function </em>F, FunctionMap &amp;functionMapping,
+ArgumentMap &amp;argumentMapping )</a>.</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>        DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n"</span> );
+        createNewFunctionSignature( i, replacedFunctions, replacedArguments );</pre></div></div>
+            
+        </li>
+        
+        
         <li id="section-31">
             <div class="annotation">
               
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-31">&#182;</a>
               </div>
-              <p>actually this should just collect functions to replace, but now it also creates new signatures</p>
+              <p>Runs through all instructions in function and collects instructions.
+<a href="#sortInstructions">sortInstructions( Function *F, ... ) </a>.</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>        DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n"</span> );
-        createNewFunctionSignature( i, replacedFunctions, replacedArguments );
-
-        DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n"</span> );
+            <div class="content"><div class='highlight'><pre>        DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n"</span> );
         sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );</pre></div></div>
             
         </li>
@@ -786,12 +824,34 @@ for fully linked code)</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-32">&#182;</a>
               </div>
-              <p>combine call sets</p>
+              <p>Initialize the additional <code>allCalls</code> and <code>resolveLimitsOperands</code> sets which are useful in later phases.</p>
 
             </div>
             
             <div class="content"><div class='highlight'><pre>        allCalls.insert(internalCalls.begin(), internalCalls.end());
-        allCalls.insert(externalCalls.begin(), externalCalls.end());</pre></div></div>
+        allCalls.insert(externalCalls.begin(), externalCalls.end());
+        
+        <span class="keyword">for</span> (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
+          LoadInst *load = *i;
+          resolveLimitsOperands.insert(load-&gt;getPointerOperand());
+        }
+        
+        <span class="keyword">for</span> (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+          StoreInst *store = *i;
+          resolveLimitsOperands.insert(store-&gt;getPointerOperand());
+        }
+        
+        <span class="keyword">for</span> (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
+          CallInst *call = *i;
+          <span class="keyword">for</span> (size_t op = <span class="number">0</span>; op &lt; call-&gt;getNumOperands(); op++) {
+            Value *operand = call-&gt;getOperand(op);
+            <span class="comment">/* ignore function pointers operands (not allowed in opencl)... no need to check them, but add all other pointer operands */</span>
+            <span class="keyword">if</span> ( operand-&gt;getType()-&gt;isPointerTy() &amp;&amp; !operand-&gt;getType()-&gt;getPointerElementType()-&gt;isFunctionTy() ) {
+              resolveLimitsOperands.insert(operand);
+            }
+          }
+        }
+      }</pre></div></div>
             
         </li>
         
@@ -802,19 +862,10 @@ for fully linked code)</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-33">&#182;</a>
               </div>
-              <p>collect values whose limits must be traced</p>
+              <p><strong>End of analyze phase.</strong> After this <code>replacedFunctions</code>, <code>replacedArguments</code>, <code>internalCalls</code>, <code>externalCalls</code>,
+<code>allCalls</code>, <code>allocas</code>, <code>stores</code>, <code>loads</code> and <code>resolveLimitsOperands</code> should not be changed, but only used for lookup.</p>
 
             </div>
-            
-            <div class="content"><div class='highlight'><pre>        <span class="keyword">for</span> (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
-          LoadInst *load = *i;
-          resolveLimitsOperands.insert(load-&gt;getPointerOperand());
-        }
-        
-        <span class="keyword">for</span> (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
-          StoreInst *store = *i;
-          resolveLimitsOperands.insert(store-&gt;getPointerOperand());
-        }</pre></div></div>
             
         </li>
         
@@ -825,14 +876,15 @@ for fully linked code)</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-34">&#182;</a>
               </div>
-              <p>add original call operands to list for resolving limits.</p>
+              <p>Moves function instructions / basic blocks from original functions to new ones and fixes uses of original function arguments
+to point new arguments. After this function behavior should be back to original, except if function has call to another
+function whose signature was changed. <a href="#moveOldFunctionImplementationsToNewSignatures">moveOldFunctionImplementationsToNewSignatures(FunctionMap &amp;replacedFunctions,
+ArgumentMap &amp;replacedArguments)</a>.</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>        <span class="keyword">for</span> (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
-          CallInst *call = *i;
-          <span class="keyword">for</span> (size_t op = <span class="number">0</span>; op &lt; call-&gt;getNumOperands(); op++) {
-            Value *operand = call-&gt;getOperand(op);</pre></div></div>
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n"</span> );
+      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments);</pre></div></div>
             
         </li>
         
@@ -843,16 +895,16 @@ for fully linked code)</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-35">&#182;</a>
               </div>
-              <p>ignore function pointers... no need to check them</p>
+              <p>Finds out kernel functions from Module metadata and creates WebCL kernels from them. <code>kernel void foo(global float *bar)</code> -&gt;
+<code>kernel void foo(global float *bar, size_t bar_size)</code>. Also calculates and creates run-time limits for passed kernel
+arguments and adds limits to <code>addressSpaceLimits</code> bookkeeping and calls original kernel implementation which has been changed
+earlier to use safe pointer arguments. <a href="#createKernelEntryPoints">createKernelEntryPoints(Module &amp;M, FunctionMap &amp;replacedFunctions,
+AreaLimitSetByAddressSpaceMap &amp;asLimits)</a>.</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>            <span class="keyword">if</span> ( operand-&gt;getType()-&gt;isPointerTy() &amp;&amp; !operand-&gt;getType()-&gt;getPointerElementType()-&gt;isFunctionTy() ) {
-              resolveLimitsOperands.insert(operand);
-            }
-          }
-        }
-      }</pre></div></div>
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n"</span> );
+      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);</pre></div></div>
             
         </li>
         
@@ -860,15 +912,17 @@ for fully linked code)</p>
         <li id="section-36">
             <div class="annotation">
               
-              <div class="pilwrap for-h6">
+              <div class="pilwrap ">
                 <a class="pilcrow" href="#section-36">&#182;</a>
               </div>
-              <h6># analyze is done</h6>
+              <p>Traces limits for all instructions and values in the module and adds them to <code>valueLimits</code>. After this we should be able
+to get min and max addresses for all instructions / globals that we are interested in. <a href="#findLimits">findLimits(FunctionMap &amp;replacedFunctions,
+ValueSet &amp;checkOperands, AreaLimitByValueMap &amp;valLimits, AreaLimitSetByAddressSpaceMap &amp;asLimits)</a>.</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>      
-      DEBUG( dbgs() &lt;&lt; <span class="string">"\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n"</span> );</pre></div></div>
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIND LIMITS OF EVERY REQUIRED OPERAND --------------\n"</span> );
+      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits);</pre></div></div>
             
         </li>
         
@@ -879,20 +933,12 @@ for fully linked code)</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-37">&#182;</a>
               </div>
-              <p>gets rid of old functions, replaces calls to old functions and fix call arguments to 
-use smart pointers in call parameters</p>
+              <p>Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
+<a href="#fixCallsToUseChangedSignatures">fixCallsToUseChangedSignatures(...)</a></p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments);
-      
-      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n"</span> );
-      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
-
-      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIND LIMITS OF EVERY LOAD/STORE OPERAND --------------\n"</span> );
-      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits);
-      
-      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n"</span> );
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n"</span> );
       fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, valueLimits);</pre></div></div>
             
         </li>
@@ -901,24 +947,17 @@ use smart pointers in call parameters</p>
         <li id="section-38">
             <div class="annotation">
               
-              <div class="pilwrap for-h6">
+              <div class="pilwrap ">
                 <a class="pilcrow" href="#section-38">&#182;</a>
               </div>
-              <h6>#</h6>
-<h4>At this point code should be again perfectly executable and runs with new function</h4>
-<h4>signatures and has cahnged pointers to smart ones</h4>
-<h6>#</h6>
+              <p>Analyze code and find out the cases where we can be sure that memory access is safe in compile time and check can be omitted.
+NOTE: better place for this could be already before any changes has been made to original code.
+<a href="#collectSafeExceptions">collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions)</a></p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED TODO: collect direct loads etc. who shouldnt need checks --------------\n"</span> );
-      collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions);
-
-      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- ADDING BOUNDARY CHECKS --------------\n"</span> );
-      addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
-
-      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n"</span> );
-      makeBuiltinCallsSafe(externalCalls, valueLimits);</pre></div></div>
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED --------------\n"</span> );
+      collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions);</pre></div></div>
             
         </li>
         
@@ -929,14 +968,53 @@ use smart pointers in call parameters</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-39">&#182;</a>
               </div>
-              <p>Helps if pass fails on validation after pass has ended
-dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT --------------\n&quot;;
-M.print(dbgs(), NULL);
-dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;;</p>
+              <p>Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
+creates some memory intrinsics we might need to take care of checking their operands as well.
+<a href="#addBoundaryChecks">addBoundaryChecks( ... )</a></p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>      <span class="keyword">return</span> <span class="keyword">true</span>;
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- ADDING BOUNDARY CHECKS --------------\n"</span> );
+      addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-40">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-40">&#182;</a>
+              </div>
+              <p>Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
+version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
+<a href="#makeBuiltinCallsSafe">makeBuiltinCallsSafe( ... )</a></p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>      DEBUG( dbgs() &lt;&lt; <span class="string">"\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n"</span> );
+      makeBuiltinCallsSafe(externalCalls, valueLimits);</pre></div></div>
+            
+        </li>
+        
+        
+        <li id="section-41">
+            <div class="annotation">
+              
+              <div class="pilwrap ">
+                <a class="pilcrow" href="#section-41">&#182;</a>
+              </div>
+              <p>Helps to print out resulted LLVM IR code if pass fails before writing results
+on pass output validation</p>
+
+            </div>
+            
+            <div class="content"><div class='highlight'><pre>      <span class="comment">/*
+      dbgs() &lt;&lt; "\n --------------- FINAL OUTPUT --------------\n";
+      M.print(dbgs(), NULL);
+      dbgs() &lt;&lt; "\n --------------- FINAL OUTPUT END --------------\n";
+      */</span>
+      <span class="keyword">return</span> <span class="keyword">true</span>;
     }
     
     <span class="comment">/**
@@ -956,11 +1034,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-40">
+        <li id="section-42">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-40">&#182;</a>
+                <a class="pilcrow" href="#section-42">&#182;</a>
               </div>
               <p>check all uses of value until cannot trace anymore</p>
 
@@ -972,11 +1050,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-41">
+        <li id="section-43">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-41">&#182;</a>
+                <a class="pilcrow" href="#section-43">&#182;</a>
               </div>
               <p>----- continue to next use if cannot be sure about the limits</p>
 
@@ -996,11 +1074,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-42">
+        <li id="section-44">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-42">&#182;</a>
+                <a class="pilcrow" href="#section-44">&#182;</a>
               </div>
               <p>first check if use is actually in value operand and in that case set limits for destination pointer</p>
 
@@ -1021,11 +1099,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-43">
+        <li id="section-45">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-43">&#182;</a>
+                <a class="pilcrow" href="#section-45">&#182;</a>
               </div>
               <p>if cast is not from pointer to pointer in same address space, cannot resolve</p>
 
@@ -1045,11 +1123,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-44">
+        <li id="section-46">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-44">&#182;</a>
+                <a class="pilcrow" href="#section-46">&#182;</a>
               </div>
               <p>notify about unexpected cannot be resolved cases for debug</p>
 
@@ -1063,11 +1141,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-45">
+        <li id="section-47">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-45">&#182;</a>
+                <a class="pilcrow" href="#section-47">&#182;</a>
               </div>
               <p>limits of use are directly derived from value</p>
 
@@ -1099,11 +1177,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-46">
+        <li id="section-48">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-46">&#182;</a>
+                <a class="pilcrow" href="#section-48">&#182;</a>
               </div>
               <p>if cast is not from pointer to pointer in same address space, cannot resolve</p>
 
@@ -1156,11 +1234,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-47">
+        <li id="section-49">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-47">&#182;</a>
+                <a class="pilcrow" href="#section-49">&#182;</a>
               </div>
               <p>first trace all uses of function arguments to find their limits</p>
 
@@ -1179,11 +1257,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-48">
+        <li id="section-50">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-48">&#182;</a>
+                <a class="pilcrow" href="#section-50">&#182;</a>
               </div>
               <p>if safe pointer argument, trace uses</p>
 
@@ -1198,28 +1276,28 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-49">
+        <li id="section-51">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-49">&#182;</a>
+                <a class="pilcrow" href="#section-51">&#182;</a>
               </div>
               <p>Adding extract value instructions to entry block to have direct limits stored.</p>
 
             </div>
             
             <div class="content"><div class='highlight'><pre>            BasicBlock &amp;entry = safePointerFunction-&gt;getEntryBlock();
-            ExtractValueInst *minLimit = ExtractValueInst::Create( &amp;replaceArg, genArrayRef&lt;<span class="keyword">unsigned</span> <span class="keyword">int</span>&gt;(<span class="number">1</span>), replaceArg.getName() + <span class="string">".min"</span>, &amp;(*entry.begin()) );
-            ExtractValueInst *maxLimit = ExtractValueInst::Create( &amp;replaceArg, genArrayRef&lt;<span class="keyword">unsigned</span> <span class="keyword">int</span>&gt;(<span class="number">2</span>), replaceArg.getName() + <span class="string">".max"</span>, &amp;(*entry.begin()) );</pre></div></div>
+            ExtractValueInst *minLimit = ExtractValueInst::Create( &amp;replaceArg, genVector&lt;<span class="keyword">unsigned</span> <span class="keyword">int</span>&gt;(<span class="number">1</span>), replaceArg.getName() + <span class="string">".min"</span>, &amp;(*entry.begin()) );
+            ExtractValueInst *maxLimit = ExtractValueInst::Create( &amp;replaceArg, genVector&lt;<span class="keyword">unsigned</span> <span class="keyword">int</span>&gt;(<span class="number">2</span>), replaceArg.getName() + <span class="string">".max"</span>, &amp;(*entry.begin()) );</pre></div></div>
             
         </li>
         
         
-        <li id="section-50">
+        <li id="section-52">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-50">&#182;</a>
+                <a class="pilcrow" href="#section-52">&#182;</a>
               </div>
               <p>Init direct limits for current and do some analysis to resolve derived limits</p>
 
@@ -1236,11 +1314,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-51">
+        <li id="section-53">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-51">&#182;</a>
+                <a class="pilcrow" href="#section-53">&#182;</a>
               </div>
               <p>optimize single area address space limits</p>
 
@@ -1256,11 +1334,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-52">
+        <li id="section-54">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-52">&#182;</a>
+                <a class="pilcrow" href="#section-54">&#182;</a>
               </div>
               <p>allow no limit values in unsafe mode (e.g. externals)</p>
 
@@ -1297,11 +1375,11 @@ dbgs() &lt;&lt; &quot;\n --------------- FINAL OUTPUT END --------------\n&quot;
         </li>
         
         
-        <li id="section-53">
+        <li id="section-55">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-53">&#182;</a>
+                <a class="pilcrow" href="#section-55">&#182;</a>
               </div>
               <p>for now unnamed addresses are kept ouside from general address space limits, because they might pollute it
 unnecessarily. If unnamed address requires limits, they are created on demand.
@@ -1311,33 +1389,33 @@ this should work, because there shouldn&#39;t be any other than direct reference
             
             <div class="content"><div class='highlight'><pre>        <span class="keyword">if</span> ( g-&gt;hasUnnamedAddr() ) {
           DEBUG( dbgs() &lt;&lt; <span class="string">"Found unnamed address, adding limits to bookkeeping\n"</span>; );
-          Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntArrayRef&lt;Constant*&gt;(c, <span class="number">0</span>, <span class="number">0</span>));</pre></div></div>
+          Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntVector&lt;Constant*&gt;(c, <span class="number">0</span>, <span class="number">0</span>));</pre></div></div>
             
         </li>
         
         
-        <li id="section-54">
+        <li id="section-56">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-54">&#182;</a>
+                <a class="pilcrow" href="#section-56">&#182;</a>
               </div>
               <p>NOTE: this works, but could be safer to check element type of global and get limits from number of element</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntArrayRef&lt;Constant*&gt;(c, <span class="number">1</span>, <span class="number">0</span>));
+            <div class="content"><div class='highlight'><pre>          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntVector&lt;Constant*&gt;(c, <span class="number">1</span>, <span class="number">0</span>));
           valLimits[g] = AreaLimit::Create(firstValid, firstInvalid, <span class="keyword">false</span>);
         }</pre></div></div>
             
         </li>
         
         
-        <li id="section-55">
+        <li id="section-57">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-55">&#182;</a>
+                <a class="pilcrow" href="#section-57">&#182;</a>
               </div>
               <p>collect only named addresses which are not externs</p>
 
@@ -1352,11 +1430,11 @@ this should work, because there shouldn&#39;t be any other than direct reference
         </li>
         
         
-        <li id="section-56">
+        <li id="section-58">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-56">&#182;</a>
+                <a class="pilcrow" href="#section-58">&#182;</a>
               </div>
               <p>pointercast all limits to float* to make result more readable</p>
 
@@ -1370,11 +1448,11 @@ this should work, because there shouldn&#39;t be any other than direct reference
         </li>
         
         
-        <li id="section-57">
+        <li id="section-59">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-57">&#182;</a>
+                <a class="pilcrow" href="#section-59">&#182;</a>
               </div>
               <p>make sure that references to this global variable always respects its own limits</p>
 
@@ -1386,11 +1464,11 @@ this should work, because there shouldn&#39;t be any other than direct reference
         </li>
         
         
-        <li id="section-58">
+        <li id="section-60">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-58">&#182;</a>
+                <a class="pilcrow" href="#section-60">&#182;</a>
               </div>
               <p>requires an extra alias for GEP and for Cast or llvm-as throws error: &quot;Aliasee should be either GlobalValue or bitcast of GlobalValue&quot;</p>
 
@@ -1422,11 +1500,11 @@ this should work, because there shouldn&#39;t be any other than direct reference
         </li>
         
         
-        <li id="section-59">
+        <li id="section-61">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-59">&#182;</a>
+                <a class="pilcrow" href="#section-61">&#182;</a>
               </div>
               <p>collect only named linked addresses (for unnamed there cannot be relative references anywhere) externals are allowed only in special case.</p>
 
@@ -1450,11 +1528,11 @@ this should work, because there shouldn&#39;t be any other than direct reference
         </li>
         
         
-        <li id="section-60">
+        <li id="section-62">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-60">&#182;</a>
+                <a class="pilcrow" href="#section-62">&#182;</a>
               </div>
               <p>skip declarations (they does not even have entry blocks)</p>
 
@@ -1473,11 +1551,11 @@ this should work, because there shouldn&#39;t be any other than direct reference
         </li>
         
         
-        <li id="section-61">
+        <li id="section-63">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-61">&#182;</a>
+                <a class="pilcrow" href="#section-63">&#182;</a>
               </div>
               <p>simple fix of alignment of mem intrinsics</p>
 
@@ -1492,11 +1570,11 @@ this should work, because there shouldn&#39;t be any other than direct reference
         </li>
         
         
-        <li id="section-62">
+        <li id="section-64">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-62">&#182;</a>
+                <a class="pilcrow" href="#section-64">&#182;</a>
               </div>
               <p>we can set alignment argument to 1 which is always valid argument, later optimization passes sets
 alignment back to optimal value</p>
@@ -1514,11 +1592,11 @@ alignment back to optimal value</p>
         </li>
         
         
-        <li id="section-63">
+        <li id="section-65">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-63">&#182;</a>
+                <a class="pilcrow" href="#section-65">&#182;</a>
               </div>
               <p>create struct for each address space, currently not doing any special ordering </p>
 
@@ -1531,11 +1609,11 @@ alignment back to optimal value</p>
         </li>
         
         
-        <li id="section-64">
+        <li id="section-66">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-64">&#182;</a>
+                <a class="pilcrow" href="#section-66">&#182;</a>
               </div>
               <p>TODO: sort types by alignment and size to minimize padding</p>
 <p>create struct type</p>
@@ -1549,11 +1627,11 @@ alignment back to optimal value</p>
         </li>
         
         
-        <li id="section-65">
+        <li id="section-67">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-65">&#182;</a>
+                <a class="pilcrow" href="#section-67">&#182;</a>
               </div>
               <p>element type </p>
 
@@ -1565,11 +1643,11 @@ alignment back to optimal value</p>
         </li>
         
         
-        <li id="section-66">
+        <li id="section-68">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-66">&#182;</a>
+                <a class="pilcrow" href="#section-68">&#182;</a>
               </div>
               <p>initializer</p>
 
@@ -1612,11 +1690,11 @@ alignment back to optimal value</p>
         </li>
         
         
-        <li id="section-67">
+        <li id="section-69">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-67">&#182;</a>
+                <a class="pilcrow" href="#section-69">&#182;</a>
               </div>
               <p>NOTE: cant give name to struct literal type, would be nice to have for readability
 addressSpaceStructType-&gt;setName(structName.str() + &quot;Type&quot;);</p>
@@ -1632,11 +1710,11 @@ addressSpaceStructType-&gt;setName(structName.str() + &quot;Type&quot;);</p>
         </li>
         
         
-        <li id="section-68">
+        <li id="section-70">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-68">&#182;</a>
+                <a class="pilcrow" href="#section-70">&#182;</a>
               </div>
               <p>replace all uses of old allocas and globals value with new constant geps and remove original values</p>
 
@@ -1648,27 +1726,27 @@ addressSpaceStructType-&gt;setName(structName.str() + &quot;Type&quot;);</p>
         </li>
         
         
-        <li id="section-69">
+        <li id="section-71">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-69">&#182;</a>
+                <a class="pilcrow" href="#section-71">&#182;</a>
               </div>
               <p>get field of struct</p>
 
             </div>
             
             <div class="content"><div class='highlight'><pre>          Constant *structVal = ConstantExpr::getInBoundsGetElementPtr
-            (dyn_cast&lt;Constant&gt;(aSpaceStruct), genIntArrayRef&lt;Constant*&gt;( c, <span class="number">0</span>, valIndex) );</pre></div></div>
+            (dyn_cast&lt;Constant&gt;(aSpaceStruct), genIntVector&lt;Constant*&gt;( c, <span class="number">0</span>, valIndex) );</pre></div></div>
             
         </li>
         
         
-        <li id="section-70">
+        <li id="section-72">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-70">&#182;</a>
+                <a class="pilcrow" href="#section-72">&#182;</a>
               </div>
               <p>Currently LLVM IR does not support GEP in alias. If support is added, uncommenting this will greatly improve readability of produced code
 for alias: GlobalAlias *fieldAlias = new GlobalAlias(structVal-&gt;getType(), GlobalValue::InternalLinkage, &quot;&quot;, structVal, &amp;M);</p>
@@ -1684,11 +1762,11 @@ for alias: GlobalAlias *fieldAlias = new GlobalAlias(structVal-&gt;getType(), Gl
         </li>
         
         
-        <li id="section-71">
+        <li id="section-73">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-71">&#182;</a>
+                <a class="pilcrow" href="#section-73">&#182;</a>
               </div>
               <p>use alias everywhere
 for alias: origVal-&gt;replaceAllUsesWith(fieldAlias);</p>
@@ -1700,11 +1778,11 @@ for alias: origVal-&gt;replaceAllUsesWith(fieldAlias);</p>
         </li>
         
         
-        <li id="section-72">
+        <li id="section-74">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-72">&#182;</a>
+                <a class="pilcrow" href="#section-74">&#182;</a>
               </div>
               <p>set name according to original value type and remove original</p>
 
@@ -1715,11 +1793,11 @@ for alias: origVal-&gt;replaceAllUsesWith(fieldAlias);</p>
         </li>
         
         
-        <li id="section-73">
+        <li id="section-75">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-73">&#182;</a>
+                <a class="pilcrow" href="#section-75">&#182;</a>
               </div>
               <p>for alias: fieldAlias-&gt;setName(alloca-&gt;getParent()-&gt;getParent()-&gt;getName() + &quot;.&quot; + origVal-&gt;getName());</p>
 
@@ -1732,11 +1810,11 @@ for alias: origVal-&gt;replaceAllUsesWith(fieldAlias);</p>
         </li>
         
         
-        <li id="section-74">
+        <li id="section-76">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-74">&#182;</a>
+                <a class="pilcrow" href="#section-76">&#182;</a>
               </div>
               <p>for alias: fieldAlias-&gt;setName(aSpaceStruct-&gt;getName() + &quot;.&quot; + origVal-&gt;getName());</p>
 
@@ -1749,11 +1827,11 @@ for alias: origVal-&gt;replaceAllUsesWith(fieldAlias);</p>
         </li>
         
         
-        <li id="section-75">
+        <li id="section-77">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-75">&#182;</a>
+                <a class="pilcrow" href="#section-77">&#182;</a>
               </div>
               <p>DEBUG( dbgs() &lt;&lt; &quot;Alias: &quot;; fieldAlias-&gt;print(dbgs()); dbgs() &lt;&lt; &quot;\n&quot;; );</p>
 
@@ -1796,11 +1874,11 @@ for alias: origVal-&gt;replaceAllUsesWith(fieldAlias);</p>
         </li>
         
         
-        <li id="section-76">
+        <li id="section-78">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-76">&#182;</a>
+                <a class="pilcrow" href="#section-78">&#182;</a>
               </div>
               <p>If there is need, create new kernel wrapper and replace old kernel reference with new WebCl
 compatible version.</p>
@@ -1814,11 +1892,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-77">
+        <li id="section-79">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-77">&#182;</a>
+                <a class="pilcrow" href="#section-79">&#182;</a>
               </div>
               <p>make smartKernel to be internal linkage to allow better optimization</p>
 
@@ -1829,11 +1907,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-78">
+        <li id="section-80">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-78">&#182;</a>
+                <a class="pilcrow" href="#section-80">&#182;</a>
               </div>
               <p>TODO: if found nvptx_kernel attribute, move it to new kernel</p>
 
@@ -1862,11 +1940,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-79">
+        <li id="section-81">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-79">&#182;</a>
+                <a class="pilcrow" href="#section-81">&#182;</a>
               </div>
               <p>create argument list for WebCl kernel</p>
 
@@ -1887,11 +1965,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-80">
+        <li id="section-82">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-80">&#182;</a>
+                <a class="pilcrow" href="#section-82">&#182;</a>
               </div>
               <p>creating new function with WebCl compatible arguments</p>
 
@@ -1905,11 +1983,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-81">
+        <li id="section-83">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-81">&#182;</a>
+                <a class="pilcrow" href="#section-83">&#182;</a>
               </div>
               <p>create basic block and builder</p>
 
@@ -1930,11 +2008,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-82">
+        <li id="section-84">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-82">&#182;</a>
+                <a class="pilcrow" href="#section-84">&#182;</a>
               </div>
               <p>create global unnamed variables for each limits got from kernel arguments</p>
 
@@ -1949,11 +2027,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-83">
+        <li id="section-85">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-83">&#182;</a>
+                <a class="pilcrow" href="#section-85">&#182;</a>
               </div>
               <p>add addresses to limit set for the address space</p>
 
@@ -1972,11 +2050,11 @@ compatible version.</p>
         </li>
         
         
-        <li id="section-84">
+        <li id="section-86">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-84">&#182;</a>
+                <a class="pilcrow" href="#section-86">&#182;</a>
               </div>
               <p>create smart pointer alloca to entry block of function, which is used as a argument to
 function call</p>
@@ -2020,50 +2098,15 @@ function call</p>
      *
      * TODO: or just maybe we could create unnamed global variable and pass it to prevent polluting entry block too much
      */</span>
-    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, <span class="keyword">bool</span> isIndirect, Instruction *beforeInstruction) {
-      DEBUG( dbgs() &lt;&lt; <span class="string">"1-Converting arg: "</span>; origArg-&gt;print(dbgs());
+    <span class="keyword">template</span> &lt;<span class="keyword">typename</span> Location&gt;
+    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, <span class="keyword">bool</span> isIndirect, Location* location) {
+      <span class="keyword">typedef</span> LocationKind&lt;Location&gt; LK;
+
+      DEBUG( dbgs() &lt;&lt; (LK::initAtEnd ? <span class="string">"2"</span> : <span class="string">"1"</span>) &lt;&lt; <span class="string">"-Converting arg: "</span>; origArg-&gt;print(dbgs());
              dbgs() &lt;&lt; <span class="string">"\nmin: "</span>; minLimit-&gt;print(dbgs());
              dbgs() &lt;&lt; <span class="string">"\nmax: "</span>; maxLimit-&gt;print(dbgs()); dbgs() &lt;&lt; <span class="string">"\n"</span>; );
 
       fast_assert(origArg-&gt;getType()-&gt;isPointerTy(), <span class="string">"Cannot pass non pointer as smart pointer."</span>);</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-85">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-85">&#182;</a>
-              </div>
-              <p>create alloca to entry block of function for the value</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>      Function* argFun = beforeInstruction-&gt;getParent()-&gt;getParent();
-      BasicBlock &amp;entryBlock = argFun-&gt;getEntryBlock();
-      LLVMContext &amp;c = argFun-&gt;getContext();
-      Type *smarArgType = getSmartStructType(c, origArg-&gt;getType());
-      AllocaInst *smartArgStructAlloca = <span class="keyword">new</span> AllocaInst(smarArgType, origArg-&gt;getName() + <span class="string">".SmartPassing"</span>, &amp;entryBlock.front());</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-86">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-86">&#182;</a>
-              </div>
-              <p>create temp smart pointer struct and initialize it with correct values</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">0</span>), <span class="string">""</span>, beforeInstruction);
-      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">1</span>), <span class="string">""</span>, beforeInstruction);
-      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">2</span>), <span class="string">""</span>, beforeInstruction);
-      Value *minValue = minLimit;
-      Value *maxValue = maxLimit;</pre></div></div>
             
         </li>
         
@@ -2074,22 +2117,15 @@ function call</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-87">&#182;</a>
               </div>
-              <p>if indirect limit, we need to load value first</p>
+              <p>create alloca to entry block of function for the value</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>      <span class="keyword">if</span> (isIndirect) {
-        minValue = <span class="keyword">new</span> LoadInst(minLimit, <span class="string">""</span>, beforeInstruction);
-        maxValue = <span class="keyword">new</span> LoadInst(maxLimit, <span class="string">""</span>, beforeInstruction);
-      }
-      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg-&gt;getType(), <span class="string">""</span>, beforeInstruction);
-      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg-&gt;getType(), <span class="string">""</span>, beforeInstruction);
-      <span class="keyword">new</span> StoreInst(origArg, curGEP, beforeInstruction);
-      <span class="keyword">new</span> StoreInst(castedMinAddress, minGEP, beforeInstruction);
-      <span class="keyword">new</span> StoreInst(castedMaxAddress, maxGEP, beforeInstruction);
-      LoadInst *smartArgVal = <span class="keyword">new</span> LoadInst(smartArgStructAlloca, <span class="string">""</span>, beforeInstruction);
-      <span class="keyword">return</span> smartArgVal;
-    }</pre></div></div>
+            <div class="content"><div class='highlight'><pre>      Function* argFun = LK::getParent(location);
+      BasicBlock &amp;entryBlock = argFun-&gt;getEntryBlock();
+      LLVMContext &amp;c = argFun-&gt;getContext();
+      Type *smarArgType = getSmartStructType(c, origArg-&gt;getType());
+      AllocaInst *smartArgStructAlloca = <span class="keyword">new</span> AllocaInst(smarArgType, origArg-&gt;getName() + <span class="string">".SmartPassing"</span>, LK::AllocInstLocation(&amp;entryBlock));</pre></div></div>
             
         </li>
         
@@ -2100,16 +2136,15 @@ function call</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-88">&#182;</a>
               </div>
-              <p>copy - paste refactor !</p>
+              <p>create temp smart pointer struct and initialize it with correct values</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>    Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, <span class="keyword">bool</span> isIndirect, BasicBlock *initAtEndOf) {
-      DEBUG( dbgs() &lt;&lt; <span class="string">"2-Converting arg: "</span>; origArg-&gt;print(dbgs());
-             dbgs() &lt;&lt; <span class="string">"\nmin: "</span>; minLimit-&gt;print(dbgs());
-             dbgs() &lt;&lt; <span class="string">"\nmax: "</span>; maxLimit-&gt;print(dbgs()); dbgs() &lt;&lt; <span class="string">"\n"</span>; );
-
-      fast_assert(origArg-&gt;getType()-&gt;isPointerTy(), <span class="string">"Cannot pass non pointer as smart pointer."</span>);</pre></div></div>
+            <div class="content"><div class='highlight'><pre>      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">0</span>), <span class="string">""</span>, location);
+      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">1</span>), <span class="string">""</span>, location);
+      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">2</span>), <span class="string">""</span>, location);
+      Value *minValue = minLimit;
+      Value *maxValue = maxLimit;</pre></div></div>
             
         </li>
         
@@ -2120,61 +2155,23 @@ function call</p>
               <div class="pilwrap ">
                 <a class="pilcrow" href="#section-89">&#182;</a>
               </div>
-              <p>create alloca to entry block of function for the value</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>      Function* argFun = initAtEndOf-&gt;getParent();
-      BasicBlock &amp;entryBlock = argFun-&gt;getEntryBlock();
-      LLVMContext &amp;c = argFun-&gt;getContext();
-      Type *smarArgType = getSmartStructType(c, origArg-&gt;getType());
-      AllocaInst *smartArgStructAlloca = <span class="keyword">new</span> AllocaInst(smarArgType, origArg-&gt;getName() + <span class="string">".SmartPassing"</span>, &amp;entryBlock);</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-90">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-90">&#182;</a>
-              </div>
-              <p>create temp smart pointer struct and initialize it with correct values</p>
-
-            </div>
-            
-            <div class="content"><div class='highlight'><pre>      GetElementPtrInst *curGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">0</span>), <span class="string">""</span>, initAtEndOf);
-      GetElementPtrInst *minGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">1</span>), <span class="string">""</span>, initAtEndOf);
-      GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntArrayRef&lt;Value*&gt;(c, <span class="number">0</span>, <span class="number">2</span>), <span class="string">""</span>, initAtEndOf);
-      Value *minValue = minLimit;
-      Value *maxValue = maxLimit;</pre></div></div>
-            
-        </li>
-        
-        
-        <li id="section-91">
-            <div class="annotation">
-              
-              <div class="pilwrap ">
-                <a class="pilcrow" href="#section-91">&#182;</a>
-              </div>
               <p>if indirect limit, we need to load value first</p>
 
             </div>
             
             <div class="content"><div class='highlight'><pre>      <span class="keyword">if</span> (isIndirect) {
-        minValue = <span class="keyword">new</span> LoadInst(minLimit, <span class="string">""</span>, initAtEndOf);
-        maxValue = <span class="keyword">new</span> LoadInst(maxLimit, <span class="string">""</span>, initAtEndOf);
+        minValue = <span class="keyword">new</span> LoadInst(minLimit, <span class="string">""</span>, location);
+        maxValue = <span class="keyword">new</span> LoadInst(maxLimit, <span class="string">""</span>, location);
       }
-      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg-&gt;getType(), <span class="string">""</span>, initAtEndOf);
-      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg-&gt;getType(), <span class="string">""</span>, initAtEndOf);
-      <span class="keyword">new</span> StoreInst(origArg, curGEP, initAtEndOf);
-      <span class="keyword">new</span> StoreInst(castedMinAddress, minGEP, initAtEndOf);
-      <span class="keyword">new</span> StoreInst(castedMaxAddress, maxGEP, initAtEndOf);
-      LoadInst *smartArgVal = <span class="keyword">new</span> LoadInst(smartArgStructAlloca, <span class="string">""</span>, initAtEndOf);
+      CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg-&gt;getType(), <span class="string">""</span>, location);
+      CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg-&gt;getType(), <span class="string">""</span>, location);
+      <span class="keyword">new</span> StoreInst(origArg, curGEP, location);
+      <span class="keyword">new</span> StoreInst(castedMinAddress, minGEP, location);
+      <span class="keyword">new</span> StoreInst(castedMaxAddress, maxGEP, location);
+      LoadInst *smartArgVal = <span class="keyword">new</span> LoadInst(smartArgStructAlloca, <span class="string">""</span>, location);
       <span class="keyword">return</span> smartArgVal;
     }
-      
+
     <span class="comment">/**
      * Paint all uses of argv of main function as safe ones, which does not require checks.
      *
@@ -2187,11 +2184,11 @@ function call</p>
         </li>
         
         
-        <li id="section-92">
+        <li id="section-90">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-92">&#182;</a>
+                <a class="pilcrow" href="#section-90">&#182;</a>
               </div>
               <p>----- continue to next use if cannot be sure about if still safe</p>
 
@@ -2206,11 +2203,11 @@ function call</p>
         </li>
         
         
-        <li id="section-93">
+        <li id="section-91">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-93">&#182;</a>
+                <a class="pilcrow" href="#section-91">&#182;</a>
               </div>
               <p>dont care about store, but try to find it&#39;s destinations uses too</p>
 
@@ -2227,11 +2224,11 @@ function call</p>
         </li>
         
         
-        <li id="section-94">
+        <li id="section-92">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-94">&#182;</a>
+                <a class="pilcrow" href="#section-92">&#182;</a>
               </div>
               <p>notify about unexpected cannot be resolved cases for debug</p>
 
@@ -2263,11 +2260,11 @@ function call</p>
         </li>
         
         
-        <li id="section-95">
+        <li id="section-93">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-95">&#182;</a>
+                <a class="pilcrow" href="#section-93">&#182;</a>
               </div>
               <p>TODO: try validity of this check... naive case where one clearly overindexes types with constant indices</p>
 
@@ -2281,11 +2278,11 @@ function call</p>
         </li>
         
         
-        <li id="section-96">
+        <li id="section-94">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-96">&#182;</a>
+                <a class="pilcrow" href="#section-94">&#182;</a>
               </div>
               <p>check recursively if safe based on safe value....</p>
 
@@ -2376,11 +2373,11 @@ function call</p>
         </li>
         
         
-        <li id="section-97">
+        <li id="section-95">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-97">&#182;</a>
+                <a class="pilcrow" href="#section-95">&#182;</a>
               </div>
               <p>TODO: don&#39;t check loading externals...
 for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
@@ -2400,11 +2397,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-98">
+        <li id="section-96">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-98">&#182;</a>
+                <a class="pilcrow" href="#section-96">&#182;</a>
               </div>
               <p>check load instructions... </p>
 
@@ -2417,11 +2414,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-99">
+        <li id="section-97">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-99">&#182;</a>
+                <a class="pilcrow" href="#section-97">&#182;</a>
               </div>
               <p>check store instructions</p>
 
@@ -2440,11 +2437,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-100">
+        <li id="section-98">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-100">&#182;</a>
+                <a class="pilcrow" href="#section-98">&#182;</a>
               </div>
               <p>If no need to add checks, just skip</p>
 
@@ -2528,11 +2525,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-101">
+        <li id="section-99">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-101">&#182;</a>
+                <a class="pilcrow" href="#section-99">&#182;</a>
               </div>
               <p>------ this block is destination of all places where limit check fails, needs unconditional just branch to if.end block</p>
 
@@ -2544,11 +2541,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-102">
+        <li id="section-100">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-102">&#182;</a>
+                <a class="pilcrow" href="#section-100">&#182;</a>
               </div>
               <p>------ block for minimum value check</p>
 
@@ -2560,11 +2557,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-103">
+        <li id="section-101">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-103">&#182;</a>
+                <a class="pilcrow" href="#section-101">&#182;</a>
               </div>
               <p>------ get limits if require loading indirect address</p>
 <ul>
@@ -2578,11 +2575,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-104">
+        <li id="section-102">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-104">&#182;</a>
+                <a class="pilcrow" href="#section-102">&#182;</a>
               </div>
               <ul>
 <li>%2 = value to compare to get first valid address</li>
@@ -2595,11 +2592,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-105">
+        <li id="section-103">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-105">&#182;</a>
+                <a class="pilcrow" href="#section-103">&#182;</a>
               </div>
               <p>------ add max boundary check code</p>
 <p>get limits for this certain type of pointer... basically does &quot;((ptrType)(&amp;last_val[1]))[-1]&quot;</p>
@@ -2611,11 +2608,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-106">
+        <li id="section-104">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-106">&#182;</a>
+                <a class="pilcrow" href="#section-104">&#182;</a>
               </div>
               <ul>
 <li>%3 = icmp ugt i32* %0, %1</li>
@@ -2628,11 +2625,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-107">
+        <li id="section-105">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-107">&#182;</a>
+                <a class="pilcrow" href="#section-105">&#182;</a>
               </div>
               <ul>
 <li>br i1 %3, label %boundary.check.failed, label %check.first.limit</li>
@@ -2645,11 +2642,11 @@ for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i+
         </li>
         
         
-        <li id="section-108">
+        <li id="section-106">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-108">&#182;</a>
+                <a class="pilcrow" href="#section-106">&#182;</a>
               </div>
               <p>------ break current BB to 3 parts, start, boundary_check_ok and if_end (meminst is left in ok block)</p>
 <p>------ this block actually contains the load/store instruction and branch to if.end block
@@ -2662,11 +2659,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-109">
+        <li id="section-107">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-109">&#182;</a>
+                <a class="pilcrow" href="#section-107">&#182;</a>
               </div>
               <p>leave meminst to ok block and split it again to create if.end block</p>
 
@@ -2679,11 +2676,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-110">
+        <li id="section-108">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-110">&#182;</a>
+                <a class="pilcrow" href="#section-108">&#182;</a>
               </div>
               <p>erase implicitly added branch from start block to boundary.check.ok</p>
 
@@ -2694,11 +2691,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-111">
+        <li id="section-109">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-111">&#182;</a>
+                <a class="pilcrow" href="#section-109">&#182;</a>
               </div>
               <p>and add unconditional branch from boundary_fail_block to if.end </p>
 
@@ -2709,11 +2706,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-112">
+        <li id="section-110">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-112">&#182;</a>
+                <a class="pilcrow" href="#section-110">&#182;</a>
               </div>
               <p>------ add min boundary check code
 * check.first.limit:</p>
@@ -2728,11 +2725,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-113">
+        <li id="section-111">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-113">&#182;</a>
+                <a class="pilcrow" href="#section-111">&#182;</a>
               </div>
               <ul>
 <li>br i1 %4, label %boundary.check.failed, label %if.end</li>
@@ -2745,11 +2742,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-114">
+        <li id="section-112">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-114">&#182;</a>
+                <a class="pilcrow" href="#section-112">&#182;</a>
               </div>
               <p>if meminst == load, create phi node to start of if.end block and replace all uses of meminst with this phi</p>
 
@@ -2765,11 +2762,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-115">
+        <li id="section-113">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-115">&#182;</a>
+                <a class="pilcrow" href="#section-113">&#182;</a>
               </div>
               <p>organize blocks to order shown in comment</p>
 
@@ -2806,11 +2803,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-116">
+        <li id="section-114">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-116">&#182;</a>
+                <a class="pilcrow" href="#section-114">&#182;</a>
               </div>
               <p>we currently do not support some half vstore/vload variants</p>
 
@@ -2836,11 +2833,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-117">
+        <li id="section-115">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-117">&#182;</a>
+                <a class="pilcrow" href="#section-115">&#182;</a>
               </div>
               <p>if mapping is needed outside export this to be reference parameter instead of local </p>
 
@@ -2863,11 +2860,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-118">
+        <li id="section-116">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-118">&#182;</a>
+                <a class="pilcrow" href="#section-116">&#182;</a>
               </div>
               <p>if not supported yet assert</p>
 
@@ -2879,11 +2876,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-119">
+        <li id="section-117">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-119">&#182;</a>
+                <a class="pilcrow" href="#section-117">&#182;</a>
               </div>
               <p>if unsafe fix call</p>
 
@@ -2894,11 +2891,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-120">
+        <li id="section-118">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-120">&#182;</a>
+                <a class="pilcrow" href="#section-118">&#182;</a>
               </div>
               <p>if safe version is not yet generated do it first..</p>
 
@@ -2910,11 +2907,11 @@ dbgs() &lt;&lt; &quot;Going to split:\n&quot;; BB-&gt;print(dbgs()); dbgs() &lt;
         </li>
         
         
-        <li id="section-121">
+        <li id="section-119">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-121">&#182;</a>
+                <a class="pilcrow" href="#section-119">&#182;</a>
               </div>
               <p>simple name mangler to be able to select, which implementation to call (couldn&#39;t find easy way to do Itanium C++ mangling here)
 luckily the cases that needs mangling are pretty limited so we can keep it simple</p>
@@ -2962,11 +2959,11 @@ luckily the cases that needs mangling are pretty limited so we can keep it simpl
         </li>
         
         
-        <li id="section-122">
+        <li id="section-120">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-122">&#182;</a>
+                <a class="pilcrow" href="#section-120">&#182;</a>
               </div>
               <p>if function was not replaced (didn&#39;t have pointer parameters)</p>
 
@@ -2992,11 +2989,11 @@ luckily the cases that needs mangling are pretty limited so we can keep it simpl
         </li>
         
         
-        <li id="section-123">
+        <li id="section-121">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-123">&#182;</a>
+                <a class="pilcrow" href="#section-121">&#182;</a>
               </div>
               <p>find if function signature changed some Operands and change them to refer smart pointers 
 instead of pointers directly</p>
@@ -3006,6 +3003,7 @@ instead of pointers directly</p>
             <div class="content"><div class='highlight'><pre>      <span class="keyword">int</span> op = <span class="number">0</span>;
       Function::arg_iterator newArgIter = newFun-&gt;arg_begin();
       <span class="keyword">for</span>( Function::arg_iterator a = oldFun-&gt;arg_begin(); a != oldFun-&gt;arg_end(); ++a ) {
+        LLVMContext&amp; c = newFun-&gt;getContext();
         Argument* oldArg = a;
         Argument* newArg = newArgIter;
         newArgIter++;</pre></div></div>
@@ -3013,11 +3011,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-124">
+        <li id="section-122">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-124">&#182;</a>
+                <a class="pilcrow" href="#section-122">&#182;</a>
               </div>
               <p>NOTE: If we would first expand smart pointer map, we might be able to resolve smart pointer for parameter
       a lot easier... if there is need to add more and more special cases here, consider the option...</p>
@@ -3035,11 +3033,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-125">
+        <li id="section-123">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-125">&#182;</a>
+                <a class="pilcrow" href="#section-123">&#182;</a>
               </div>
               <p>if operand is argument it should be found from replacement map</p>
 
@@ -3053,11 +3051,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-126">
+        <li id="section-124">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-126">&#182;</a>
+                <a class="pilcrow" href="#section-124">&#182;</a>
               </div>
               <p>TODO: REMOVE THIS HACK IT OPENS SECURITY HOLE, ALWAYS GET LIMITS FROM RESULT OF ANALYSIS
       THIS WILL ALLOW UNSAFE CODE IF STRUCT IS GIVEN AS ARGUMENT AND THEN ONE ELEMENT OF
@@ -3071,11 +3069,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-127">
+        <li id="section-125">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-127">&#182;</a>
+                <a class="pilcrow" href="#section-125">&#182;</a>
               </div>
               <p>TODO: to make this secure we have to check that operand argument is listed in replaced argument map and is really generated by us (types in replaced arguments must been changed)</p>
 
@@ -3092,6 +3090,8 @@ instead of pointers directly</p>
               fast_assert(<span class="keyword">false</span>, <span class="string">"Could not resolve limits for a value passed as operand. Try to make code less obscure, write better limit analysis or do not change signature of this method at all and check against all limits of address space."</span>);
             }
             call-&gt;setOperand( op, convertArgumentToSmartStruct(operand, limit-&gt;min, limit-&gt;max, limit-&gt;indirect, call) );
+            <span class="keyword">int</span> argIdx = a-&gt;getArgNo() + <span class="number">1</span>; <span class="comment">// removeAttribute does know about arg# 0 (the return value), thus +1</span>
+            call-&gt;removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
           }
         }
         op++;
@@ -3115,11 +3115,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-128">
+        <li id="section-126">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-128">&#182;</a>
+                <a class="pilcrow" href="#section-126">&#182;</a>
               </div>
               <p>loop through arguments and if type has changed, then create label to access original arg </p>
 
@@ -3133,11 +3133,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-129">
+        <li id="section-127">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-129">&#182;</a>
+                <a class="pilcrow" href="#section-127">&#182;</a>
               </div>
               <p>move all instructions to new function</p>
 
@@ -3160,11 +3160,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-130">
+        <li id="section-128">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-130">&#182;</a>
+                <a class="pilcrow" href="#section-128">&#182;</a>
               </div>
               <p>non safe pointer argument... direct replace</p>
 
@@ -3176,11 +3176,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-131">
+        <li id="section-129">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-131">&#182;</a>
+                <a class="pilcrow" href="#section-129">&#182;</a>
               </div>
               <p>argument was not tampered, just replace uses to point the new function</p>
 
@@ -3193,11 +3193,11 @@ instead of pointers directly</p>
         </li>
         
         
-        <li id="section-132">
+        <li id="section-130">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-132">&#182;</a>
+                <a class="pilcrow" href="#section-130">&#182;</a>
               </div>
               <p>if argument types are not the same we need to find smart pointer that was generated for
 argument and create initializations so that existing smart alloca will get correct values</p>
@@ -3213,29 +3213,29 @@ used in function and replace all uses with that.</p>
         </li>
         
         
-        <li id="section-133">
+        <li id="section-131">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-133">&#182;</a>
+                <a class="pilcrow" href="#section-131">&#182;</a>
               </div>
               <p>get value of passed smart_pointer.cur and replace all uses of original argument with it</p>
 
             </div>
             
             <div class="content"><div class='highlight'><pre>          ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
-                                                                 genArrayRef&lt;<span class="keyword">unsigned</span> <span class="keyword">int</span>&gt;(<span class="number">0</span>),
+                                                                 genVector&lt;<span class="keyword">unsigned</span> <span class="keyword">int</span>&gt;(<span class="number">0</span>),
                                                                  Twine(<span class="string">""</span>) + newArg-&gt;getName() + <span class="string">".Cur"</span>,
                                                                  entryBlock.begin());</pre></div></div>
             
         </li>
         
         
-        <li id="section-134">
+        <li id="section-132">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-134">&#182;</a>
+                <a class="pilcrow" href="#section-132">&#182;</a>
               </div>
               <p>this potentially will not work if there is store to arg... probably that case is impossible to happen and smart pointer arguments are read-only</p>
 
@@ -3269,11 +3269,11 @@ used in function and replace all uses with that.</p>
         </li>
         
         
-        <li id="section-135">
+        <li id="section-133">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-135">&#182;</a>
+                <a class="pilcrow" href="#section-133">&#182;</a>
               </div>
               <p>currently returning pointer or array is not supported</p>
 
@@ -3288,11 +3288,11 @@ used in function and replace all uses with that.</p>
         </li>
         
         
-        <li id="section-136">
+        <li id="section-134">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-136">&#182;</a>
+                <a class="pilcrow" href="#section-134">&#182;</a>
               </div>
               <p>TODO: check if needed and if necessary to mask from strict version
 check if main or kernel and in that case do not change signature</p>
@@ -3307,17 +3307,18 @@ check if main or kernel and in that case do not change signature</p>
         </li>
         
         
-        <li id="section-137">
+        <li id="section-135">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-137">&#182;</a>
+                <a class="pilcrow" href="#section-135">&#182;</a>
               </div>
               <p>convert function signature to use pointer structs instead of direct pointers</p>
 
             </div>
             
             <div class="content"><div class='highlight'><pre>      <span class="built_in">std</span>::<span class="stl_container"><span class="built_in">vector</span>&lt; Type* &gt;</span> param_types;
+      IntSet safeTypeArgNos; <span class="comment">// argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute</span>
       <span class="keyword">for</span>( Function::arg_iterator a = F-&gt;arg_begin(); a != F-&gt;arg_end(); ++a ) {
         Argument* arg = a;
         Type* t = arg-&gt;getType();</pre></div></div>
@@ -3325,11 +3326,11 @@ check if main or kernel and in that case do not change signature</p>
         </li>
         
         
-        <li id="section-138">
+        <li id="section-136">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-138">&#182;</a>
+                <a class="pilcrow" href="#section-136">&#182;</a>
               </div>
               <p>TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)</p>
 
@@ -3338,7 +3339,8 @@ check if main or kernel and in that case do not change signature</p>
             <div class="content"><div class='highlight'><pre>        
         <span class="keyword">if</span>( !dontTouchArguments &amp;&amp; t-&gt;isPointerTy() ) {
           Type* smart_array_struct = getSmartStructType( c, t );
-          param_types.push_back( smart_array_struct );          
+          param_types.push_back( smart_array_struct );
+          safeTypeArgNos.insert(a-&gt;getArgNo());
         } <span class="keyword">else</span> {
           fast_assert( (!t-&gt;isArrayTy()), <span class="string">"Passing array in arguments is not implemented."</span> );
           param_types.push_back( t );
@@ -3348,11 +3350,11 @@ check if main or kernel and in that case do not change signature</p>
         </li>
         
         
-        <li id="section-139">
+        <li id="section-137">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-139">&#182;</a>
+                <a class="pilcrow" href="#section-137">&#182;</a>
               </div>
               <p>creating new function with different prototype </p>
 
@@ -3370,11 +3372,11 @@ check if main or kernel and in that case do not change signature</p>
         </li>
         
         
-        <li id="section-140">
+        <li id="section-138">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-140">&#182;</a>
+                <a class="pilcrow" href="#section-138">&#182;</a>
               </div>
               <p>add new function to book keepig to show what was replaced</p>
 
@@ -3388,11 +3390,11 @@ check if main or kernel and in that case do not change signature</p>
         </li>
         
         
-        <li id="section-141">
+        <li id="section-139">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-141">&#182;</a>
+                <a class="pilcrow" href="#section-139">&#182;</a>
               </div>
               <p>map arguments of original function to new replacements</p>
 
@@ -3406,18 +3408,22 @@ check if main or kernel and in that case do not change signature</p>
         </li>
         
         
-        <li id="section-142">
+        <li id="section-140">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-142">&#182;</a>
+                <a class="pilcrow" href="#section-140">&#182;</a>
               </div>
               <p>remove attribute which does not make sense for non-pointer argument
 getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).</p>
 
             </div>
             
-            <div class="content"><div class='highlight'><pre>        new_function-&gt;removeAttribute(a_new-&gt;getArgNo()+<span class="number">1</span>, Attributes::get(c, genArrayRef(llvm::Attributes::NoCapture)));
+            <div class="content"><div class='highlight'><pre>        <span class="keyword">int</span> argIdx = a_new-&gt;getArgNo()+<span class="number">1</span>;
+        new_function-&gt;removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)));
+        <span class="keyword">if</span> (safeTypeArgNos.count(a_new-&gt;getArgNo())) {
+          new_function-&gt;removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
+        }
         
         argumentMapping.insert( <span class="built_in">std</span>::pair&lt; Argument*, Argument* &gt;( a, a_new ) ); 
         DEBUG( dbgs() &lt;&lt; <span class="string">"Mapped orig arg: "</span>; a-&gt;print(dbgs()); dbgs() &lt;&lt; <span class="string">" -----&gt; "</span>; a_new-&gt;print(dbgs()); dbgs() &lt;&lt; <span class="string">"\n"</span> );
@@ -3440,11 +3446,11 @@ getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg
         </li>
         
         
-        <li id="section-143">
+        <li id="section-141">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-143">&#182;</a>
+                <a class="pilcrow" href="#section-141">&#182;</a>
               </div>
               <p>find all instructions which should be handled afterwards</p>
 
@@ -3473,11 +3479,11 @@ getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg
         </li>
         
         
-        <li id="section-144">
+        <li id="section-142">
             <div class="annotation">
               
               <div class="pilwrap ">
-                <a class="pilcrow" href="#section-144">&#182;</a>
+                <a class="pilcrow" href="#section-142">&#182;</a>
               </div>
               <p>TODO: check if alloca is from smart pointer argument. 
 ( for these we should no do traditional smart pointer initialization, 

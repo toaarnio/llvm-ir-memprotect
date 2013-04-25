@@ -7,7 +7,7 @@
  * Center Tampere (http://webcl.nokiaresearch.com).
  */
 
-// TODO: Write complete "proof summary" here and refer later sections
+// [Go directly to algorithm](#runOnModule) TODO: Write complete "proof summary" here and refer later sections
 
 #include "llvm/Pass.h"
 #include "llvm/Function.h"
@@ -131,10 +131,11 @@ namespace WebCL {
   }
 
   // Creates mangled name (own mangling scheme) to be able to select correct safe builtin function implementations to call.
-  // All calls to functions with names mangled by this algorithm should be inlined and removed afterwards by dce.
+  // All calls to functions with names mangled by this algorithm should be inlined and removed afterwards by later optimizations.
   //
   // Scheme steals mangle suffix from original Itanium Mangled function call and add it to our version which
-  // is safe to call.
+  // is safe to call. This way we get an unique name for each function which for we need to write safe implementation and know
+  // easily to which implementation to call when converting builtin calls to safe-builtin calls.
   //
   // `Function* function` The function whose argument list prefix should be added to the returned name.
   // `std::string base` Base where mangle suffix will be added.
@@ -345,14 +346,19 @@ namespace WebCL {
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
       
     // ## <a id="runOnModule"></a> Run On Module
-    //  
+    //
+    // This function does the top-level algorithm for instrumentation.
+    //
     // 1. Collect static memory allocations from the module and combine them to contiguous area.
-    // 2. Create new function signatures and fix calls to use new signatures, which passes also limits for pointers.
-    // 3. Add boundary checks where ever necessary.
-    // 4. Fix calls to unsafe builtin functions to call safe versions instead.
+    // 2. Collects information of original instructions which are not created by the pass.
+    // 3. Create new function signatures and fix calls to use new signatures, which passes also limits for pointers.
+    // 4. Analyzes original code to find limits for all load/store/call operand should respect.
+    // 5. Analyzes original code and resolves if memory access limits can be verified compile time.
+    // 6. Add boundary checks to loads/stores if instruction was not proved to be valid in compile time.
+    // 7. Fix calls to unsafe builtin functions to call safe versions instead.
     virtual bool runOnModule( Module &M ) {
       
-      // Functions which has been replaced with new ones.
+      // Functions which has been replaced with new ones when signatures are modified.
       FunctionMap replacedFunctions;
       // Function arguments mapping to find replacement arguments for old function arguments.
       ArgumentMap replacedArguments;
@@ -384,23 +390,27 @@ namespace WebCL {
       DEBUG( dbgs() << "\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n" );
       consolidateStaticMemory( M );
 
-      
+      // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
+      // map sorted by address space number. Also adds the address space struct to value limits so that
+      // if lookups traces limits all the way up to address space allocation struct, then limits are
+      // found from limit map as normally `valueLimits[pointerOperand]`. [findAddressSpaceLimits( Module &M,
+      // AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits )](#findAddressSpaceLimits).
       DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
       findAddressSpaceLimits( M, valueLimits, addressSpaceLimits );
 
       
-      // ####### Analyze all functions
+      // **Analyze all original functions.** Goes through all functions in module
+      // and creates new function signature for them and collects information of instructions
+      // that we will need in later transformations.
+      // If function is intrinsic or WebCL builtin declaration (we know how it will behave) we
+      // just skip it. If function is unknown external call compilation will fail.
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-        
-        // allow calling external functions with original signatures (this pass should be ran just
-        // for fully linked code)
+
         if ( i->isIntrinsic() || i->isDeclaration() ) {
           if (RunUnsafeMode) {
             DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
             continue;
           }
-
-          // if ok builtin, skip this function (only analyze functions which has implementation available)
           if (!isWebClBuiltin(i)) {
             dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
             fast_assert(false, "Calling external functions is not allowed in strict mode. "
@@ -411,17 +421,22 @@ namespace WebCL {
           }
         }
 
-        // actually this should just collect functions to replace, but now it also creates new signatures
+        // Creates new signatures for internal functions in the program and adds mapping between
+        // old and new functions. Also creates mapping between old and new function arguments.
+        // [Function* createNewFunctionSignature(Function *F, FunctionMap &functionMapping,
+        // ArgumentMap &argumentMapping )](#createNewFunctionSignature).
         DEBUG( dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n" );
         createNewFunctionSignature( i, replacedFunctions, replacedArguments );
 
+        // Runs through all instructions in function and collects instructions.
+        // [sortInstructions( Function *F, ... ) ](#sortInstructions).
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
         sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
-        // combine call sets
+
+        // Initialize the additional `allCalls` and `resolveLimitsOperands` sets which are useful in later phases.
         allCalls.insert(internalCalls.begin(), internalCalls.end());
         allCalls.insert(externalCalls.begin(), externalCalls.end());
         
-        // collect values whose limits must be traced
         for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
           LoadInst *load = *i;
           resolveLimitsOperands.insert(load->getPointerOperand());
@@ -432,53 +447,72 @@ namespace WebCL {
           resolveLimitsOperands.insert(store->getPointerOperand());
         }
         
-        // add original call operands to list for resolving limits.
         for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
           CallInst *call = *i;
           for (size_t op = 0; op < call->getNumOperands(); op++) {
             Value *operand = call->getOperand(op);
-            // ignore function pointers... no need to check them
+            /* ignore function pointers operands (not allowed in opencl)... no need to check them, but add all other pointer operands */
             if ( operand->getType()->isPointerTy() && !operand->getType()->getPointerElementType()->isFunctionTy() ) {
               resolveLimitsOperands.insert(operand);
             }
           }
         }
       }
-      // ####### analyze is done
       
+      // **End of analyze phase.** After this `replacedFunctions`, `replacedArguments`, `internalCalls`, `externalCalls`,
+      // `allCalls`, `allocas`, `stores`, `loads` and `resolveLimitsOperands` should not be changed, but only used for lookup.
+      
+      // Moves function instructions / basic blocks from original functions to new ones and fixes uses of original function arguments
+      // to point new arguments. After this function behavior should be back to original, except if function has call to another
+      // function whose signature was changed. [moveOldFunctionImplementationsToNewSignatures(FunctionMap &replacedFunctions,
+      // ArgumentMap &replacedArguments)](#moveOldFunctionImplementationsToNewSignatures).
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
-      // gets rid of old functions, replaces calls to old functions and fix call arguments to 
-      // use smart pointers in call parameters
       moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments);
       
+      // Finds out kernel functions from Module metadata and creates WebCL kernels from them. `kernel void foo(global float *bar)` ->
+      // `kernel void foo(global float *bar, size_t bar_size)`. Also calculates and creates run-time limits for passed kernel
+      // arguments and adds limits to `addressSpaceLimits` bookkeeping and calls original kernel implementation which has been changed
+      // earlier to use safe pointer arguments. [createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions,
+      // AreaLimitSetByAddressSpaceMap &asLimits)](#createKernelEntryPoints).
       DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
       createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
 
-      DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY LOAD/STORE OPERAND --------------\n" );
+      // Traces limits for all instructions and values in the module and adds them to `valueLimits`. After this we should be able
+      // to get min and max addresses for all instructions / globals that we are interested in. [findLimits(FunctionMap &replacedFunctions,
+      // ValueSet &checkOperands, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits)](#findLimits).
+      DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY REQUIRED OPERAND --------------\n" );
       findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits);
       
+      // Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
+      // [fixCallsToUseChangedSignatures(...)](#fixCallsToUseChangedSignatures)
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
       fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, valueLimits);
       
-      // ##########################################################################################
-      // #### At this point code should be again perfectly executable and runs with new function 
-      // #### signatures and has cahnged pointers to smart ones
-      // ##########################################################################################
-
-      DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED TODO: collect direct loads etc. who shouldnt need checks --------------\n" );
+      // Analyze code and find out the cases where we can be sure that memory access is safe in compile time and check can be omitted.
+      // NOTE: better place for this could be already before any changes has been made to original code.
+      // [collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions)](#collectSafeExceptions)
+      DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED --------------\n" );
       collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions);
 
+      // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
+      // creates some memory intrinsics we might need to take care of checking their operands as well.
+      // [addBoundaryChecks( ... )](#addBoundaryChecks)
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
       addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
 
+      // Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
+      // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
+      // [makeBuiltinCallsSafe( ... )](#makeBuiltinCallsSafe)
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
       makeBuiltinCallsSafe(externalCalls, valueLimits);
 
-      // Helps if pass fails on validation after pass has ended
-      //dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
-      //M.print(dbgs(), NULL);
-      //dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
-
+      // Helps to print out resulted LLVM IR code if pass fails before writing results
+      // on pass output validation
+      /*
+      dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
+      M.print(dbgs(), NULL);
+      dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
+      */
       return true;
     }
     
