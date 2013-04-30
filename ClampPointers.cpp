@@ -275,6 +275,57 @@ namespace WebCL {
       ModulePass( ID ) {
     }
 
+    typedef std::vector< Type* > TypeVector;
+
+    struct SafeArgTypes {
+      TypeVector        argTypes;     // resulting argument types
+      std::set<int>     safeArgNos;   // 0 is the first argument
+
+      /* Given a list of function argument types
+       * (typesOfArgumentList(F->getArgumentList())) constructs a
+       * vector of the types of the arguments wrapped into safe
+       * pointers, if they need to be. Otherwise the types are
+       * returned as-is.
+       *
+       * @param c The LLVM Context
+       * @param types The function argument types
+       * @param dontTouchArguments Simply return the types as is, perform no wrapping
+       */
+      SafeArgTypes( LLVMContext& c,
+                    const TypeVector& types,
+                    bool dontTouchArguments ) {
+        
+        int argNo = 0;
+        for( TypeVector::const_iterator typeIt = types.begin(); typeIt != types.end(); ++typeIt, ++argNo ) {
+          Type* t = *typeIt;
+
+          // TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)
+        
+          if( !dontTouchArguments && t->isPointerTy() ) {
+            Type* smart_array_struct = getSmartStructType( c, t );
+            argTypes.push_back( smart_array_struct );
+            safeArgNos.insert(argNo);
+          } else {
+            fast_assert( (!t->isArrayTy()), "Passing array in arguments is not implemented." );
+            argTypes.push_back( t );
+          }
+        }
+      }
+    };
+    
+    /** builds a TypeVector out of function arguments; useful for
+     * dealing with safeArgTypes */
+    static TypeVector typesOfArgumentList( llvm::Function::ArgumentListType& args )
+    {
+      TypeVector v;
+      for ( llvm::Function::ArgumentListType::iterator it = args.begin();
+            it != args.end();
+            ++it ) {
+        v.push_back(it->getType());
+      }
+      return v;
+    }
+
     // **AreaLimit** class holds information of single memory area allocation. Limits of the area
     // can be stored directly as constant expressions for *min* and *max* or they can be indirect
     // references to the limits. In case of indirect memory area, the *min* and *max* contains memory
@@ -1652,23 +1703,9 @@ namespace WebCL {
       }
       
       // convert function signature to use pointer structs instead of direct pointers
-      std::vector< Type* > param_types;
-      IntSet safeTypeArgNos; // argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute
-      for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
-        Argument* arg = a;
-        Type* t = arg->getType();
-
-        // TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)
-        
-        if( !dontTouchArguments && t->isPointerTy() ) {
-          Type* smart_array_struct = getSmartStructType( c, t );
-          param_types.push_back( smart_array_struct );
-          safeTypeArgNos.insert(a->getArgNo());
-        } else {
-          fast_assert( (!t->isArrayTy()), "Passing array in arguments is not implemented." );
-          param_types.push_back( t );
-        }
-      }
+      SafeArgTypes args(c, typesOfArgumentList(F->getArgumentList()), dontTouchArguments);
+      TypeVector& param_types = args.argTypes;
+      IntSet& safeTypeArgNos = args.safeArgNos; // argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute
 
       // creating new function with different prototype 
       FunctionType *function_type = F->getFunctionType();
