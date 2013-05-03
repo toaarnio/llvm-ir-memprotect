@@ -304,6 +304,162 @@ namespace WebCL {
     return result;
   }
 
+  /** Given a type that is a struct with a name attached returns a
+   * struct type with the same elements but without a name.  This is
+   * used for transforming signatures of manually written C functions
+   * with a manually written safe pointers to use the same convention
+   * as functions with generated safe pointers. */
+  llvm::Type* discardStructName( LLVMContext& C, 
+                                 llvm::Type* type ) {
+    Type* returnType = type;
+    if ( llvm::PointerType* pt = dyn_cast<PointerType>(type) ) {
+      if ( llvm::StructType* st = dyn_cast<StructType>(pt->getTypeAtIndex(0u)) ) {
+        returnType = 
+          st->hasName()
+          ? llvm::StructType::get( C, 
+                                   llvm::makeArrayRef(st->element_begin(), 
+                                                      st->element_end()),
+                                   st->isPacked() )
+          : st;
+      }
+    }
+    return returnType;
+  }
+  
+  typedef std::vector< Type* > TypeVector;
+
+  /* **SafeArgTypes** is the operation for making a smartptrized
+   * version of a function signature. Look at the constructor 
+   * for more documentation.
+   *
+   * This class needs to be defined outside the ClampPointers as
+   * Signature depends on it. (Although this order dependency could
+   * be avoided, but probably most of the stuff should be moved
+   * outside the ClampPointers struct..) */
+  struct SafeArgTypes {
+    TypeVector        argTypes;     // resulting argument types
+    std::set<int>     safeArgNos;   // 0 is the first argument
+
+    /* Given a list of function argument types
+     * (typesOfFunctionArguments(F)) constructs a
+     * vector of the types of the arguments wrapped into safe
+     * pointers, if they need to be. Otherwise the types are
+     * returned as-is.
+     *
+     * @param c The LLVM Context
+     * @param types The function argument types
+     * @param dontTouchArguments Simply return the types as is, perform no wrapping
+     */
+    SafeArgTypes( LLVMContext& c,
+                  const TypeVector& types,
+                  bool dontTouchArguments ) {
+        
+      int argNo = 0;
+      for( TypeVector::const_iterator typeIt = types.begin(); typeIt != types.end(); ++typeIt, ++argNo ) {
+        Type* t = *typeIt;
+
+        // TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)
+        
+        if( !dontTouchArguments && t->isPointerTy() ) {
+          Type* smart_array_struct = getSmartStructType( c, t );
+          argTypes.push_back( smart_array_struct );
+          safeArgNos.insert( argNo );
+        } else {
+          fast_assert( (!t->isArrayTy()), "Passing array in arguments is not implemented." );
+          argTypes.push_back( t );
+        }
+      }
+    }
+  };
+
+  /** builds a TypeVector out of function arguments; useful for
+   * dealing with safeArgTypes
+   *
+   * This class needs to be defined outside the ClampPointers as
+   * Signature depends on it. (Although this order dependency could
+   * be avoided, but probably most of the stuff should be moved
+   * outside the ClampPointers struct..)
+   */
+  static TypeVector typesOfFunctionArguments( llvm::Function* F )
+  {
+    TypeVector v;
+    llvm::Function::ArgumentListType& args = F->getArgumentList();
+    int idx = 0;
+    for ( llvm::Function::ArgumentListType::iterator it = args.begin();
+          it != args.end();
+          ++it, ++idx ) {
+      llvm::Attributes attribs = F->getParamAttributes(idx + 1);
+      if ( attribs.hasAttribute(llvm::Attributes::ByVal) ) {
+        // this is no longer possible as we have already eliminated ByVal from the safe functions
+        assert(false);
+        Type* t = it->getType();
+        if ( PointerType* pt = dyn_cast<PointerType>(t) ) {
+          t = discardStructName( F->getContext(), pt->getTypeAtIndex(0u) );
+        }
+        v.push_back( t );
+      } else {
+        v.push_back( it->getType() );
+      }
+    }
+    return v;
+  }
+
+  /** **Signature** class contains the part of the function
+   * signature that identifies it: its demangled name and its
+   * argument list. This is used for associating unsafe functions
+   * with their safe corresponding functions.  It can also be copied
+   * and it provides a comparison operator so it can be put into a
+   * std::set or a std::map.
+   *
+   * This class needs to be defined outside the ClampPointers struct 
+   * so that operator<< can be defined for it.
+   */
+  struct Signature {
+    std::string       name;
+    TypeVector        argTypes;
+
+    Signature() {}
+
+    Signature( llvm::Function* f ) :
+      name( extractItaniumDemangledFunctionName(f->getName().str()) ),
+      argTypes( typesOfFunctionArguments(f) ) {
+      // nothing        
+    }
+
+    bool operator<( const Signature& other ) const {
+      if ( name < other.name ) {
+        return true;
+      } else if ( name > other.name ) {
+        return false;
+      } else {
+        return argTypes < other.argTypes;
+      }
+    }
+
+    Signature safe( LLVMContext& c ) {
+      SafeArgTypes safeAt( c, argTypes, false );
+      Signature s;
+      s.name = name;
+      s.argTypes = safeAt.argTypes;
+      return s;
+    }
+  };
+
+  llvm::raw_ostream& operator<<(llvm::raw_ostream& stream, const Signature& sig) {
+    stream << sig.name << "(";
+    bool first = true;
+    for ( TypeVector::const_iterator it = sig.argTypes.begin();
+          it != sig.argTypes.end();
+          first = false, ++it ) {
+      if ( !first ) {
+        stream << ", ";
+      }
+      stream << **it;
+    }
+    stream << ")";
+    return stream;
+  }
+
   // ## LLVM Module pass
   struct ClampPointers :
     public ModulePass {
@@ -312,95 +468,6 @@ namespace WebCL {
     ClampPointers() :
       ModulePass( ID ) {
     }
-
-    typedef std::vector< Type* > TypeVector;
-
-    struct SafeArgTypes {
-      TypeVector        argTypes;     // resulting argument types
-      std::set<int>     safeArgNos;   // 0 is the first argument
-
-      /* Given a list of function argument types
-       * (typesOfArgumentList(F->getArgumentList())) constructs a
-       * vector of the types of the arguments wrapped into safe
-       * pointers, if they need to be. Otherwise the types are
-       * returned as-is.
-       *
-       * @param c The LLVM Context
-       * @param types The function argument types
-       * @param dontTouchArguments Simply return the types as is, perform no wrapping
-       */
-      SafeArgTypes( LLVMContext& c,
-                    const TypeVector& types,
-                    bool dontTouchArguments ) {
-        
-        int argNo = 0;
-        for( TypeVector::const_iterator typeIt = types.begin(); typeIt != types.end(); ++typeIt, ++argNo ) {
-          Type* t = *typeIt;
-
-          // TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)
-        
-          if( !dontTouchArguments && t->isPointerTy() ) {
-            Type* smart_array_struct = getSmartStructType( c, t );
-            argTypes.push_back( smart_array_struct );
-            safeArgNos.insert(argNo);
-          } else {
-            fast_assert( (!t->isArrayTy()), "Passing array in arguments is not implemented." );
-            argTypes.push_back( t );
-          }
-        }
-      }
-    };
-    
-    /** builds a TypeVector out of function arguments; useful for
-     * dealing with safeArgTypes */
-    static TypeVector typesOfArgumentList( llvm::Function::ArgumentListType& args )
-    {
-      TypeVector v;
-      for ( llvm::Function::ArgumentListType::iterator it = args.begin();
-            it != args.end();
-            ++it ) {
-        v.push_back(it->getType());
-      }
-      return v;
-    }
-
-    /** **Signature** class contains the part of the function
-     * signature that identifies it: its demangled name and its
-     * argument list. This is used for associating unsafe functions
-     * with their safe corresponding functions.  It can also be copied
-     * and it provides a comparison operator so it can be put into a
-     * std::set or a std::map.
-     */
-    struct Signature {
-      std::string       name;
-      TypeVector        argTypes;
-
-      Signature() {}
-
-      Signature( llvm::Function* f ) :
-        name(extractItaniumDemangledFunctionName(f->getName().str())),
-        argTypes(typesOfArgumentList(f->getArgumentList())) {
-        // nothing        
-      }
-
-      bool operator<( const Signature& other ) const {
-        if ( name < other.name ) {
-          return true;
-        } else if ( name > other.name ) {
-          return false;
-        } else {
-          return argTypes < other.argTypes;
-        }
-      }
-
-      Signature safe( LLVMContext& c ) {
-        SafeArgTypes safeAT(c, argTypes, false);
-        Signature s;
-        s.name = name;
-        s.argTypes = safeAT.argTypes;
-        return s;
-      }
-    };
 
     // **AreaLimit** class holds information of single memory area allocation. Limits of the area
     // can be stored directly as constant expressions for *min* and *max* or they can be indirect
@@ -566,14 +633,17 @@ namespace WebCL {
       // just skip it. If function is unknown external call compilation will fail.
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
 
-        if ( i->isDeclaration() && unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
-          if ( argsHasPointer(i->getArgumentList()) ) {
+        if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
+          if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
             unsafeBuiltinFunctions.push_back(i);
+          } else if ( !i->isDeclaration() && argsHasSafePointer(i->getArgumentList()) ) {
+            Function* newFunction = transformSafeArguments( *i, replacedArguments );
+            replacedFunctions[&*i] = newFunction;
+            safeBuiltinFunctions.push_back( newFunction );
           } else {
-            if ( argsHasSafePointer(i->getArgumentList()) ) {
-              safeBuiltinFunctions.push_back(i);
-            }
+            // skip this case, just some other function
           }
+          continue;          
         }
 
         if ( i->isIntrinsic() || i->isDeclaration() ) {
@@ -633,6 +703,9 @@ namespace WebCL {
                                                                  unsafeBuiltinFunctions,
                                                                  safeBuiltinFunctions );
       
+      FunctionSet safeBuiltinFunctionSet = FunctionSet( safeBuiltinFunctions.begin(),
+                                                        safeBuiltinFunctions.end() );
+      
       // **End of analyze phase.** After this `replacedFunctions`, `replacedArguments`, `internalCalls`, `externalCalls`,
       // `allCalls`, `allocas`, `stores`, `loads` and `resolveLimitsOperands` should not be changed, but only used for lookup.
       
@@ -640,8 +713,10 @@ namespace WebCL {
       // to point new arguments. After this function behavior should be back to original, except if function has call to another
       // function whose signature was changed. [moveOldFunctionImplementationsToNewSignatures(FunctionMap &replacedFunctions,
       // ArgumentMap &replacedArguments)](#moveOldFunctionImplementationsToNewSignatures).
+      // Manually written safe implementations of unsafe builtin functions are handled slightly differently, so a list of them
+      // is passed as an argument.
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
-      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments);
+      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, safeBuiltinFunctionSet);
       
       // Finds out kernel functions from Module metadata and creates WebCL kernels from them. `kernel void foo(global float *bar)` ->
       // `kernel void foo(global float *bar, size_t bar_size)`. Also calculates and creates run-time limits for passed kernel
@@ -654,8 +729,9 @@ namespace WebCL {
       // Traces limits for all instructions and values in the module and adds them to `valueLimits`. After this we should be able
       // to get min and max addresses for all instructions / globals that we are interested in. [findLimits(FunctionMap &replacedFunctions,
       // ValueSet &checkOperands, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits)](#findLimits).
+      // Limit finding is not performed for manually written safe builtin functions.
       DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY REQUIRED OPERAND --------------\n" );
-      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits);
+      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits, safeBuiltinFunctionSet);
       
       // Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
       // [fixCallsToUseChangedSignatures(...)](#fixCallsToUseChangedSignatures)
@@ -690,6 +766,13 @@ namespace WebCL {
       return true;
     }
 
+    /** Given a list of unsafe builtin functions and safe builtin
+     * functions returns an association from the unsafe functions to
+     * matching safe functions. Matching is implemented by generating
+     * a safe version of the unsafe signature and checking if a
+     * matching signature can be found from the list of safe builtin
+     * functions.
+     */
     FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, 
                                          const FunctionList& unsafeBuiltinFunctions,
                                          const FunctionList& safeBuiltinFunctions ) {
@@ -714,6 +797,71 @@ namespace WebCL {
       }
       
       return mapping;
+    }
+
+    /** Given a manually written safeptr C function returns a function
+     * that follows the regular safe pointer calling conventions:
+     * instead of passing a pointer to a three-struct, pass the
+     * three-struct in a register.
+     *
+     * The actual code contents is not modified here but in
+     * **moveOldFunctionImplementationsToNewSignatures**, which takes
+     * into account that the function already uses smart pointers.
+     *
+     * Adjusted arguments are placed into the argumentMapping
+     * associative container.
+     */        
+    Function* transformSafeArguments( Function& F,
+                                      ArgumentMap& argumentMapping ) {
+      LLVMContext& c = F.getContext();
+      FunctionType *function_type = F.getFunctionType();
+      TypeVector newTypes = std::vector<Type*>( function_type->param_begin(),
+                                                function_type->param_end() );
+
+      {
+        int typeIdx = 0;
+        for ( Function::arg_iterator 
+                a = F.arg_begin(),
+                E = F.arg_end();
+              a != E; ++a, ++typeIdx ) {
+          int argIdx = a->getArgNo() + 1;
+          if ( F.getParamAttributes(argIdx).hasAttribute(llvm::Attributes::ByVal) ) {
+            Type* t = newTypes[typeIdx];
+            if ( PointerType* pt = dyn_cast<PointerType>(t) ) {
+              t = discardStructName( c, t );
+            }
+            newTypes[typeIdx] = t;
+          }
+        }
+      }
+
+      FunctionType *new_function_type = FunctionType::get( function_type->getReturnType(), 
+                                                           newTypes, 
+                                                           false );
+
+      Function *new_function = Function::Create( new_function_type, F.getLinkage() );
+      new_function->copyAttributesFrom( &F );
+      
+      F.getParent()->getFunctionList().insert( &F, new_function );
+      new_function->setName( F.getName() );
+
+      for( Function::arg_iterator 
+             a = F.arg_begin(), 
+             E = F.arg_end(), 
+             a_new = new_function->arg_begin(); a != E; ++a, ++a_new ) {             
+        // remove attribute which does not make sense for non-pointer argument
+        // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
+        int argIdx = a_new->getArgNo()+1;
+        a_new->setName( a->getName() );
+        new_function->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)) );
+        if ( F.getParamAttributes(argIdx).hasAttribute(llvm::Attributes::ByVal) ) {
+          new_function->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)) );
+        }
+        
+        argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) ); 
+      }
+
+      return new_function;
     }
     
     /**
@@ -841,13 +989,19 @@ namespace WebCL {
     void findLimits(FunctionMap &replacedFunctions,
                     ValueSet &checkOperands,
                     AreaLimitByValueMap &valLimits,
-                    AreaLimitSetByAddressSpaceMap &asLimits) {
+                    AreaLimitSetByAddressSpaceMap &asLimits,
+                    const FunctionSet& safeBuiltinFunctions) {
     
       // first trace all uses of function arguments to find their limits
       DEBUG( dbgs() << "----- Tracing function pointer argument uses \n"; );
       for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
         Function *originalFunc = i->first;
         Function *safePointerFunction = i->second;
+
+        if ( safeBuiltinFunctions.count(safePointerFunction) ) {
+          continue;
+        }
+
         Function::arg_iterator originalArgIter = originalFunc->arg_begin();
 
         for( Function::arg_iterator a = safePointerFunction->arg_begin(); a != safePointerFunction->arg_end(); ++a ) {
@@ -1601,12 +1755,12 @@ namespace WebCL {
         
         Function* oldFun = call->getCalledFunction();
 
-        FunctionMap::const_iterator unsafeToSafeBuiltinIt = unsafeToSafeBuiltin.find(oldFun);
+        FunctionMap::const_iterator unsafeToSafeBuiltinIt = unsafeToSafeBuiltin.find( oldFun );
 
         if ( unsafeToSafeBuiltinIt != unsafeToSafeBuiltin.end() ) {
           Function *newFun = unsafeToSafeBuiltinIt->second;
           ArgumentMap dummyArg;
-          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, valLimits);
+          convertCallToUseSmartPointerArgs( call, newFun, dummyArg, valLimits );
         } else if ( isWebClBuiltin(oldFun) ) {
 
           std::string demangledName = extractItaniumDemangledFunctionName(oldFun->getName().str());
@@ -1739,13 +1893,14 @@ namespace WebCL {
      * 3. Replaces all uses of old function argument with extractvalue instruction or with new function argument if it was not pointer.
      */
     void moveOldFunctionImplementationsToNewSignatures(FunctionMap &replacedFunctions, 
-                                                       ArgumentMap &replacedArguments) {
+                                                       ArgumentMap &replacedArguments,
+                                                       const FunctionSet &safeBuiltinFunctions) {
             
       for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
         // loop through arguments and if type has changed, then create label to access original arg 
         Function* oldFun = i->first;
         Function* newFun = i->second;
-        
+        bool isBuiltin = safeBuiltinFunctions.count(newFun);
         LLVMContext& c = oldFun->getContext();
         
         // move all instructions to new function
@@ -1758,39 +1913,61 @@ namespace WebCL {
           Argument* oldArg = a;
           Argument* newArg = replacedArguments[a];
 
-          DEBUG( dbgs() << "Fixing arg: "; oldArg->print(dbgs()); dbgs() << " : " );
+          DEBUG( dbgs() << "Fixing arg: "; oldArg->print(dbgs()); dbgs() << " : \n" );
 
           newArg->takeName(oldArg);
           oldArg->setName(newArg->getName() + ".orig");
-          
+
           // non safe pointer argument... direct replace
           if (oldArg->getType() == newArg->getType()) {
             DEBUG( dbgs() << "type was not changed. Just replacing oldArg uses with newArg.\n" );
             // argument was not tampered, just replace uses to point the new function
             oldArg->replaceAllUsesWith(newArg);
-            continue;
+          } else if (isBuiltin) {
+            DEBUG( dbgs() << "1 newArg: "; newArg->print(dbgs()); dbgs() << "\n"; );
+            Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
+            newArg->setName(paramName);
+
+            BasicBlock::iterator curAt;
+            BasicBlock::iterator nextAt = entryBlock.begin();
+
+            // Allocate storage for smart pointer and copy it there so
+            // we can take use getelementptr in the rest of the
+            // function
+            Instruction* allocaInst = new AllocaInst( newArg->getType(),
+                                                      Twine("") + newArg->getName() + ".Alloca",
+                                                      nextAt );
+            Instruction* storeInst = new StoreInst( newArg,
+                                                    allocaInst,
+                                                    nextAt );
+            Instruction* castInst = new BitCastInst( allocaInst,
+                                                     oldArg->getType(),
+                                                     Twine("") + newArg->getName() + ".Cast",
+                                                     nextAt );
+
+            oldArg->replaceAllUsesWith( castInst );
+          } else {
+            // if argument types are not the same we need to find smart pointer that was generated for
+            // argument and create initializations so that existing smart alloca will get correct values
+
+            // argument types are not the same we need to get .Cur element of the passed safe pointer, which is being
+            // used in function and replace all uses with that.
+
+            DEBUG( dbgs() << "1 newArg: "; newArg->print(dbgs()); );
+            Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
+            newArg->setName(paramName);
+
+            // get value of passed smart_pointer.cur and replace all uses of original argument with it
+            ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
+                                                                   genVector<unsigned int>(0),
+                                                                   Twine("") + newArg->getName() + ".Cur",
+                                                                   entryBlock.begin());
+
+            // this potentially will not work if there is store to arg... probably that case is impossible to happen and smart pointer arguments are read-only
+            DEBUG( dbgs() << "Replacing old arg: "; oldArg->getType()->print(dbgs()); dbgs() << " with: "; newArgCur->getType()->print(dbgs()); dbgs() << "\n"; );
+
+            oldArg->replaceAllUsesWith(newArgCur);
           }
-
-          // if argument types are not the same we need to find smart pointer that was generated for
-          // argument and create initializations so that existing smart alloca will get correct values
-
-          // argument types are not the same we need to get .Cur element of the passed safe pointer, which is being
-          // used in function and replace all uses with that.
-
-          DEBUG( dbgs() << "1 newArg: "; newArg->print(dbgs()); );
-          Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
-          newArg->setName(paramName);
-
-          // get value of passed smart_pointer.cur and replace all uses of original argument with it
-          ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
-                                                                 genVector<unsigned int>(0),
-                                                                 Twine("") + newArg->getName() + ".Cur",
-                                                                 entryBlock.begin());
-
-          // this potentially will not work if there is store to arg... probably that case is impossible to happen and smart pointer arguments are read-only
-          DEBUG( dbgs() << "Replacing old arg: "; oldArg->getType()->print(dbgs()); dbgs() << " with: "; newArgCur->getType()->print(dbgs()); dbgs() << "\n"; );
-          oldArg->replaceAllUsesWith(newArgCur);
-                    
         } // -- end arguments for loop
       }  
     }
@@ -1828,7 +2005,7 @@ namespace WebCL {
       }
       
       // convert function signature to use pointer structs instead of direct pointers
-      SafeArgTypes args(c, typesOfArgumentList(F->getArgumentList()), dontTouchArguments);
+      SafeArgTypes args(c, typesOfFunctionArguments(F), dontTouchArguments);
       TypeVector& param_types = args.argTypes;
       IntSet& safeTypeArgNos = args.safeArgNos; // argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute
 
