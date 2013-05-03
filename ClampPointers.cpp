@@ -788,8 +788,8 @@ namespace WebCL {
       // arguments than in the original as three pointer arguments are
       // folded into one three-struct.
       {
-        int newArgIdx = 0;
-        int origArgIdx = 0;
+        int newArgIdx = 1;
+        int origArgIdx = 1;
         for ( Function::arg_iterator 
                 origArgIt = F.arg_begin(),
                 E = F.arg_end();
