@@ -238,35 +238,37 @@ namespace WebCL {
     }
   };
 
-  std::string unsafeBuiltins_tmp[] = {
-    "fract", "frexp", "lgamma_r", "modf", "remquo", "sincos", 
-    "vload2", "vload3", "vload4", "vload8", "vload16", 
-    "vstore2", "vstore3", "vstore4", "vstore8", "vstore16",
-    "async_work_group_copy",
-    "async_work_group_strided_copy",
-    "wait_group_events",
-    "atomic_add", "atomic_sub", "atomic_xchg", 
-    "atomic_inc", "atomic_dec", "atomic_cmpxchg", 
-    "atomic_min", "atomic_max",
-    "atomic_and", "atomic_or", "atomic_xor",
-  };
-  std::set<std::string> unsafeBuiltins(unsafeBuiltins_tmp, unsafeBuiltins_tmp + sizeof(unsafeBuiltins_tmp) / sizeof(unsafeBuiltins_tmp[0]));
+  namespace {
+    std::string unsafeBuiltins_tmp[] = {
+      "fract", "frexp", "lgamma_r", "modf", "remquo", "sincos", 
+      "vload2", "vload3", "vload4", "vload8", "vload16", 
+      "vstore2", "vstore3", "vstore4", "vstore8", "vstore16",
+      "async_work_group_copy",
+      "async_work_group_strided_copy",
+      "wait_group_events",
+      "atomic_add", "atomic_sub", "atomic_xchg", 
+      "atomic_inc", "atomic_dec", "atomic_cmpxchg", 
+      "atomic_min", "atomic_max",
+      "atomic_and", "atomic_or", "atomic_xor",
+    };
+    std::set<std::string> unsafeBuiltins(unsafeBuiltins_tmp, unsafeBuiltins_tmp + sizeof(unsafeBuiltins_tmp) / sizeof(unsafeBuiltins_tmp[0]));
 
-  std::string unsupportedUnsafeBuiltins_tmp[] = {
-    "vload_half", "vload_half2", "vload_half3", "vload_half4", "vload_half8", "vload_half16", 
-    "vloada_half2", "vloada_half3", "vloada_half4", "vloada_half8", "vloada_half16", 
-    "vstore_half", "vstore_half2", "vstore_half3", "vstore_half4", "vstore_half8", "vstore_half16", 
-    "vstore_half_rte", "vstore_half2_rte", "vstore_half3_rte", "vstore_half4_rte", "vstore_half8_rte", "vstore_half16_rte",
-    "vstore_half_rtz", "vstore_half2_rtz", "vstore_half3_rtz", "vstore_half4_rtz", "vstore_half8_rtz", "vstore_half16_rtz",
-    "vstore_half_rtp", "vstore_half2_rtp", "vstore_half3_rtp", "vstore_half4_rtp", "vstore_half8_rtp", "vstore_half16_rtp",
-    "vstore_half_rtn", "vstore_half2_rtn", "vstore_half3_rtn", "vstore_half4_rtn", "vstore_half8_rtn", "vstore_half16_rtn",
-    "vstorea_half2", "vstorea_half3", "vstorea_half4", "vstorea_half8", "vstorea_half16", 
-    "vstorea_half2_rte", "vstorea_half3_rte", "vstorea_half4_rte", "vstorea_half8_rte","vstorea_half16_rte",
-    "vstorea_half2_rtz", "vstorea_half3_rtz", "vstorea_half4_rtz", "vstorea_half8_rtz","vstorea_half16_rtz",
-    "vstorea_half2_rtp", "vstorea_half3_rtp", "vstorea_half4_rtp", "vstorea_half8_rtp","vstorea_half16_rtp",
-    "vstorea_half2_rtn", "vstorea_half3_rtn", "vstorea_half4_rtn", "vstorea_half8_rtn","vstorea_half16_rtn"
-  };
-  std::set<std::string> unsupportedUnsafeBuiltins(unsupportedUnsafeBuiltins_tmp, unsupportedUnsafeBuiltins_tmp + sizeof(unsupportedUnsafeBuiltins_tmp) / sizeof(unsupportedUnsafeBuiltins_tmp[0]));
+    std::string unsupportedUnsafeBuiltins_tmp[] = {
+      "vload_half", "vload_half2", "vload_half3", "vload_half4", "vload_half8", "vload_half16", 
+      "vloada_half2", "vloada_half3", "vloada_half4", "vloada_half8", "vloada_half16", 
+      "vstore_half", "vstore_half2", "vstore_half3", "vstore_half4", "vstore_half8", "vstore_half16", 
+      "vstore_half_rte", "vstore_half2_rte", "vstore_half3_rte", "vstore_half4_rte", "vstore_half8_rte", "vstore_half16_rte",
+      "vstore_half_rtz", "vstore_half2_rtz", "vstore_half3_rtz", "vstore_half4_rtz", "vstore_half8_rtz", "vstore_half16_rtz",
+      "vstore_half_rtp", "vstore_half2_rtp", "vstore_half3_rtp", "vstore_half4_rtp", "vstore_half8_rtp", "vstore_half16_rtp",
+      "vstore_half_rtn", "vstore_half2_rtn", "vstore_half3_rtn", "vstore_half4_rtn", "vstore_half8_rtn", "vstore_half16_rtn",
+      "vstorea_half2", "vstorea_half3", "vstorea_half4", "vstorea_half8", "vstorea_half16", 
+      "vstorea_half2_rte", "vstorea_half3_rte", "vstorea_half4_rte", "vstorea_half8_rte","vstorea_half16_rte",
+      "vstorea_half2_rtz", "vstorea_half3_rtz", "vstorea_half4_rtz", "vstorea_half8_rtz","vstorea_half16_rtz",
+      "vstorea_half2_rtp", "vstorea_half3_rtp", "vstorea_half4_rtp", "vstorea_half8_rtp","vstorea_half16_rtp",
+      "vstorea_half2_rtn", "vstorea_half3_rtn", "vstorea_half4_rtn", "vstorea_half8_rtn","vstorea_half16_rtn"
+    };
+    std::set<std::string> unsupportedUnsafeBuiltins(unsupportedUnsafeBuiltins_tmp, unsupportedUnsafeBuiltins_tmp + sizeof(unsupportedUnsafeBuiltins_tmp) / sizeof(unsupportedUnsafeBuiltins_tmp[0]));
+  }
 
   /** returns true if an argument list has a pointer argument */
   bool argsHasPointer( const llvm::Function::ArgumentListType& args ) {
