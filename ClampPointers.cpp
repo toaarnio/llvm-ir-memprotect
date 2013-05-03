@@ -876,7 +876,7 @@ namespace WebCL {
         if ( dyn_cast<GetElementPtrInst>(use) ) {
           DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
           DEBUG( dbgs() << "Found GEP: "; use->print(dbgs()); dbgs() << "  ## Preserving original limits KEEP ON TRACKING\n"; );
-        } else if ( LoadInst *load = dyn_cast<LoadInst>(use) ) {
+        } else if ( isa<LoadInst>(use) ) {
           DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
           DEBUG( dbgs() << "Found LOAD: "; use->print(dbgs()); dbgs() << "  ## If we reached here we should have already resolved limits of pointer operand from somewhere.\n"; );
           
@@ -932,7 +932,7 @@ namespace WebCL {
       } else if ( LoadInst *load = dyn_cast<LoadInst>(val) ) {
         DEBUG( dbgs() << "Found LOAD: "; val->print(dbgs()); dbgs() << " tracing to memaddr.\n"; );
         next = load->getPointerOperand();
-      } else if ( StoreInst *store = dyn_cast<StoreInst>(val) ) {
+      } else if ( isa<StoreInst>(val) ) {
         DEBUG( dbgs() << "Found STORE: "; val->print(dbgs()); dbgs() << " cant be, store does not return value.\n" );
         fast_assert(false, "No way! I dont have any idea how code can reach this point.");
       } else if ( CastInst* cast = dyn_cast<CastInst>(val) ) {
@@ -1071,7 +1071,6 @@ namespace WebCL {
           DEBUG( dbgs() << "AS: " << g->getType()->getAddressSpace() << " Added global: "; g->print(dbgs()); dbgs() << "\n"; );
           std::stringstream aliasName;
           aliasName << "AS" << g->getType()->getAddressSpace();
-          PointerType *castType = PointerType::get(Type::getFloatTy(c), g->getType()->getAddressSpace());
           // pointercast all limits to float* to make result more readable
           Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
           Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
@@ -1503,19 +1502,19 @@ namespace WebCL {
         }
         delete inst;
 
-      } else if ( GlobalAlias *globalAlias = dyn_cast<GlobalAlias>(operand) ) {
+      } else if ( isa<GlobalAlias>(operand) ) {
         DEBUG( dbgs() << "loading directly global alias.. "; );
         isSafe = true;      
-      } else if ( GlobalVariable *globalVal = dyn_cast<GlobalVariable>(operand) ) {
+      } else if ( isa<GlobalVariable>(operand) ) {
         DEBUG( dbgs() << "loading directly global variable .. "; );
         isSafe = true;
-      } else if ( ConstantStruct *constStruct = dyn_cast<ConstantStruct>(operand) ) {
+      } else if ( isa<ConstantStruct>(operand) ) {
         DEBUG( dbgs() << "ConstantStruct value.. maybe if support implemented"; );
-      } else if ( ConstantVector *constVec = dyn_cast<ConstantVector>(operand) ) {
+      } else if ( isa<ConstantVector>(operand) ) {
         DEBUG( dbgs() << "ConstantVector value.. maybe if support implemented"; );
-      } else if ( ConstantArray *constArr = dyn_cast<ConstantArray>(operand) ) {
+      } else if ( isa<ConstantArray>(operand) ) {
         DEBUG( dbgs() << "ConstantArray value.. maybe if support implemented"; );
-      } else if ( ConstantDataSequential *constData = dyn_cast<ConstantDataSequential>(operand) ) {
+      } else if ( isa<ConstantDataSequential>(operand) ) {
         DEBUG( dbgs() << "ConstantDataSequential value.. maybe if support implemented"; );
       } else if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(operand) ) {
         isSafe = isSafeGEP(gep);
@@ -1891,7 +1890,6 @@ namespace WebCL {
         Function* oldFun = i->first;
         Function* newFun = i->second;
         bool isBuiltin = safeBuiltinFunctions.count(newFun);
-        LLVMContext& c = oldFun->getContext();
         
         // move all instructions to new function
         newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
