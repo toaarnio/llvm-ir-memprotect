@@ -48,6 +48,8 @@ RunUnsafeMode("allow-unsafe-exceptions",
     }                                                                \
   } while(0)
 
+#define DUMP(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " " << (#contents) << " = " << (contents) << "\n"; )
+
 // LLVM 3.2 didn't support ConstantExpt::getAsInstruction() yet
 // so for now we have copypasted it from trunk. This will be removed in future llvm.
 Instruction *getAsInstruction(ConstantExpr *expr) {
