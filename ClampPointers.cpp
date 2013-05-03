@@ -280,21 +280,23 @@ namespace WebCL {
   }
 
   /** returns true if an argument list looks like it might contain a
-   * safe pointer; it only searches for three-structs with pointer
-   * arguments, so it is by no means a certain indicator, you should
-   * use it only for builtins where there is no chance of confusion.
-   */
+   * manually written (in C) safe pointer; it searches for a pointer
+   * pointing to a three-struct with pointer elements. It is by no
+   * means a certain indicator, you should use it only for builtins
+   * where there is no chance of mistake. */
   bool argsHasSafePointer( const llvm::Function::ArgumentListType& args ) {
     bool result = false;
     for ( llvm::Function::ArgumentListType::const_iterator argIt = args.begin();
           !result && argIt != args.end();
           ++argIt ) {
-      if ( llvm::StructType* st = dyn_cast<StructType>(argIt->getType()) ) {
-        const llvm::StructType::element_iterator firstEl = st->element_begin();
-        result = (st->element_end() - firstEl == 3 &&
-                  firstEl[0]->isPointerTy() &&  
-                  firstEl[1]->isPointerTy() &&  
-                  firstEl[2]->isPointerTy());
+      if ( llvm::PointerType* pt = dyn_cast<PointerType>(argIt->getType()) ) {
+        if ( llvm::StructType* st = dyn_cast<StructType>(pt->getTypeAtIndex(0u)) ) {
+          const llvm::StructType::element_iterator firstEl = st->element_begin();
+          result = (st->element_end() - firstEl == 3 &&
+                    firstEl[0]->isPointerTy() &&  
+                    firstEl[1]->isPointerTy() &&  
+                    firstEl[2]->isPointerTy());
+        }
       }
     }
     return result;
