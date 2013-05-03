@@ -10,10 +10,10 @@ struct float_safe {
 };
 
 float4 _cl_overloadable vload4(long i, struct float_safe safeptr) {
-  float *ptr = safeptr.cur + i;
+  float *ptr = safeptr.cur + i * 4;
   if (ptr < safeptr.begin) return (float4)(0, 0, 0, 0);
-  if (ptr + 3 >= safeptr.end) return (float4)(0, 0, 0, 0);
-  return (float4)(ptr[0], ptr[1], ptr[2], ptr[3]);
+  if (ptr + 4 > safeptr.end) return (float4)(0, 0, 0, 0);
+  return vload4(i, cur);
 }
 
 __kernel void test_kernel(__global float* in, __global float* out) {
