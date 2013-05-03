@@ -795,8 +795,12 @@ namespace WebCL {
                 E = F.arg_end();
               origArgIt != E;
               ++origArgIt, ++newArgIdx, ++origArgIdx ) {
-          newAttributes = newAttributes.addAttr(c, newArgIdx, origAttributes.getParamAttributes(origArgIdx));
-          if ( PointerType* pt0 = dyn_cast<PointerType>(origArgIt->getType()) ) {
+          llvm::Attributes attribs = origAttributes.getParamAttributes(origArgIdx);
+          newAttributes = newAttributes.addAttr(c, newArgIdx, attribs);
+          bool byval = attribs.hasAttribute(llvm::Attributes::ByVal);
+
+          if ( !byval && isa<PointerType>(origArgIt->getType()) ) {
+            PointerType* pt0 = dyn_cast<PointerType>(origArgIt->getType());
             ++origArgIt;
             fast_assert( origArgIt != E, "Insufficient arguments for a safe pointer, 3 required" );
             PointerType* pt1 = dyn_cast<PointerType>( origArgIt->getType() );
@@ -833,6 +837,7 @@ namespace WebCL {
              newArgIt   = newFunction->arg_begin();
            origArgIt != E;
            ++origArgIt, ++newArgIt ) {
+        bool byval = origAttributes.getParamAttributes(origArgIt->getArgNo() + 1).hasAttribute(llvm::Attributes::ByVal);
         // remove attribute which does not make sense for non-pointer argument
         // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
         int argIdx = newArgIt->getArgNo()+1;
@@ -840,7 +845,7 @@ namespace WebCL {
         newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)) );
 
         // it is a smart pointer: we can skip three of the original arguments
-        if (isa<PointerType>(origArgIt->getType())) {
+        if (!byval && isa<PointerType>(origArgIt->getType())) {
           newArgIt->setName( origArgIt->getName() + ".SmartArg" );
           ++origArgIt; assert(origArgIt != E);
           ++origArgIt; assert(origArgIt != E);
@@ -1898,31 +1903,33 @@ namespace WebCL {
         DEBUG( dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n" );
 
         if ( isBuiltin ) {
+          const llvm::AttrListPtr& oldAttributes = oldFun->getAttributes();
           // we need to do special operations to fold three safe arguments into one struct
           for( Function::arg_iterator
-                 a = oldFun->arg_begin(),
+                 oldArgIt = oldFun->arg_begin(),
                  newArgIt = newFun->arg_begin();
-               a != oldFun->arg_end(); 
-               ++a, ++newArgIt ) {
-            if ( isa<PointerType>(a->getType()) ) {
-              Argument*   argCur   = a;
-              ++a; assert(a != oldFun->arg_end());
-              Argument*   argBegin = a;
-              ++a; assert(a != oldFun->arg_end());
-              Argument*   argEnd   = a;
-              Argument*   origArg  = replacedArguments[a];
+               oldArgIt != oldFun->arg_end(); 
+               ++oldArgIt, ++newArgIt ) {
+            bool byval = oldAttributes.getParamAttributes(oldArgIt->getArgNo() + 1).hasAttribute(llvm::Attributes::ByVal);
+            if ( !byval && isa<PointerType>(oldArgIt->getType()) ) {
+              Argument*   argCur   = oldArgIt;
+              ++oldArgIt; assert(oldArgIt != oldFun->arg_end());
+              Argument*   argBegin = oldArgIt;
+              ++oldArgIt; assert(oldArgIt != oldFun->arg_end());
+              Argument*   argEnd   = oldArgIt;
+              Argument*   oldArg  = replacedArguments[oldArgIt];
               std::string name     = argCur->getName();
 
               BasicBlock::iterator instAt = entryBlock.begin();
-              Instruction* exCur   = ExtractValueInst::Create(origArg, genVector(0u), name + ".Cur", instAt);
-              Instruction* exBegin = ExtractValueInst::Create(origArg, genVector(1u), name + ".Begin", instAt);
-              Instruction* exEnd   = ExtractValueInst::Create(origArg, genVector(2u), name + ".End", instAt);
+              Instruction* exCur   = ExtractValueInst::Create(oldArg, genVector(0u), name + ".Cur", instAt);
+              Instruction* exBegin = ExtractValueInst::Create(oldArg, genVector(1u), name + ".Begin", instAt);
+              Instruction* exEnd   = ExtractValueInst::Create(oldArg, genVector(2u), name + ".End", instAt);
 
               argCur->replaceAllUsesWith(exCur);
               argBegin->replaceAllUsesWith(exBegin);
               argEnd->replaceAllUsesWith(exEnd);
             } else {
-              a->replaceAllUsesWith(replacedArguments[a]);
+              oldArgIt->replaceAllUsesWith(replacedArguments[oldArgIt]);
             }
           }          
         } else {
