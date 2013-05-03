@@ -1,18 +1,12 @@
 // RUN: $OCLANG $TEST_SRC -S -o $OUT_FILE.ll &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: echo "Checking that call is made to safe signature" &&
-// RUN: grep "call.*vload4l10float_safe"  $OUT_FILE.clamped.ll
+// RUN: grep "call.*_Z6vload4lPfS_S_1"  $OUT_FILE.clamped.ll
 
-struct float_safe {
-  float *cur;
-  float *begin;
-  float *end;
-};
-
-float4 _cl_overloadable vload4(long i, struct float_safe safeptr) {
-  float *ptr = safeptr.cur + i * 4;
-  if (ptr < safeptr.begin) return (float4)(0, 0, 0, 0);
-  if (ptr + 4 > safeptr.end) return (float4)(0, 0, 0, 0);
+float4 _cl_overloadable vload4(long i, float* cur, float* begin, float* end) {
+  float *ptr = cur + i * 4;
+  if (ptr < begin) return (float4)(0, 0, 0, 0);
+  if (ptr + 4 > end) return (float4)(0, 0, 0, 0);
   return vload4(i, cur);
 }
 

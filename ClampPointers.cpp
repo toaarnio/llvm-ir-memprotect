@@ -281,52 +281,27 @@ namespace WebCL {
     return result;
   }
 
+  typedef std::vector< Type* > TypeVector;
+  static TypeVector typesOfArgumentList( llvm::Function::ArgumentListType& args );
+
   /** returns true if an argument list looks like it might contain a
-   * manually written (in C) safe pointer; it searches for a pointer
-   * pointing to a three-struct with pointer elements. It is by no
-   * means a certain indicator, you should use it only for builtins
-   * where there is no chance of mistake. */
-  bool argsHasSafePointer( const llvm::Function::ArgumentListType& args ) {
+   * manually written (in C) safe pointer; it searches for three
+   * sequential pointers of the same type. It is by no means a certain
+   * indicator, you should use it only for builtins where there is no
+   * chance of mistake . */
+  bool argsHasSafePointer( llvm::Function::ArgumentListType& args ) {
     bool result = false;
-    for ( llvm::Function::ArgumentListType::const_iterator argIt = args.begin();
-          !result && argIt != args.end();
-          ++argIt ) {
-      if ( llvm::PointerType* pt = dyn_cast<PointerType>(argIt->getType()) ) {
-        if ( llvm::StructType* st = dyn_cast<StructType>(pt->getTypeAtIndex(0u)) ) {
-          const llvm::StructType::element_iterator firstEl = st->element_begin();
-          result = (st->element_end() - firstEl == 3 &&
-                    firstEl[0]->isPointerTy() &&  
-                    firstEl[1]->isPointerTy() &&  
-                    firstEl[2]->isPointerTy());
-        }
-      }
+    TypeVector types = typesOfArgumentList(args);
+    for ( unsigned i = 0; 
+          !result && i <= types.size() - 3;
+          ++i ) {
+      llvm::PointerType* pt1 = dyn_cast<PointerType>(types[i]);
+      llvm::PointerType* pt2 = dyn_cast<PointerType>(types[i + 1]);
+      llvm::PointerType* pt3 = dyn_cast<PointerType>(types[i + 2]);
+      result = ( pt1 == pt2 && pt2 == pt3 );
     }
     return result;
   }
-
-  /** Given a type that is a struct with a name attached returns a
-   * struct type with the same elements but without a name.  This is
-   * used for transforming signatures of manually written C functions
-   * with a manually written safe pointers to use the same convention
-   * as functions with generated safe pointers. */
-  llvm::Type* discardStructName( LLVMContext& C, 
-                                 llvm::Type* type ) {
-    Type* returnType = type;
-    if ( llvm::PointerType* pt = dyn_cast<PointerType>(type) ) {
-      if ( llvm::StructType* st = dyn_cast<StructType>(pt->getTypeAtIndex(0u)) ) {
-        returnType = 
-          st->hasName()
-          ? llvm::StructType::get( C, 
-                                   llvm::makeArrayRef(st->element_begin(), 
-                                                      st->element_end()),
-                                   st->isPacked() )
-          : st;
-      }
-    }
-    return returnType;
-  }
-  
-  typedef std::vector< Type* > TypeVector;
 
   /* **SafeArgTypes** is the operation for making a smartptrized
    * version of a function signature. Look at the constructor 
@@ -341,7 +316,7 @@ namespace WebCL {
     std::set<int>     safeArgNos;   // 0 is the first argument
 
     /* Given a list of function argument types
-     * (typesOfFunctionArguments(F)) constructs a
+     * (typesOfArgumentList(F->getArgumentList())) constructs a
      * vector of the types of the arguments wrapped into safe
      * pointers, if they need to be. Otherwise the types are
      * returned as-is.
@@ -380,26 +355,13 @@ namespace WebCL {
    * be avoided, but probably most of the stuff should be moved
    * outside the ClampPointers struct..)
    */
-  static TypeVector typesOfFunctionArguments( llvm::Function* F )
+  static TypeVector typesOfArgumentList( llvm::Function::ArgumentListType& args )
   {
     TypeVector v;
-    llvm::Function::ArgumentListType& args = F->getArgumentList();
-    int idx = 0;
     for ( llvm::Function::ArgumentListType::iterator it = args.begin();
           it != args.end();
-          ++it, ++idx ) {
-      llvm::Attributes attribs = F->getParamAttributes(idx + 1);
-      if ( attribs.hasAttribute(llvm::Attributes::ByVal) ) {
-        // this is no longer possible as we have already eliminated ByVal from the safe functions
-        assert(false);
-        Type* t = it->getType();
-        if ( PointerType* pt = dyn_cast<PointerType>(t) ) {
-          t = discardStructName( F->getContext(), pt->getTypeAtIndex(0u) );
-        }
-        v.push_back( t );
-      } else {
-        v.push_back( it->getType() );
-      }
+          ++it ) {
+      v.push_back( it->getType() );
     }
     return v;
   }
@@ -422,7 +384,7 @@ namespace WebCL {
 
     Signature( llvm::Function* f ) :
       name( extractItaniumDemangledFunctionName(f->getName().str()) ),
-      argTypes( typesOfFunctionArguments(f) ) {
+      argTypes( typesOfArgumentList(f->getArgumentList()) ) {
       // nothing        
     }
 
@@ -801,7 +763,7 @@ namespace WebCL {
 
     /** Given a manually written safeptr C function returns a function
      * that follows the regular safe pointer calling conventions:
-     * instead of passing a pointer to a three-struct, pass the
+     * instead of passing a pointer to a three-pointers, pass a single
      * three-struct in a register.
      *
      * The actual code contents is not modified here but in
@@ -814,54 +776,82 @@ namespace WebCL {
     Function* transformSafeArguments( Function& F,
                                       ArgumentMap& argumentMapping ) {
       LLVMContext& c = F.getContext();
-      FunctionType *function_type = F.getFunctionType();
-      TypeVector newTypes = std::vector<Type*>( function_type->param_begin(),
-                                                function_type->param_end() );
+      FunctionType *functionType = F.getFunctionType();
+      TypeVector origTypes = std::vector<Type*>( functionType->param_begin(),
+                                                functionType->param_end() );
+      TypeVector newTypes;
 
+      const llvm::AttrListPtr& origAttributes = F.getAttributes();
+      llvm::AttrListPtr newAttributes;
+
+      // Construct new attributes and new types. There may be fewer
+      // arguments than in the original as three pointer arguments are
+      // folded into one three-struct.
       {
-        int typeIdx = 0;
+        int newArgIdx = 0;
+        int origArgIdx = 0;
         for ( Function::arg_iterator 
-                a = F.arg_begin(),
+                origArgIt = F.arg_begin(),
                 E = F.arg_end();
-              a != E; ++a, ++typeIdx ) {
-          int argIdx = a->getArgNo() + 1;
-          if ( F.getParamAttributes(argIdx).hasAttribute(llvm::Attributes::ByVal) ) {
-            Type* t = newTypes[typeIdx];
-            if ( PointerType* pt = dyn_cast<PointerType>(t) ) {
-              t = discardStructName( c, t );
-            }
-            newTypes[typeIdx] = t;
+              origArgIt != E;
+              ++origArgIt, ++newArgIdx, ++origArgIdx ) {
+          newAttributes = newAttributes.addAttr(c, newArgIdx, origAttributes.getParamAttributes(origArgIdx));
+          if ( PointerType* pt0 = dyn_cast<PointerType>(origArgIt->getType()) ) {
+            ++origArgIt;
+            fast_assert( origArgIt != E, "Insufficient arguments for a safe pointer, 3 required" );
+            PointerType* pt1 = dyn_cast<PointerType>( origArgIt->getType() );
+            ++origArgIt;
+            fast_assert( origArgIt != E, "Insufficient arguments for a safe pointer, 3 required" );
+            PointerType* pt2 = dyn_cast<PointerType>( origArgIt->getType() );
+            fast_assert( pt0 == pt1, "Types 0 and 1 are not the same" );
+            fast_assert( pt1 == pt2, "Types 1 and 2 are not the same" );
+            newTypes.push_back( getSmartStructType( c, pt0 ) );
+            origArgIdx += 2;
+          } else {
+            newTypes.push_back( origArgIt->getType() );
           }
         }
       }
 
-      FunctionType *new_function_type = FunctionType::get( function_type->getReturnType(), 
-                                                           newTypes, 
-                                                           false );
+      FunctionType *newFunctionType = FunctionType::get( functionType->getReturnType(), 
+                                                         newTypes, 
+                                                         false );
 
-      Function *new_function = Function::Create( new_function_type, F.getLinkage() );
-      new_function->copyAttributesFrom( &F );
+      Function *newFunction = Function::Create( newFunctionType, F.getLinkage() );
+      newFunction->setCallingConv( F.getCallingConv() );
+      newFunction->setAttributes( newAttributes );
+      if ( F.hasGC() ) {
+        newFunction->setGC( F.getGC() );
+      }
       
-      F.getParent()->getFunctionList().insert( &F, new_function );
-      new_function->setName( F.getName() );
+      F.getParent()->getFunctionList().insert( &F, newFunction );
+      newFunction->setName( F.getName() );
 
       for( Function::arg_iterator 
-             a = F.arg_begin(), 
-             E = F.arg_end(), 
-             a_new = new_function->arg_begin(); a != E; ++a, ++a_new ) {             
+             origArgIt  = F.arg_begin(), 
+             E          = F.arg_end(), 
+             newArgIt   = newFunction->arg_begin();
+           origArgIt != E;
+           ++origArgIt, ++newArgIt ) {
         // remove attribute which does not make sense for non-pointer argument
         // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
-        int argIdx = a_new->getArgNo()+1;
-        a_new->setName( a->getName() );
-        new_function->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)) );
-        if ( F.getParamAttributes(argIdx).hasAttribute(llvm::Attributes::ByVal) ) {
-          new_function->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)) );
+        int argIdx = newArgIt->getArgNo()+1;
+        newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)) );
+        newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)) );
+
+        // it is a smart pointer: we can skip three of the original arguments
+        if (isa<PointerType>(origArgIt->getType())) {
+          newArgIt->setName( origArgIt->getName() + ".SmartArg" );
+          ++origArgIt; assert(origArgIt != E);
+          ++origArgIt; assert(origArgIt != E);
+        } else {
+          newArgIt->setName( origArgIt->getName() );
         }
         
-        argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) ); 
+        argumentMapping.insert( std::pair< Argument*, Argument* >( origArgIt, newArgIt ) ); 
       }
 
-      return new_function;
+      return newFunction;
     }
     
     /**
@@ -1909,67 +1899,74 @@ namespace WebCL {
  
         DEBUG( dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n" );
 
-        for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
-          Argument* oldArg = a;
-          Argument* newArg = replacedArguments[a];
+        if ( isBuiltin ) {
+          // we need to do special operations to fold three safe arguments into one struct
+          for( Function::arg_iterator
+                 a = oldFun->arg_begin(),
+                 newArgIt = newFun->arg_begin();
+               a != oldFun->arg_end(); 
+               ++a, ++newArgIt ) {
+            if ( isa<PointerType>(a->getType()) ) {
+              Argument*   argCur   = a;
+              ++a; assert(a != oldFun->arg_end());
+              Argument*   argBegin = a;
+              ++a; assert(a != oldFun->arg_end());
+              Argument*   argEnd   = a;
+              Argument*   origArg  = replacedArguments[a];
+              std::string name     = argCur->getName();
 
-          DEBUG( dbgs() << "Fixing arg: "; oldArg->print(dbgs()); dbgs() << " : \n" );
+              BasicBlock::iterator instAt = entryBlock.begin();
+              Instruction* exCur   = ExtractValueInst::Create(origArg, genVector(0u), name + ".Cur", instAt);
+              Instruction* exBegin = ExtractValueInst::Create(origArg, genVector(1u), name + ".Begin", instAt);
+              Instruction* exEnd   = ExtractValueInst::Create(origArg, genVector(2u), name + ".End", instAt);
 
-          newArg->takeName(oldArg);
-          oldArg->setName(newArg->getName() + ".orig");
+              argCur->replaceAllUsesWith(exCur);
+              argBegin->replaceAllUsesWith(exBegin);
+              argEnd->replaceAllUsesWith(exEnd);
+            } else {
+              a->replaceAllUsesWith(replacedArguments[a]);
+            }
+          }          
+        } else {
+          for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
+            Argument* oldArg = a;
+            Argument* newArg = replacedArguments[a];
 
-          // non safe pointer argument... direct replace
-          if (oldArg->getType() == newArg->getType()) {
-            DEBUG( dbgs() << "type was not changed. Just replacing oldArg uses with newArg.\n" );
-            // argument was not tampered, just replace uses to point the new function
-            oldArg->replaceAllUsesWith(newArg);
-          } else if (isBuiltin) {
-            DEBUG( dbgs() << "1 newArg: "; newArg->print(dbgs()); dbgs() << "\n"; );
-            Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
-            newArg->setName(paramName);
+            DEBUG( dbgs() << "Fixing arg: "; oldArg->print(dbgs()); dbgs() << " : \n" );
 
-            BasicBlock::iterator curAt;
-            BasicBlock::iterator nextAt = entryBlock.begin();
+            newArg->takeName(oldArg);
+            oldArg->setName(newArg->getName() + ".orig");
 
-            // Allocate storage for smart pointer and copy it there so
-            // we can take use getelementptr in the rest of the
-            // function
-            Instruction* allocaInst = new AllocaInst( newArg->getType(),
-                                                      Twine("") + newArg->getName() + ".Alloca",
-                                                      nextAt );
-            Instruction* storeInst = new StoreInst( newArg,
-                                                    allocaInst,
-                                                    nextAt );
-            Instruction* castInst = new BitCastInst( allocaInst,
-                                                     oldArg->getType(),
-                                                     Twine("") + newArg->getName() + ".Cast",
-                                                     nextAt );
+            // non safe pointer argument... direct replace
+            if (oldArg->getType() == newArg->getType()) {
+              DEBUG( dbgs() << "type was not changed. Just replacing oldArg uses with newArg.\n" );
+              // argument was not tampered, just replace uses to point the new function
+              oldArg->replaceAllUsesWith(newArg);
+            } else {
+              // if argument types are not the same we need to find smart pointer that was generated for
+              // argument and create initializations so that existing smart alloca will get correct values
 
-            oldArg->replaceAllUsesWith( castInst );
-          } else {
-            // if argument types are not the same we need to find smart pointer that was generated for
-            // argument and create initializations so that existing smart alloca will get correct values
+              // argument types are not the same we need to get .Cur element of the passed safe pointer, which is being
+              // used in function and replace all uses with that.
 
-            // argument types are not the same we need to get .Cur element of the passed safe pointer, which is being
-            // used in function and replace all uses with that.
+              DEBUG( dbgs() << "1 newArg: "; newArg->print(dbgs()); );
+              Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
+              newArg->setName(paramName);
 
-            DEBUG( dbgs() << "1 newArg: "; newArg->print(dbgs()); );
-            Twine paramName = Twine("") + newArg->getName() + ".SmartArg";
-            newArg->setName(paramName);
+              // get value of passed smart_pointer.cur and replace all uses of original argument with it
+              ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
+                                                                     genVector<unsigned int>(0),
+                                                                     Twine("") + newArg->getName() + ".Cur",
+                                                                     entryBlock.begin());
 
-            // get value of passed smart_pointer.cur and replace all uses of original argument with it
-            ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
-                                                                   genVector<unsigned int>(0),
-                                                                   Twine("") + newArg->getName() + ".Cur",
-                                                                   entryBlock.begin());
+              // this potentially will not work if there is store to arg... probably that case is impossible to happen and smart pointer arguments are read-only
+              DEBUG( dbgs() << "Replacing old arg: "; oldArg->getType()->print(dbgs()); dbgs() << " with: "; newArgCur->getType()->print(dbgs()); dbgs() << "\n"; );
 
-            // this potentially will not work if there is store to arg... probably that case is impossible to happen and smart pointer arguments are read-only
-            DEBUG( dbgs() << "Replacing old arg: "; oldArg->getType()->print(dbgs()); dbgs() << " with: "; newArgCur->getType()->print(dbgs()); dbgs() << "\n"; );
-
-            oldArg->replaceAllUsesWith(newArgCur);
-          }
-        } // -- end arguments for loop
-      }  
+              oldArg->replaceAllUsesWith(newArgCur);
+            }
+          } // -- end arguments for loop
+        }  
+      }
     }
     
     /**
@@ -2005,7 +2002,7 @@ namespace WebCL {
       }
       
       // convert function signature to use pointer structs instead of direct pointers
-      SafeArgTypes args(c, typesOfFunctionArguments(F), dontTouchArguments);
+      SafeArgTypes args(c, typesOfArgumentList(F->getArgumentList()), dontTouchArguments);
       TypeVector& param_types = args.argTypes;
       IntSet& safeTypeArgNos = args.safeArgNos; // argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute
 
