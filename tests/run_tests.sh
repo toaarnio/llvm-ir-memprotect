@@ -53,10 +53,12 @@ function run_test {
 	( cd ../../Debug+Coverage+Asserts/ && rm -f *.gcda )
     fi
     test_command=$(get_run_command $TEST_SRC);
-    if eval $test_command; then
+    eval $test_command
+    rc=$?
+    if [ $rc = 0 ]; then
         echo ">>>>>>>>>> OK";
     else
-        echo "TEST FAILED! intermediate files should be found in run_temp directory";
+        echo "TEST FAILED with error code $rc! intermediate files should be found in run_temp directory";
         echo $test_command
         echo ">>>>>>>>>> !!! !!! FAIL";
         failed_tests="$failed_tests $1";
