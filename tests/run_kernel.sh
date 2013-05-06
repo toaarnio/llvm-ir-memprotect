@@ -74,7 +74,7 @@ echo "    $kernel_function($kernel_argument_list);" >> $KRUNNER_C
 echo "  }" >> $KRUNNER_C
 echo "}" >> $KRUNNER_C
 
-$OCLANG -o $KRUNNER_BC $KRUNNER_C &&
+BUILDING_RUNKERNEL=1 $OCLANG -o $KRUNNER_BC $KRUNNER_C &&
 llvm-link $KRUNNER_BC $kernel_path -o $KRUNNER_LINKED_BC &&
 lli $KRUNNER_LINKED_BC
 

@@ -8,6 +8,10 @@ if [ -z  "$TARGET_FLAGS" ]; then
 TARGET_FLAGS="-include $SCRIPT_PATH/pocl_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64"
 fi
 
+if [ "x$BUILDING_RUNKERNEL" = x1 ]; then 
+    TARGET_FLAGS="-DBUILDING_RUNKERNEL=1 $TARGET_FLAGS"
+fi
+
 # Compiles .cl file to llvm IR
 echo oclang.sh $@
 clang -x cl -fno-builtin $TARGET_FLAGS -emit-llvm -c $@

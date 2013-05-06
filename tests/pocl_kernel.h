@@ -1899,83 +1899,188 @@ int get_image_height (image2d_t image);
 
 
 
-/**
-
+#if !defined(BUILDING_RUNKERNEL)
 // Safe versions of builtins... should be in forbidden list to call directly.
 
-// safe builtin naming is like: 
-// Orig call: _Z7vstore4Dv4_fyPU3AS3f new call: vstore4__safe___Dv4_fyPU3AS3f
+#define IS_IN_RANGE(ptr) (ptr >= first && ptr <= last)
 
-// TODO: define macros...
+#define SMARTPTR(T) T* current, T* first, T* last
 
-SAFE_STRUCT(bool);
-SAFE_STRUCT(char);
-SAFE_STRUCT(uchar);
-SAFE_STRUCT(short);
-SAFE_STRUCT(ushort);
-SAFE_STRUCT(int);
-SAFE_STRUCT(uint);
-SAFE_STRUCT(long);
-SAFE_STRUCT(ulong);
-SAFE_STRUCT(float);
-SAFE_STRUCT(double);
-SAFE_STRUCT(half);
-SAFE_STRUCT(size_t);
-SAFE_STRUCT(ptrdiff_t);
-SAFE_STRUCT(intptr_t);
-SAFE_STRUCT(uintptr_t);
-SAFE_STRUCT(event_t);
+#define IMPLEMENT_FOR_T_TYPES_VT_VTVTP(T, Q, FN)        \
+  T _cl_overloadable FN(T x, Q T*);                     \
+  T _cl_overloadable FN(T x, SMARTPTR(Q T)) {           \
+    if (IS_IN_RANGE(current)) {                         \
+      return FN(x, current);                            \
+    } else {                                            \
+      return 0;                                         \
+    }                                                   \
+  }
 
-SAFE_VECTOR_STRUCTS(char);
-SAFE_VECTOR_STRUCTS(uchar);
-SAFE_VECTOR_STRUCTS(short);
-SAFE_VECTOR_STRUCTS(ushort);
-SAFE_VECTOR_STRUCTS(int);
-SAFE_VECTOR_STRUCTS(uint);
-SAFE_VECTOR_STRUCTS(long);
-SAFE_VECTOR_STRUCTS(ulong);
-SAFE_VECTOR_STRUCTS(float);
-SAFE_VECTOR_STRUCTS(double);
+/* #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __global, FN);           \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __global, FN);          \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __global, FN);          \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __global, FN);          \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __global, FN);          \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __global, FN);         \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __local, FN);            \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __local, FN);           \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __local, FN);           \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __local, FN);           \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __local, FN);           \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __local, FN);          \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __private, FN);          \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __private, FN);         \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __private, FN);         \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __private, FN);         \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __private, FN);         \ */
+/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __private, FN); */
+
+#define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __private, FN);
+
+
+#define IMPLEMENT_FOR_T_TYPES_VT_VTVUP(T, U, Q, FN)             \
+  T _cl_overloadable FN(T x, Q U*);                             \
+  T _cl_overloadable FN(T x, SMARTPTR(Q U)) {                   \
+    if (IS_IN_RANGE(current)) {                                 \
+      return FN(x, current);                                    \
+    } else {                                                    \
+      return 0;                                                 \
+    }                                                           \
+  }
+
+#define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(FN)                          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __global, FN);             \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float2, int2, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float3, int3, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float4, int4, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float8, int8, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float16, int16, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __local, FN);              \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float2, int2, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float3, int3, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float4, int4, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float8, int8, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float16, int16, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __private, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float2, int2, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float3, int3, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float4, int4, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float8, int8, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float16, int16, __private, FN);
+
+#define IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(T, U, Q, FN)           \
+  T _cl_overloadable FN(T x, T y, Q U*);                        \
+  T _cl_overloadable FN(T x, T y, SMARTPTR(Q U)) {              \
+    if (IS_IN_RANGE(current)) {                                 \
+      return FN(x, y, current);                                 \
+    } else {                                                    \
+      return 0;                                                 \
+    }                                                           \
+  }
+
+#define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __global, FN);       \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __local, FN);        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __private, FN);        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __private, FN);        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __private, FN);        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __private, FN);        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __private, FN);
+
+#define IMPLEMENT_SAFE_VLOAD(TYPE, N, DEFAULT)                          \
+  TYPE##N _cl_overloadable vload##N(long i, TYPE* cur, TYPE* begin, TYPE* end) { \
+    TYPE *ptr = cur + i * N;                                            \
+    if (ptr < begin) return (TYPE##N) DEFAULT;                          \
+    if (ptr + N > end) return (TYPE##N) DEFAULT;                        \
+    return vload##N(i, cur);                                            \
+  }
+
+#define IMPLEMENT_SAFE_VSTORE(TYPE, N)                                  \
+  void _cl_overloadable vstore##N(TYPE##N x, long i, TYPE* cur, TYPE* begin, TYPE* end) { \
+    TYPE *ptr = cur + i * N;                                            \
+    if (ptr < begin) return;                                            \
+    if (ptr + N > end) return;                                          \
+    return vstore##N(x, i, cur);                                        \
+  }
+
+#define IMPLEMENT_SAFE_VLOAD_N(N, DEFAULT)                             \
+  IMPLEMENT_SAFE_VLOAD (char, N, DEFAULT)                              \
+  IMPLEMENT_SAFE_VLOAD (uchar, N, DEFAULT)                             \
+  IMPLEMENT_SAFE_VLOAD (short, N, DEFAULT)                             \
+  IMPLEMENT_SAFE_VLOAD (ushort, N, DEFAULT)                            \
+  IMPLEMENT_SAFE_VLOAD (int, N, DEFAULT)                               \
+  IMPLEMENT_SAFE_VLOAD (uint, N, DEFAULT)                              \
+  IMPLEMENT_SAFE_VLOAD (long, N, DEFAULT)                              \
+  IMPLEMENT_SAFE_VLOAD (ulong, N, DEFAULT)                             \
+  IMPLEMENT_SAFE_VLOAD (float, N, DEFAULT) 
+
+#define IMPLEMENT_SAFE_VSTORE_N(N)                             \
+  IMPLEMENT_SAFE_VSTORE (char, N)                              \
+  IMPLEMENT_SAFE_VSTORE (uchar, N)                             \
+  IMPLEMENT_SAFE_VSTORE (short, N)                             \
+  IMPLEMENT_SAFE_VSTORE (ushort, N)                            \
+  IMPLEMENT_SAFE_VSTORE (int, N)                               \
+  IMPLEMENT_SAFE_VSTORE (uint, N)                              \
+  IMPLEMENT_SAFE_VSTORE (long, N)                              \
+  IMPLEMENT_SAFE_VSTORE (ulong, N)                             \
+  IMPLEMENT_SAFE_VSTORE (float, N) 
 
 // T fract(T x, Q T *iptr) 
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(fract, b->current >= b->first && b->current <= b->last);
+// T modf(T x, Q T *iptr) 
+// T sincos(T x, Q T *iptr) 
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(fract)
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(modf)
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
 
-// Ts frexp(T x, int *exp)
+// Tn frexp(T x, int *exp)
 // Tn frexp(T x, intn *exp)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(frexp, b->current >= b->first && b->current <= b->last);
+// T remquo(T x, int T *iptr) 
+// T remquo(T x, intn T *iptr) 
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(frexp)
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(remquo)
 
 // Ts lgamma_r(T x, Q int *signp)
 // Tn lgamma_r(T x, Q intn *signp)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r, b->current >= b->first && b->current <= b->last);
-
-// T modf(T x, Q T *iptr) { }
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(modf, b->current >= b->first && b->current <= b->last);
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r)
 
 // Ts remquo(T x, T y, int *quo) { }
 // Tn remquo(T x, T y, intn *quo) { }
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo, c->current >= c->first && c->current <= c->last);
+IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo)
 
-// T sincos(T x, Q T *cosval) { }
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos, b->current >= b->first && b->current <= b->last);
+// Tn vloadn(long, T* p)
+IMPLEMENT_SAFE_VLOAD_N (2, (0, 0))
+IMPLEMENT_SAFE_VLOAD_N (3, (0, 0, 0))
+IMPLEMENT_SAFE_VLOAD_N (4, (0, 0, 0, 0))
+IMPLEMENT_SAFE_VLOAD_N (8, (0, 0, 0, 0, 0, 0, 0, 0))
+IMPLEMENT_SAFE_VLOAD_N (16, (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 
-// loads vector from address p + (offset*n) 
-// Tn vloadn(size_t offset, const Q T *p) { }
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_V2_STV2P  (vload2,  (b->current + a*2)  >= b->first && (b->current + a*2) <= b->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_V3_STV3P  (vload3,  (b->current + a*3)  >= b->first && (b->current + a*3) <= b->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_V4_STV4P  (vload4,  (b->current + a*4)  >= b->first && (b->current + a*4) <= b->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_V8_STV8P  (vload8,  (b->current + a*8)  >= b->first && (b->current + a*8) <= b->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_V16_STV16P(vload16, (b->current + a*16) >= b->first && (b->current + a*16) <= b->last);
+// void vstoren(T x, long, T* p)
+IMPLEMENT_SAFE_VSTORE_N (2)
+IMPLEMENT_SAFE_VSTORE_N (3)
+IMPLEMENT_SAFE_VSTORE_N (4)
+IMPLEMENT_SAFE_VSTORE_N (8)
+IMPLEMENT_SAFE_VSTORE_N (16)
 
-// stores vector to address p + (offset*n) 
-// void vstoren(Tn data, size_t offset, Q T *p) { }
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V2STV2P  (vstore2, (c->current + b*2)  >= c->first && (c->current + b*2) <= c->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V3STV3P  (vstore3, (c->current + b*3)  >= c->first && (c->current + b*3) <= c->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V4STV4P  (vstore4, (c->current + b*4)  >= c->first && (c->current + b*4) <= c->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V8STV8P  (vstore8, (c->current + b*8)  >= c->first && (c->current + b*8) <= c->last);
-IMPLEMENT_FOR_ALL_VECTOR_TYPES_VOID_V16STV16P(vstore16,(c->current + b*16) >= c->first && (c->current + b*16)<= c->last);
+#endif // !defined(BUILDING_RUNKERNEL)
 
 // vload_half/vstore_half variants not supported for now. 
 
+/*
 void wait_group_events__smart_ptrs__IPE(int num_events, smart_event_t *event_list) {
      if (event_list->current >= event_list->first && event_list->current+num_events <= event_list->last) {
         wait_group_events(num_events, event_list->current);
