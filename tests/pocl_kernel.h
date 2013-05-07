@@ -2002,43 +2002,54 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __private, FN);        \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __private, FN);
 
-#define IMPLEMENT_SAFE_VLOAD(TYPE, N, DEFAULT)                          \
-  TYPE##N _cl_overloadable vload##N(long i, TYPE* cur, TYPE* begin, TYPE* end) { \
-    TYPE *ptr = cur + i * N;                                            \
+#define IMPLEMENT_SAFE_VLOAD(TYPE, Q, N, DEFAULT)                       \
+  TYPE##N _cl_overloadable vload##N(long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end) { \
+    Q TYPE *ptr = cur + i * N;                                          \
     if (ptr < begin) return (TYPE##N) DEFAULT;                          \
     if (ptr + N > end) return (TYPE##N) DEFAULT;                        \
     return vload##N(i, cur);                                            \
   }
 
-#define IMPLEMENT_SAFE_VSTORE(TYPE, N)                                  \
-  void _cl_overloadable vstore##N(TYPE##N x, long i, TYPE* cur, TYPE* begin, TYPE* end) { \
-    TYPE *ptr = cur + i * N;                                            \
+#define IMPLEMENT_SAFE_VSTORE(TYPE, Q, N)                               \
+  void _cl_overloadable vstore##N(TYPE##N x, long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end) { \
+    Q TYPE *ptr = cur + i * N;                                          \
     if (ptr < begin) return;                                            \
     if (ptr + N > end) return;                                          \
     return vstore##N(x, i, cur);                                        \
   }
 
-#define IMPLEMENT_SAFE_VLOAD_N(N, DEFAULT)                             \
-  IMPLEMENT_SAFE_VLOAD (char, N, DEFAULT)                              \
-  IMPLEMENT_SAFE_VLOAD (uchar, N, DEFAULT)                             \
-  IMPLEMENT_SAFE_VLOAD (short, N, DEFAULT)                             \
-  IMPLEMENT_SAFE_VLOAD (ushort, N, DEFAULT)                            \
-  IMPLEMENT_SAFE_VLOAD (int, N, DEFAULT)                               \
-  IMPLEMENT_SAFE_VLOAD (uint, N, DEFAULT)                              \
-  IMPLEMENT_SAFE_VLOAD (long, N, DEFAULT)                              \
-  IMPLEMENT_SAFE_VLOAD (ulong, N, DEFAULT)                             \
-  IMPLEMENT_SAFE_VLOAD (float, N, DEFAULT) 
+#define IMPLEMENT_SAFE_VLOAD_N_TYPES(N, Q, DEFAULT)     \
+  IMPLEMENT_SAFE_VLOAD(char, Q, N, DEFAULT);            \
+  IMPLEMENT_SAFE_VLOAD(uchar, Q, N, DEFAULT);           \
+  IMPLEMENT_SAFE_VLOAD(short, Q, N, DEFAULT);           \
+  IMPLEMENT_SAFE_VLOAD(ushort, Q, N, DEFAULT);          \
+  IMPLEMENT_SAFE_VLOAD(int, Q, N, DEFAULT);             \
+  IMPLEMENT_SAFE_VLOAD(uint, Q, N, DEFAULT);            \
+  IMPLEMENT_SAFE_VLOAD(long, Q, N, DEFAULT);            \
+  IMPLEMENT_SAFE_VLOAD(ulong, Q, N, DEFAULT);           \
+  IMPLEMENT_SAFE_VLOAD(float, Q, N, DEFAULT);                   
 
-#define IMPLEMENT_SAFE_VSTORE_N(N)                             \
-  IMPLEMENT_SAFE_VSTORE (char, N)                              \
-  IMPLEMENT_SAFE_VSTORE (uchar, N)                             \
-  IMPLEMENT_SAFE_VSTORE (short, N)                             \
-  IMPLEMENT_SAFE_VSTORE (ushort, N)                            \
-  IMPLEMENT_SAFE_VSTORE (int, N)                               \
-  IMPLEMENT_SAFE_VSTORE (uint, N)                              \
-  IMPLEMENT_SAFE_VSTORE (long, N)                              \
-  IMPLEMENT_SAFE_VSTORE (ulong, N)                             \
-  IMPLEMENT_SAFE_VSTORE (float, N) 
+#define IMPLEMENT_SAFE_VLOAD_N(N, DEFAULT)             \
+  IMPLEMENT_SAFE_VLOAD_N_TYPES(N, __private, DEFAULT); \
+  IMPLEMENT_SAFE_VLOAD_N_TYPES(N, __global, DEFAULT);  \
+  IMPLEMENT_SAFE_VLOAD_N_TYPES(N, __const, DEFAULT);   \
+  IMPLEMENT_SAFE_VLOAD_N_TYPES(N, __local, DEFAULT);
+
+#define IMPLEMENT_SAFE_VSTORE_N_TYPES(N, Q)     \
+  IMPLEMENT_SAFE_VSTORE(char, Q, N);            \
+  IMPLEMENT_SAFE_VSTORE(uchar, Q, N);           \
+  IMPLEMENT_SAFE_VSTORE(short, Q, N);           \
+  IMPLEMENT_SAFE_VSTORE(ushort, Q, N);          \
+  IMPLEMENT_SAFE_VSTORE(int, Q, N);             \
+  IMPLEMENT_SAFE_VSTORE(uint, Q, N);            \
+  IMPLEMENT_SAFE_VSTORE(long, Q, N);            \
+  IMPLEMENT_SAFE_VSTORE(ulong, Q, N);           \
+  IMPLEMENT_SAFE_VSTORE(float, Q, N); 
+
+#define IMPLEMENT_SAFE_VSTORE_N(N)              \
+  IMPLEMENT_SAFE_VSTORE_N_TYPES(N, __private);  \
+  IMPLEMENT_SAFE_VSTORE_N_TYPES(N, __global);   \
+  IMPLEMENT_SAFE_VSTORE_N_TYPES(N, __local);
 
 // T fract(T x, Q T *iptr) 
 // T modf(T x, Q T *iptr) 
@@ -2062,19 +2073,19 @@ IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r)
 // Tn remquo(T x, T y, intn *quo) { }
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo)
 
-// Tn vloadn(long, T* p)
-IMPLEMENT_SAFE_VLOAD_N (2, (0, 0))
-IMPLEMENT_SAFE_VLOAD_N (3, (0, 0, 0))
-IMPLEMENT_SAFE_VLOAD_N (4, (0, 0, 0, 0))
-IMPLEMENT_SAFE_VLOAD_N (8, (0, 0, 0, 0, 0, 0, 0, 0))
-IMPLEMENT_SAFE_VLOAD_N (16, (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+// Tn vloadn(long, Q T* p)
+IMPLEMENT_SAFE_VLOAD_N(2, (-42, -42))
+IMPLEMENT_SAFE_VLOAD_N(3, (-42, -42, -42))
+IMPLEMENT_SAFE_VLOAD_N(4, (-42, -42, -42, -42))
+IMPLEMENT_SAFE_VLOAD_N(8, (-42, -42, -42, -42, -42, -42, -42, -42))
+IMPLEMENT_SAFE_VLOAD_N(16, (-42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42))
 
-// void vstoren(T x, long, T* p)
-IMPLEMENT_SAFE_VSTORE_N (2)
-IMPLEMENT_SAFE_VSTORE_N (3)
-IMPLEMENT_SAFE_VSTORE_N (4)
-IMPLEMENT_SAFE_VSTORE_N (8)
-IMPLEMENT_SAFE_VSTORE_N (16)
+// void vstoren(T x, long, Q T* p)
+IMPLEMENT_SAFE_VSTORE_N(2)
+IMPLEMENT_SAFE_VSTORE_N(3)
+IMPLEMENT_SAFE_VSTORE_N(4)
+IMPLEMENT_SAFE_VSTORE_N(8)
+IMPLEMENT_SAFE_VSTORE_N(16)
 
 #endif // !defined(BUILDING_RUNKERNEL)
 
