@@ -750,11 +750,13 @@ namespace WebCL {
       for ( FunctionList::const_iterator unsafeIt = unsafeBuiltinFunctions.begin();
             unsafeIt != unsafeBuiltinFunctions.end();
             ++unsafeIt ) {
-        Signature safeSig = Signature(*unsafeIt).safe(c);
+        Signature origSig = Signature(*unsafeIt);
+        Signature safeSig = origSig.safe(c);
         std::map<Signature, Function*>::const_iterator safeSigIt = 
           safeSignatureMap.find(safeSig);
         if ( safeSigIt != safeSignatureMap.end() ) {
           mapping[*unsafeIt] = safeSigIt->second;
+          DEBUG( dbgs() << "Mapped " << origSig << " => " << safeSig << "\n"; );
         }
       }
       
