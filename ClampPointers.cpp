@@ -292,8 +292,8 @@ namespace WebCL {
   bool argsHasSafePointer( llvm::Function::ArgumentListType& args ) {
     bool result = false;
     TypeVector types = typesOfArgumentList(args);
-    for ( unsigned i = 0; 
-          !result && i <= types.size() - 3;
+    for ( signed i = 0; 
+          !result && i <= int(types.size()) - 3;
           ++i ) {
       llvm::PointerType* pt1 = dyn_cast<PointerType>(types[i]);
       llvm::PointerType* pt2 = dyn_cast<PointerType>(types[i + 1]);
