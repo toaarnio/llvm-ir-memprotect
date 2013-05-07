@@ -12,7 +12,7 @@ echo "OCLANG was not set, setting default to $OCLANG"
 fi
 
 function show_usage {
-    echo "Usage: run_kernel.sh <kernel.clamped.ll> <kernel_name> <global_work_group_size> <ret_arg> \"<arg1>:<arg2>:<arg3>:<arg4>:...\"";
+    echo "Usage: run_kernel.sh <kernel.clamped.ll> <kernel_name> <global_work_group_size> \"<arg1>:<arg2>:<arg3>:<arg4>:...\"";
     echo "<kernel.clamped.ll>      LLVM ll/bc file, which has kernel which is going to be ran.";
     echo "<kernel_name>            Function name which will be called for each work_item.";
     echo "<global_work_group_size> Number of work item ids that get_global_id(0) returns.";
