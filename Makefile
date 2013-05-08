@@ -12,3 +12,6 @@ LOADABLE_MODULE = 1
 
 # Include the makefile implementation stuff
 include $(LEVEL)/Makefile.common
+
+pocl/library.bc:
+	$(MAKE) -C pocl library.bc

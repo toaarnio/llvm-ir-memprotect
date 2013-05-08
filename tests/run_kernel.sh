@@ -35,11 +35,18 @@ work_group_size=$1
 shift
 arg_list=$@
 
+TOPDIR=$PWD
+while [ -n "$TOPDIR" -a ! -d $TOPDIR/pocl ]; do
+    echo "TOPDIR=$TOPDIR"
+    TOPDIR="`echo $TOPDIR | sed 's,/[^/]*$,,'`"
+done
+echo "TOPDIR=$TOPDIR"
+
 TEMP_DIR=$(mktemp -d -t krunnerXXXX);
 KRUNNER_C=$TEMP_DIR/krunner.c
 KRUNNER_BC=$TEMP_DIR/krunner.bc
 KRUNNER_LINKED_BC=$TEMP_DIR/krunner_linked.bc
-LIBRARY_BC=`dirname $kernel_path`/library.bc
+LIBRARY_BC=$TOPDIR/pocl/library.bc
 
 # create get_global_id() implementation
 echo "// automatically generated runner for testing kernel." > $KRUNNER_C;
@@ -75,7 +82,6 @@ echo "    $kernel_function($kernel_argument_list);" >> $KRUNNER_C
 echo "  }" >> $KRUNNER_C
 echo "}" >> $KRUNNER_C
 
-BUILDING_RUNKERNEL=1 $OCLANG -o $LIBRARY_BC `dirname $kernel_path`/../library.cl &&
 BUILDING_RUNKERNEL=1 $OCLANG -o $KRUNNER_BC $KRUNNER_C &&
 llvm-link $LIBRARY_BC  $KRUNNER_BC $kernel_path -o $KRUNNER_LINKED_BC &&
 lli $KRUNNER_LINKED_BC
