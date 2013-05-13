@@ -1902,7 +1902,7 @@ int get_image_height (image2d_t image);
 #if !defined(BUILDING_RUNKERNEL)
 // Safe versions of builtins... should be in forbidden list to call directly.
 
-#define IS_IN_RANGE(ptr) (ptr >= first && ptr <= last)
+#define IS_IN_RANGE(ptr) (ptr >= first && ptr <= last - 1)
 
 #define SMARTPTR(T) T* current, T* first, T* last
 
@@ -1942,14 +1942,14 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __private, FN);
 
 
-#define IMPLEMENT_FOR_T_TYPES_VT_VTVUP(T, U, Q, FN)             \
-  T _cl_overloadable FN(T x, Q U*);                             \
-  T _cl_overloadable FN(T x, SMARTPTR(Q U)) {                   \
-    if (IS_IN_RANGE(current)) {                                 \
-      return FN(x, current);                                    \
-    } else {                                                    \
-      return 0;                                                 \
-    }                                                           \
+#define IMPLEMENT_FOR_T_TYPES_VT_VTVUP(T, U, Q, FN)     \
+  T _cl_overloadable FN(T x, Q U*);                     \
+  T _cl_overloadable FN(T x, SMARTPTR(Q U)) {           \
+    if (IS_IN_RANGE(current)) {                         \
+      return FN(x, current);                            \
+    } else {                                            \
+      return 0;                                         \
+    }                                                   \
   }
 
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(FN)                          \
@@ -1972,14 +1972,14 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float8, int8, __private, FN);          \
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float16, int16, __private, FN);
 
-#define IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(T, U, Q, FN)           \
-  T _cl_overloadable FN(T x, T y, Q U*);                        \
-  T _cl_overloadable FN(T x, T y, SMARTPTR(Q U)) {              \
-    if (IS_IN_RANGE(current)) {                                 \
-      return FN(x, y, current);                                 \
-    } else {                                                    \
-      return 0;                                                 \
-    }                                                           \
+#define IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(T, U, Q, FN)   \
+  T _cl_overloadable FN(T x, T y, Q U*);                \
+  T _cl_overloadable FN(T x, T y, SMARTPTR(Q U)) {      \
+    if (IS_IN_RANGE(current)) {                         \
+      return FN(x, y, current);                         \
+    } else {                                            \
+      return 0;                                         \
+    }                                                   \
   }
 
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                        \
