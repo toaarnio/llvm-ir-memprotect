@@ -123,3 +123,4 @@
 #include "async_work_group_copy.cl"
 #include "as_type.cl"
 #include "atomics.cl"
+#include "barrier.cl"
