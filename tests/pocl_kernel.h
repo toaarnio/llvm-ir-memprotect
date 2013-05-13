@@ -2087,6 +2087,58 @@ IMPLEMENT_SAFE_VSTORE_N(4)
 IMPLEMENT_SAFE_VSTORE_N(8)
 IMPLEMENT_SAFE_VSTORE_N(16)
 
+#define IMPLEMENT_FOR_T_TYPES_VT_VOLAPT(T, Q, FN)                       \
+  _cl_overloadable T FN(volatile Q T *p);                               \
+  _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last) { \
+    if (IS_IN_RANGE(current)) {                                         \
+      return FN(current);                                               \
+    } else {                                                            \
+      return -42;                                                       \
+    }                                                                   \
+  }
+
+#define IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, FN)                      \
+  _cl_overloadable T FN(volatile Q T *p, T val);                        \
+  _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last, T x) { \
+    if (IS_IN_RANGE(current)) {                                         \
+      return FN(current, x);                                            \
+    } else {                                                            \
+      return -42;                                                       \
+    }                                                                   \
+  }
+
+#define IMPLEMENT_FOR_T_TYPES_VT_VOLAPTTT(T, Q, FN)                     \
+  _cl_overloadable T FN(volatile Q T *p, T x, T y);                     \
+  _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last, T x, T y) { \
+    printf("is %p in range %p-%p\n", current, first, last);             \
+    if (IS_IN_RANGE(current)) {                                         \
+      return FN(current, x, y);                                         \
+    } else {                                                            \
+      return -42;                                                       \
+    }                                                                   \
+  }
+
+#define IMPLEMENT_SAFE_ATOMIC(T, Q)                             \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_add);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_sub);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_xchg);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPT(T, Q, atomic_inc);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPT(T, Q, atomic_dec);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTTT(T, Q, atomic_cmpxchg);      \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_min);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_max);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_and);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_or);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_xor);
+
+IMPLEMENT_SAFE_ATOMIC(int, __global)
+IMPLEMENT_SAFE_ATOMIC(uint, __global)
+IMPLEMENT_SAFE_ATOMIC(int, __local )
+IMPLEMENT_SAFE_ATOMIC(uint, __local)
+
+IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomix_xchg);
+IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomix_xchg);
+
 #endif // !defined(BUILDING_RUNKERNEL)
 
 // vload_half/vstore_half variants not supported for now. 
@@ -2097,7 +2149,5 @@ void wait_group_events__smart_ptrs__IPE(int num_events, smart_event_t *event_lis
         wait_group_events(num_events, event_list->current);
      }
 }
-
-// TODO: atomic functions 
 
 */
