@@ -316,7 +316,7 @@ cl_int clGetDeviceInfo(cl_device_id device,
   case CL_DEVICE_GLOBAL_MEM_CACHE_SIZE         : assert(false);
   case CL_DEVICE_GLOBAL_MEM_CACHE_TYPE         : assert(false);
   case CL_DEVICE_GLOBAL_MEM_CACHELINE_SIZE     : assert(false);
-  case CL_DEVICE_GLOBAL_MEM_SIZE               : assert(false);
+  case CL_DEVICE_GLOBAL_MEM_SIZE               : R(cl_uint, 2<<20);
   case CL_DEVICE_HALF_FP_CONFIG                : assert(false);
   case CL_DEVICE_IMAGE_SUPPORT                 : assert(false);
   case CL_DEVICE_IMAGE2D_MAX_HEIGHT            : assert(false);
@@ -324,10 +324,10 @@ cl_int clGetDeviceInfo(cl_device_id device,
   case CL_DEVICE_IMAGE3D_MAX_DEPTH             : assert(false);
   case CL_DEVICE_IMAGE3D_MAX_HEIGHT            : assert(false);
   case CL_DEVICE_IMAGE3D_MAX_WIDTH             : assert(false);
-  case CL_DEVICE_LOCAL_MEM_SIZE                : assert(false);
+  case CL_DEVICE_LOCAL_MEM_SIZE                : R(cl_uint, 2<<20);
   case CL_DEVICE_LOCAL_MEM_TYPE                : assert(false);
-  case CL_DEVICE_MAX_CLOCK_FREQUENCY           : assert(false);
-  case CL_DEVICE_MAX_COMPUTE_UNITS             : assert(false);
+  case CL_DEVICE_MAX_CLOCK_FREQUENCY           : R(cl_uint, 1);
+  case CL_DEVICE_MAX_COMPUTE_UNITS             : R(cl_uint, work_group_size);
   case CL_DEVICE_MAX_CONSTANT_ARGS             : assert(false);
   case CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE      : assert(false);
   case CL_DEVICE_MAX_MEM_ALLOC_SIZE            : assert(false);
@@ -340,7 +340,7 @@ cl_int clGetDeviceInfo(cl_device_id device,
   case CL_DEVICE_MAX_WRITE_IMAGE_ARGS          : assert(false);
   case CL_DEVICE_MEM_BASE_ADDR_ALIGN           : assert(false);
   case CL_DEVICE_MIN_DATA_TYPE_ALIGN_SIZE      : assert(false);
-  case CL_DEVICE_NAME                          : assert(false);
+  case CL_DEVICE_NAME                          : RS("FakeCL");
   case CL_DEVICE_PLATFORM                      : assert(false);
   case CL_DEVICE_PREFERRED_VECTOR_WIDTH_CHAR   : assert(false);
   case CL_DEVICE_PREFERRED_VECTOR_WIDTH_SHORT  : assert(false);
@@ -353,10 +353,10 @@ cl_int clGetDeviceInfo(cl_device_id device,
   case CL_DEVICE_QUEUE_PROPERTIES              : assert(false);
   case CL_DEVICE_SINGLE_FP_CONFIG              : assert(false);
   case CL_DEVICE_TYPE                          : assert(false);
-  case CL_DEVICE_VENDOR                        : assert(false);
+  case CL_DEVICE_VENDOR                        : RS("NRC");
   case CL_DEVICE_VENDOR_ID                     : assert(false);
-  case CL_DEVICE_VERSION                       : assert(false);
-  case CL_DRIVER_VERSION                       : assert(false);
+  case CL_DEVICE_VERSION                       : RS("1.1");
+  case CL_DRIVER_VERSION                       : RS("0.1");
   } 
   return CL_SUCCESS;
 }
