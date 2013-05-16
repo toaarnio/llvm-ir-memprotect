@@ -1,4 +1,1 @@
-void barrier(int flags)
-{
-  // not implemented
-}
+void barrier(cl_mem_fence_flags flags);
