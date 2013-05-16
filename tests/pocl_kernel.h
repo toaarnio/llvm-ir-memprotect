@@ -2136,8 +2136,8 @@ IMPLEMENT_SAFE_ATOMIC(uint, __global)
 IMPLEMENT_SAFE_ATOMIC(int, __local )
 IMPLEMENT_SAFE_ATOMIC(uint, __local)
 
-IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomix_xchg);
-IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomix_xchg);
+IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomic_xchg);
+IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomic_xchg);
 
 #endif // !defined(BUILDING_RUNKERNEL)
 
