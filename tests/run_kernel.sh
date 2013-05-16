@@ -37,10 +37,8 @@ arg_list=$@
 
 TOPDIR=$PWD
 while [ -n "$TOPDIR" -a ! -d $TOPDIR/pocl ]; do
-    echo "TOPDIR=$TOPDIR"
     TOPDIR="`echo $TOPDIR | sed 's,/[^/]*$,,'`"
 done
-echo "TOPDIR=$TOPDIR"
 
 TEMP_DIR=$(mktemp -d -t krunnerXXXX);
 KRUNNER_C=$TEMP_DIR/krunner.c
