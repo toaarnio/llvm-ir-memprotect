@@ -117,7 +117,7 @@ cl_int clBuildProgram(cl_program program,
 }
 
 #define R(type, value) if (param_value_size_ret) *param_value_size_ret = sizeof(type); if (sizeof(type) <= param_value_size) * (type*) param_value = value; break
-#define RS(str) if (param_value_size_ret) *param_value_size_ret = sizeof(str) - 1; if (sizeof(str) - 1 <= param_value_size) std::memcpy(param_value, str, sizeof(str) - 1); break;
+#define RS(str) if (param_value_size_ret) *param_value_size_ret = sizeof(str); if (sizeof(str) <= param_value_size) std::memcpy(param_value, str, sizeof(str)); break;
 cl_int clGetProgramBuildInfo(cl_program  program,
                              cl_device_id  device,
                              cl_program_build_info  param_name,
