@@ -28,7 +28,9 @@
 #include "cosh.cl"
 #include "cospi.cl"
 #include "normalize.cl"
+#ifndef FAKECL
 #include "length.cl"
+#endif
 #include "log10.cl"
 #include "log1p.cl"
 #include "log2.cl"
@@ -59,7 +61,9 @@
 #include "tanpi.cl"
 #include "tgamma.cl"
 #include "trunc.cl"
+#ifndef FAKECL
 #include "upsample.cl"
+#endif
 #include "bitselect.cl"
 #include "add_sat.cl"
 #include "all.cl"
@@ -68,7 +72,9 @@
 #include "copysign.cl"
 #include "cross.cl"
 #include "degrees.cl"
+#ifndef FAKECL
 #include "distance.cl"
+#endif
 #include "divide.cl"
 #include "dot.cl"
 #include "erf.cl"
@@ -78,8 +84,10 @@
 #include "exp.cl"
 #include "expm1.cl"
 #include "fabs.cl"
+#ifndef FAKECL
 #include "fast_distance.cl"
 #include "fast_length.cl"
+#endif
 #include "fast_normalize.cl"
 #include "fdim.cl"
 #include "floor.cl"
@@ -87,7 +95,9 @@
 #include "fmax.cl"
 #include "fmin.cl"
 #include "fmod.cl"
+#ifndef FAKECL
 //#include "fract.cl"
+#endif
 #include "ilogb.cl"
 #include "hypot.cl"
 #include "hadd.cl"
@@ -110,7 +120,9 @@
 #include "mad.cl"
 #include "mad_hi.cl"
 #include "mad_sat.cl"
-//#include "minmag.cl"
+#ifndef FAKECL
+#include "minmag.cl"
+#endif
 #include "mul24.cl"
 #include "mul_hi.cl"
 #include "nan.cl"
@@ -120,7 +132,9 @@
 #include "vstore_half.cl"
 #include "vload_half.cl"
 #include "wait_group_events.cl"
+#ifndef FAKECL
 #include "async_work_group_copy.cl"
+#endif
 #include "as_type.cl"
-#include "atomics.cl"
 #include "barrier.cl"
+#include "atomics.cl"

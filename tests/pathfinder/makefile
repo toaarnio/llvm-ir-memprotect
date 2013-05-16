@@ -6,10 +6,10 @@ DEBUGFLAGS = -g
 CXXFLAGS = -I.. -g -O0
 LDFLAGS = -lm -lpthread
 
-CL_LIBRARY = ../../pocl/library.o
+CL_LIBRARY = ../../pocl/library-fakecl.o
 
 %.o: %.cl
-	clang -O0 -g -x cl -fno-builtin -DBUILDING_RUNKERNEL=1 -include ../pocl_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 -c $< -o $@
+	clang -O0 -g -x cl -fno-builtin -DFAKECL=1 -DBUILDING_RUNKERNEL=1 -include ../pocl_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 -c $< -o $@
 
 pathfinder: main.o ../FakeCL.o OpenCL.o $(CL_LIBRARY) kernels.o
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
