@@ -1,20 +1,18 @@
-include ../../common/make.config
 CXX = g++
 DEBUGFLAGS = -g
 # You will need to modify the following 2 lines
 # by inserting the correct path to the OpenCL
 # lib and inc directories.
-CXXFLAGS = -I$(OPENCL_INC) -c $(DEBUGFLAGS)
-LINKFLAGS = -L$(OPENCL_LIB)
+CXXFLAGS = -I.. -g -O0
+LDFLAGS = -lm -lpthread
 
-# link objects(binaries) together
-a.out: main.o OpenCL.o
-	$(CXX) main.o OpenCL.o $(LINKFLAGS) -o pathfinder
+CL_LIBRARY = ../../pocl/library.o
 
-# compile main function file into object (binary)
-main.o: main.cpp OpenCL.cpp kernels.cl
-	$(CXX) $(CXXFLAGS) main.cpp OpenCL.cpp
+%.o: %.cl
+	clang -O0 -g -x cl -fno-builtin -DBUILDING_RUNKERNEL=1 -include ../pocl_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 -c $< -o $@
+
+pathfinder: main.o ../FakeCL.o OpenCL.o $(CL_LIBRARY) kernels.o
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
 
 clean:
-	clear
-	@rm -f pathfinder *.o *.out *~ *\#
+	rm -f pathfinder *.o *.out *~ *\#

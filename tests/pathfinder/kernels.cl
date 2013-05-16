@@ -1,8 +1,16 @@
 #define IN_RANGE(x, min, max) ((x)>=(min) && (x)<=(max))
-#define CLAMP_RANGE(x, min, max) x = (x<(min)) ? min : ((x>(max)) ? max : x )
+//#define CLAMP_RANGE(x, min, max) x = (x<(min)) ? min : ((x>(max)) ? max : x )
 #define MIN(a, b) ((a)<=(b) ? (a) : (b))
 
-__kernel void dynproc_kernel (int iteration,
+//#define get_local_size(x) local_work_size[x]
+#define get_local_size(x) local_work_size[x]
+#define get_group_id(x) group_id
+#define get_local_id(x) local_id
+
+__kernel void dynproc_kernel (int* local_work_size,
+                              int group_id,
+                              int local_id,
+	      		      int iteration,
                               __global int* gpuWall,
                               __global int* gpuSrc,
                               __global int* gpuResults,

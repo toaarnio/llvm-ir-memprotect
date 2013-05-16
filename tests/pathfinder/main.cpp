@@ -37,8 +37,11 @@ int** wall;
 int*  result;
 int   pyramid_height;
 
+extern "C" void dynproc_kernel(...);
+
 void init(int argc, char** argv)
 {
+        kernel_funcs["dynproc_kernel"] = dynproc_kernel;
 	if (argc == 4)
 	{
 		cols = atoi(argv[1]);
