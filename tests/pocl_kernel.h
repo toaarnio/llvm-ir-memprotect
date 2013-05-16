@@ -1916,31 +1916,32 @@ int get_image_height (image2d_t image);
     }                                                   \
   }
 
-/* #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __global, FN);           \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __global, FN);          \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __global, FN);          \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __global, FN);          \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __global, FN);          \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __global, FN);         \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __local, FN);            \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __local, FN);           \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __local, FN);           \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __local, FN);           \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __local, FN);           \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __local, FN);          \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __private, FN);          \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __private, FN);         \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __private, FN);         \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __private, FN);         \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __private, FN);         \ */
-/*   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __private, FN); */
-
+#ifndef FAKECL
+#define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __global, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __global, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __global, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __global, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __local, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __local, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __local, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __local, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float2, __private, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float3, __private, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float4, __private, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float8, __private, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float16, __private, FN);
+#else
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __global, FN);           \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __local, FN);            \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __private, FN);
-
+#endif
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VTVUP(T, U, Q, FN)     \
   T _cl_overloadable FN(T x, Q U*);                     \
@@ -1952,6 +1953,7 @@ int get_image_height (image2d_t image);
     }                                                   \
   }
 
+#ifndef FAKECL
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(FN)                          \
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __global, FN);             \
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float2, int2, __global, FN);           \
@@ -1971,6 +1973,18 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float4, int4, __private, FN);          \
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float8, int8, __private, FN);          \
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float16, int16, __private, FN);
+#else
+#define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(FN)                          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __global, FN);             \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float2, int2, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float4, int4, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __local, FN);              \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float2, int2, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float4, int4, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __private, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float2, int2, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float4, int4, __private, FN);          
+#endif
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(T, U, Q, FN)   \
   T _cl_overloadable FN(T x, T y, Q U*);                \
@@ -1982,6 +1996,7 @@ int get_image_height (image2d_t image);
     }                                                   \
   }
 
+#ifndef FAKECL
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                        \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __global, FN);           \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __global, FN);         \
@@ -2001,6 +2016,18 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __private, FN);        \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __private, FN);        \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __private, FN);
+#else
+#define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __global, FN);           \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __global, FN);         \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __local, FN);            \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __local, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __private, FN);          \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __private, FN);        \
+  IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __private, FN);        
+#endif
 
 #define IMPLEMENT_SAFE_VLOAD(TYPE, Q, N, DEFAULT)                       \
   TYPE##N _cl_overloadable vload##N(long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end) { \
@@ -2054,38 +2081,50 @@ int get_image_height (image2d_t image);
 // T fract(T x, Q T *iptr) 
 // T modf(T x, Q T *iptr) 
 // T sincos(T x, Q T *iptr) 
+#ifndef FAKECL
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(fract)
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(modf)
+#endif
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
 
 // Tn frexp(T x, int *exp)
 // Tn frexp(T x, intn *exp)
 // T remquo(T x, int T *iptr) 
 // T remquo(T x, intn T *iptr) 
+#ifndef FAKECL
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(frexp)
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(remquo)
+#endif
 
 // Ts lgamma_r(T x, Q int *signp)
 // Tn lgamma_r(T x, Q intn *signp)
+#ifndef FAKECL
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r)
+#endif
 
 // Ts remquo(T x, T y, int *quo) { }
 // Tn remquo(T x, T y, intn *quo) { }
+#ifndef FAKECL
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo)
+#endif
 
 // Tn vloadn(long, Q T* p)
+#ifndef FAKECL
 IMPLEMENT_SAFE_VLOAD_N(2, (-42, -42))
 IMPLEMENT_SAFE_VLOAD_N(3, (-42, -42, -42))
 IMPLEMENT_SAFE_VLOAD_N(4, (-42, -42, -42, -42))
 IMPLEMENT_SAFE_VLOAD_N(8, (-42, -42, -42, -42, -42, -42, -42, -42))
 IMPLEMENT_SAFE_VLOAD_N(16, (-42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42))
+#endif
 
 // void vstoren(T x, long, Q T* p)
+#ifndef FAKECL
 IMPLEMENT_SAFE_VSTORE_N(2)
 IMPLEMENT_SAFE_VSTORE_N(3)
 IMPLEMENT_SAFE_VSTORE_N(4)
 IMPLEMENT_SAFE_VSTORE_N(8)
 IMPLEMENT_SAFE_VSTORE_N(16)
+#endif
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VOLAPT(T, Q, FN)                       \
   _cl_overloadable T FN(volatile Q T *p);                               \
