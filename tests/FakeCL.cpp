@@ -113,7 +113,7 @@ cl_command_queue clCreateCommandQueue(cl_context, cl_device_id, int, int* ret)
   if (ret) {
     *ret = CL_SUCCESS;
   }
-  return 0;
+  return 1;
 }
 
 cl_mem clCreateBuffer(cl_context context,
@@ -201,7 +201,7 @@ cl_program clCreateProgramWithSource(cl_context context,
   if (*errcode_ret) {
     *errcode_ret = CL_SUCCESS;
   }
-  return 0;
+  return 1;
 }
 
 cl_int clBuildProgram(cl_program program,
