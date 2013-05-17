@@ -5,10 +5,19 @@
 #include <cstdio>
 #include <sys/types.h>
 
+#include <map>
+#include <string>
+#include <vector>
+
+
 const int work_group_size = 64;
 
-std::map<std::string, cl_kernel_fn> kernel_funcs;
+namespace {
+  std::map<std::string, fakecl_kernel_fn> fakecl_kernel_funcs;
+}
+
 bool safe_mode = false;
+
 
 pthread_mutex_t barrier_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t barrier_cond = PTHREAD_COND_INITIALIZER;
@@ -16,8 +25,30 @@ int barrier_max = work_group_size;
 int barrier_enter = 0;          // number of threads waiting in barrier, in range 0..barrier_max
 int barrier_completed_seq = 0;
 
+typedef struct {
+  void* ptr;
+  size_t size;
+  bool doDelete;
+} cl_mem_info;
+
+struct cl_arg {
+  std::vector<char> data;
+};
+
+struct cl_kernel_struct {
+  fakecl_kernel_fn fn;
+  int arg_count;
+  cl_arg args[FAKECL_MAX_ARGS];
+};
+
 namespace {
   std::map<cl_mem, cl_mem_info> cl_mem_data;
+}
+
+extern "C" {
+void fakeclSetKernelFunc(const char* label, fakecl_kernel_fn fn)
+{
+  fakecl_kernel_funcs[label] = fn;
 }
 
 cl_context clCreateContext(cl_context_properties *properties,
@@ -89,7 +120,7 @@ cl_kernel clCreateKernel (cl_program  program,
                           cl_int *errcode_ret)
 {
   cl_kernel k = new cl_kernel_struct;
-  k->fn = kernel_funcs[kernel_name];
+  k->fn = fakecl_kernel_funcs[kernel_name];
   assert(k->fn);
   k->arg_count = 0;
   if (errcode_ret) {
@@ -444,3 +475,5 @@ extern "C" void barrier(int)
   }
   pthread_mutex_unlock(&barrier_mutex);
 }
+
+} // extern "C"

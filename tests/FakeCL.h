@@ -1,10 +1,11 @@
 #ifndef FAKECL_HPP
 #define FAKECL_HPP
 
-#include <cstdlib>
-#include <map>
-#include <string>
-#include <vector>
+#include <stdlib.h>
+
+#ifdef __cplusplus
+#define FAKECL_EXTERN extern "C"
+#endif
 
 #define CL_SUCCESS 0
 
@@ -103,11 +104,6 @@ typedef int cl_command_queue;
 typedef int cl_device_id;
 typedef int cl_platform_id;
 typedef int cl_device_type;
-typedef struct {
-  void* ptr;
-  size_t size;
-  bool doDelete;
-} cl_mem_info;
 typedef void* cl_mem;
 typedef int cl_device_info;
 typedef int cl_platform_info;
@@ -115,21 +111,10 @@ typedef int cl_kernel_work_group_info;
 typedef int cl_program_build_info;
 typedef int cl_mem_flags;
 
-typedef struct {
-  std::vector<char> data;
-} cl_arg;
-
 #define FAKECL_MAX_ARGS 20
 
-typedef void (*cl_kernel_fn)(...);
+typedef void (*fakecl_kernel_fn)(...);
 
-struct cl_kernel_struct {
-  cl_kernel_fn fn;
-  int arg_count;
-  cl_arg args[FAKECL_MAX_ARGS];
-};
-
-extern std::map<std::string, cl_kernel_fn> kernel_funcs;
 extern bool safe_mode;
 
 typedef struct cl_kernel_struct* cl_kernel;
@@ -138,6 +123,10 @@ typedef int cl_program;
 typedef int cl_event;
 typedef int cl_command_queue;
 typedef int cl_context_properties;
+
+extern "C" {
+// sets an assocation from a string to a CL function
+void fakeclSetKernelFunc(const char* label, fakecl_kernel_fn);
 
 cl_context clCreateContext(cl_context_properties *properties,
                            cl_uint num_devices,
@@ -242,5 +231,6 @@ cl_int clBuildProgram(cl_program program,
                       const char *options,
                       void (*pfn_notify)(cl_program, void *user_data),
                       void *user_data);
+}
 
 #endif // FAKECL_HPP
