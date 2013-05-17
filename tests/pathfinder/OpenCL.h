@@ -17,7 +17,7 @@
 /* #include <CL/cl_ext.h> */
 /* #endif */
 
-#include "FakeCL.hpp"
+#include "FakeCL.h"
 
 using namespace std;
 

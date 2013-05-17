@@ -1,4 +1,4 @@
-#include "FakeCL.hpp"
+#include "FakeCL.h"
 #include <cstring>
 #include <cassert>
 #include <pthread.h>
