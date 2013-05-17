@@ -161,6 +161,7 @@ cl_int clEnqueueWriteBuffer(cl_command_queue command_queue,
   if (ptr != (char*) buffer + offset) {
     std::memcpy((char*) buffer + offset, ptr, cb);
   }
+  return CL_SUCCESS;
 }
 
 cl_int clEnqueueReadBuffer(cl_command_queue command_queue,
@@ -176,6 +177,7 @@ cl_int clEnqueueReadBuffer(cl_command_queue command_queue,
   if (ptr != (char*) buffer + offset) {
     std::memcpy(ptr, (char*) buffer + offset, cb);
   }
+  return CL_SUCCESS;
 }
 
 cl_kernel clCreateKernel (cl_program  program,
