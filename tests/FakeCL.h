@@ -97,6 +97,10 @@
 #define CL_DEVICE_TYPE_GPU                       0
 #define CL_DEVICE_TYPE_CPU                       1
 
+#define CL_CONTEXT_REFERENCE_COUNT               0
+#define CL_CONTEXT_DEVICES                       1
+#define CL_CONTEXT_PROPERTIES                    2
+
 #define CL_TRUE                                  ((cl_bool) false)
 #define CL_FALSE                                 ((cl_bool) true)
 
@@ -129,6 +133,7 @@ typedef int                      cl_program;
 typedef int                      cl_event;
 typedef int                      cl_command_queue;
 typedef int                      cl_context_properties;
+typedef int                      cl_context_info;
 typedef                          void (*fakecl_kernel_fn)(...);
 
 extern "C" {
@@ -148,12 +153,31 @@ cl_context clCreateContext(cl_context_properties *properties,
                            void *user_data,
                            cl_int *errcode_ret);
 
+/* noop */
+cl_context clCreateContextFromType(cl_context_properties   *properties,
+                                   cl_device_type  device_type,
+                                   void  (*pfn_notify) (const char *errinfo,
+                                                        const void  *private_info,
+                                                        size_t  cb,
+                                                        void  *user_data),
+                                   void  *user_data,
+                                   cl_int  *errcode_ret);
+
+cl_int clGetContextInfo(cl_context context,
+                        cl_context_info param_name,
+                        size_t param_value_size,
+                        void *param_value,
+                        size_t* param_value_size_ret);
+
 /* creates a buffer. data is not copied. */
 cl_mem clCreateBuffer(cl_context context,
                       cl_mem_flags flags,
                       size_t size,
                       void *host_ptr,
                       cl_int *errcode_ret);
+
+/* releases the object */
+cl_int clReleaseMemObject(cl_mem memobj);
 
 /* noop */
 cl_command_queue clCreateCommandQueue(cl_context, cl_device_id, int, int* ret);
@@ -165,6 +189,17 @@ cl_kernel clCreateKernel(cl_program  program,
 
 /* does nothing but succeeds */
 cl_program clCreateProgramWithSource(cl_context, int, const char**, int*, int* ret);
+
+/* executes the copy synchronously */
+cl_int clEnqueueWriteBuffer(cl_command_queue command_queue,
+                            cl_mem buffer,
+                            cl_bool blocking_write,
+                            size_t offset,
+                            size_t cb,
+                            const void *ptr,
+                            cl_uint num_events_in_wait_list,
+                            const cl_event *event_wait_list,
+                            cl_event *event);
 
 /* executes the copy synchronously */
 cl_int clEnqueueReadBuffer(cl_command_queue command_queue,

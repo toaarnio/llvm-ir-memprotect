@@ -18,6 +18,10 @@
 #include <string>
 #include <vector>
 
+// used for returning values from parameter query functions
+#define R(type, value) if (param_value_size_ret) *param_value_size_ret = sizeof(type); if (sizeof(type) <= param_value_size) * (type*) param_value = value; break
+#define RS(str) if (param_value_size_ret) *param_value_size_ret = sizeof(str); if (sizeof(str) <= param_value_size) std::memcpy(param_value, str, sizeof(str)); break;
+
 const int work_group_size = 64;
 
 namespace {
@@ -33,7 +37,7 @@ int barrier_completed_seq = 0;
 typedef struct {
   void* ptr;
   size_t size;
-  bool doDelete;
+  bool do_delete;
 } cl_mem_info;
 
 struct cl_arg {
@@ -74,6 +78,35 @@ cl_context clCreateContext(cl_context_properties *properties,
   return 0;
 }
 
+cl_context clCreateContextFromType(cl_context_properties   *properties,
+                                   cl_device_type  device_type,
+                                   void  (*pfn_notify) (const char *errinfo,
+                                                        const void  *private_info,
+                                                        size_t  cb,
+                                                        void  *user_data),
+                                   void  *user_data,
+                                   cl_int  *errcode_ret)
+{
+  if (errcode_ret) {
+    *errcode_ret = CL_SUCCESS;
+  }
+  return 0;
+}
+
+cl_int clGetContextInfo(cl_context context,
+                        cl_context_info param_name,
+                        size_t param_value_size,
+                        void *param_value,
+                        size_t* param_value_size_ret)
+{
+  switch (param_name) {
+  case CL_CONTEXT_REFERENCE_COUNT: R(cl_uint, 1);
+  case CL_CONTEXT_DEVICES:         R(cl_uint, 0);
+  case CL_CONTEXT_PROPERTIES:      assert(false);
+  }
+  assert(false);
+}
+
 cl_command_queue clCreateCommandQueue(cl_context, cl_device_id, int, int* ret)
 {
   if (ret) {
@@ -91,9 +124,9 @@ cl_mem clCreateBuffer(cl_context context,
   cl_mem_info m;
   if (!host_ptr) {
     host_ptr = (void*) new char*[size];
-    m.doDelete = true;
+    m.do_delete = true;
   } else {
-    m.doDelete = false;
+    m.do_delete = false;
   }
   m.ptr = host_ptr;
   m.size = size;
@@ -104,6 +137,30 @@ cl_mem clCreateBuffer(cl_context context,
   return host_ptr;
 }
 
+cl_int clReleaseMemObject(cl_mem memobj)
+{
+  assert(cl_mem_data.count(memobj));
+  cl_mem_info& info = cl_mem_data[memobj];
+  if (info.do_delete) {
+    delete[] (char*) info.ptr;
+  }
+  cl_mem_data.erase(memobj);
+}
+
+cl_int clEnqueueWriteBuffer(cl_command_queue command_queue,
+                            cl_mem buffer,
+                            cl_bool blocking_write,
+                            size_t offset,
+                            size_t cb,
+                            const void *ptr,
+                            cl_uint num_events_in_wait_list,
+                            const cl_event *event_wait_list,
+                            cl_event *event)
+{
+  if (ptr != (char*) buffer + offset) {
+    std::memcpy((char*) buffer + offset, ptr, cb);
+  }
+}
 
 cl_int clEnqueueReadBuffer(cl_command_queue command_queue,
                            cl_mem buffer,
@@ -152,8 +209,6 @@ cl_int clBuildProgram(cl_program program,
   return CL_SUCCESS;
 }
 
-#define R(type, value) if (param_value_size_ret) *param_value_size_ret = sizeof(type); if (sizeof(type) <= param_value_size) * (type*) param_value = value; break
-#define RS(str) if (param_value_size_ret) *param_value_size_ret = sizeof(str); if (sizeof(str) <= param_value_size) std::memcpy(param_value, str, sizeof(str)); break;
 cl_int clGetProgramBuildInfo(cl_program  program,
                              cl_device_id  device,
                              cl_program_build_info  param_name,
