@@ -1,3 +1,12 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * The Original Contributor of this Source Code Form is Nokia Research
+ * Center Tampere (http://webcl.nokiaresearch.com).
+ */
+
 #include "FakeCL.h"
 #include <cstring>
 #include <cassert>
@@ -9,15 +18,11 @@
 #include <string>
 #include <vector>
 
-
 const int work_group_size = 64;
 
 namespace {
   std::map<std::string, fakecl_kernel_fn> fakecl_kernel_funcs;
 }
-
-bool safe_mode = false;
-
 
 pthread_mutex_t barrier_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t barrier_cond = PTHREAD_COND_INITIALIZER;
