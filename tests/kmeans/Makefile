@@ -1,25 +1,42 @@
-include ../../common/make.config
-# C compiler
-CC = g++
-CC_FLAGS = -g -O2 
+CXX = g++
+DEBUGFLAGS = -g
+CC_FLAGS = -I.. -g -O0
+CXXFLAGS = $(CC_FLAGS)
+LDFLAGS = -lm -lpthread
+CL_LIBRARY = ../../pocl/library-fakecl.o
 
-kmeans: cluster.o getopt.o read_input.o kmeans_clustering.o rmse.o
-	$(CC) $(CC_FLAGS) -lOpenCL kmeans.cpp cluster.o getopt.o read_input.o kmeans_clustering.o rmse.o -o kmeans -I$(OPENCL_INC) -I$(OPENCL_DIR)/shared/inc/ -L$(OPENCL_LIB)
+ifdef SAFE
+CLAMPED=.clamped
 
-%.o: %.[ch]
-	$(CC) $(CC_FLAGS) $< -c
+%.ll: %.cl
+	clang -O0 -g -x cl -fno-builtin -DFAKECL=1 -DBUILDING_RUNKERNEL=1 \
+		-include ../pocl_kernel.h \
+		-Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 \
+		-c $< -emit-llvm -o $@
 
-cluster.o: cluster.c 
-	$(CC) $(CC_FLAGS) cluster.c -c
-	
-getopt.o: getopt.c 
-	$(CC) $(CC_FLAGS) getopt.c -c
-	
-kmeans.o: kmeans.c 
-	$(CC) $(CC_FLAGS) read_input.c -c
+%.clamped.ll: %.ll
+	opt -load $(CLAMP_PLUGIN) -clamp-pointers -S -o $@ $<
 
-rmse.o: rmse.c
-	$(CC) $(CC_FLAGS) rmse.c -c
+%.s: %.ll
+	llc $< -o $@
+
+%.o: %.s
+	as -o $@ $<
+
+.PRECIOUS: %.ll %.clamped.ll
+else
+
+%.o: %.cl
+	clang -O0 -g -x cl -fno-builtin -DFAKECL=1 -DBUILDING_RUNKERNEL=1 \
+		-include ../pocl_kernel.h \
+		-Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 \
+		-c $< -o $@
+endif
+
+KERNEL=kmeans-cl$(CLAMPED).o
+
+kmeans: ../FakeCL.o $(CL_LIBRARY) $(KERNEL) cluster.o read_input.o kmeans.o getopt.o kmeans_clustering.o rmse.o
+	$(CXX) $(LDFLAGS) $^ -o $@
 
 clean:
 	rm -f *.o *~ kmeans *.linkinfo

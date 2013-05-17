@@ -22,7 +22,8 @@
 #ifdef NV 
 	#include <oclUtils.h>
 #else
-	#include <CL/cl.h>
+//	#include <CL/cl.h>
+        #include "FakeCL.h"
 #endif
 
 #ifndef FLT_MAX
@@ -98,6 +99,7 @@ float *feature_d;
 float *clusters_d;
 float *center_d;
 
+extern "C"
 int allocate(int n_points, int n_features, int n_clusters, float **feature)
 {
 
@@ -106,7 +108,7 @@ int allocate(int n_points, int n_features, int n_clusters, float **feature)
 	if(!source) { printf("ERROR: calloc(%d) failed\n", sourcesize); return -1; }
 
 	// read the kernel core source
-	char * tempchar = "./kmeans.cl";
+	char * tempchar = "./kmeans-cl.cl";
 	FILE * fp = fopen(tempchar, "rb"); 
 	if(!fp) { printf("ERROR: unable to open '%s'\n", tempchar); return -1; }
 	fread(source + strlen(source), sourcesize, 1, fp);
@@ -166,6 +168,7 @@ int allocate(int n_points, int n_features, int n_clusters, float **feature)
 	membership_OCL = (int*) malloc(n_points * sizeof(int));
 }
 
+extern "C"
 void deallocateMemory()
 {
 	clReleaseMemObject(d_feature);
@@ -176,9 +179,13 @@ void deallocateMemory()
 
 }
 
+extern "C" void kmeans_kernel_c(...);
+extern "C" void kmeans_swap(...);
 
 int main( int argc, char** argv) 
 {
+	fakeclSetKernelFunc("kmeans_kernel_c", kmeans_kernel_c);
+	fakeclSetKernelFunc("kmeans_swap", kmeans_swap);
 	setup(argc, argv);
 	shutdown();
 }
