@@ -8,11 +8,37 @@ LDFLAGS = -lm -lpthread
 
 CL_LIBRARY = ../../pocl/library-fakecl.o
 
-%.o: %.cl
-	clang -O0 -g -x cl -fno-builtin -DFAKECL=1 -DBUILDING_RUNKERNEL=1 -include ../pocl_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 -c $< -o $@
+ifdef SAFE
+KERNEL=kernels.clamped.o
 
-pathfinder: main.o ../FakeCL.o OpenCL.o $(CL_LIBRARY) kernels.o
+%.ll: %.cl
+	clang -O0 -g -x cl -fno-builtin -DFAKECL=1 -DBUILDING_RUNKERNEL=1 \
+		-include ../pocl_kernel.h \
+		-Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 \
+		-c $< -emit-llvm -o $@
+
+%.clamped.ll: %.ll
+	opt -load $(CLAMP_PLUGIN) -clamp-pointers -S -o $@ $<
+
+%.s: %.ll
+	llc $< -o $@
+
+%.o: %.s
+	as -o $@ $<
+
+.PRECIOUS: %.ll %.clamped.ll
+else
+KERNEL=kernels.o
+
+%.o: %.cl
+	clang -O0 -g -x cl -fno-builtin -DFAKECL=1 -DBUILDING_RUNKERNEL=1 \
+		-include ../pocl_kernel.h \
+		-Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 \
+		-c $< -o $@
+endif
+
+pathfinder: main.o ../FakeCL.o OpenCL.o $(CL_LIBRARY) $(KERNEL)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
 
 clean:
-	rm -f pathfinder *.o *.out *~ *\#
+	rm -f pathfinder *.o *.out *~ *\# *.ll *.s
