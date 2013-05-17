@@ -283,33 +283,31 @@ namespace {
 
     cl_kernel_struct* k = info->kernel;
 
-#define I info->local_work_size, info->group_id, info->local_id
     switch (k->arg_count) {
-    case  0: k->fn(I); break;
-    case  1: k->fn(I, A(0)); break;
-    case  2: k->fn(I, A(0), A(1)); break;
-    case  3: k->fn(I, A(0), A(1), A(2)); break;
-    case  4: k->fn(I, A(0), A(1), A(2), A(3)); break;
-    case  5: k->fn(I, A(0), A(1), A(2), A(3), A(4)); break;
-    case  6: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5)); break;
-    case  7: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6)); break;
-    case  8: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7)); break;
-    case  9: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8)); break;
-    case 10: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9)); break;
-    case 11: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10)); break;
-    case 12: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11)); break;
-    case 13: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12)); break;
-    case 14: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13)); break;
-    case 15: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14)); break;
-    case 16: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15)); break;
-    case 17: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16)); break;
-    case 18: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16), A(17)); break;
-    case 19: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16), A(17), A(18)); break;
-    case 20: k->fn(I, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16), A(17), A(18), A(19)); break;
+    case  0: k->fn(); break;
+    case  1: k->fn(A(0)); break;
+    case  2: k->fn(A(0), A(1)); break;
+    case  3: k->fn(A(0), A(1), A(2)); break;
+    case  4: k->fn(A(0), A(1), A(2), A(3)); break;
+    case  5: k->fn(A(0), A(1), A(2), A(3), A(4)); break;
+    case  6: k->fn(A(0), A(1), A(2), A(3), A(4), A(5)); break;
+    case  7: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6)); break;
+    case  8: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7)); break;
+    case  9: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8)); break;
+    case 10: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9)); break;
+    case 11: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10)); break;
+    case 12: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11)); break;
+    case 13: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12)); break;
+    case 14: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13)); break;
+    case 15: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14)); break;
+    case 16: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15)); break;
+    case 17: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16)); break;
+    case 18: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16), A(17)); break;
+    case 19: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16), A(17), A(18)); break;
+    case 20: k->fn(A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14), A(15), A(16), A(17), A(18), A(19)); break;
     default: assert(false);
     }
 #undef A
-#undef I
     return NULL;
   }
 
