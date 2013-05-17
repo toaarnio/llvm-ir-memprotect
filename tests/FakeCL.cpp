@@ -19,8 +19,8 @@
 #include <vector>
 
 // used for returning values from parameter query functions
-#define R(type, value) if (param_value_size_ret) *param_value_size_ret = sizeof(type); if (sizeof(type) <= param_value_size) * (type*) param_value = value; break
-#define RS(str) if (param_value_size_ret) *param_value_size_ret = sizeof(str); if (sizeof(str) <= param_value_size) std::memcpy(param_value, str, sizeof(str)); break;
+#define R(type, value) if (param_value_size_ret) *param_value_size_ret = sizeof(type); if (sizeof(type) <= param_value_size) * (type*) param_value = value; return 0;
+#define RS(str) if (param_value_size_ret) *param_value_size_ret = sizeof(str); if (sizeof(str) <= param_value_size) std::memcpy(param_value, str, sizeof(str)); return 0;
 
 const int work_group_size = 64;
 
