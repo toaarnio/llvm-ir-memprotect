@@ -229,6 +229,14 @@ namespace {
     int local_id;
   };
 
+  pthread_key_t thread_info_key;
+  pthread_once_t thread_info_key_once;
+
+  void thread_info_key_init()
+  {
+    pthread_key_create(&thread_info_key, NULL);
+  }
+
   void* getClMemArg(cl_arg& arg)
   {
     if (arg.data.size() == sizeof(cl_mem)) {
@@ -266,6 +274,7 @@ namespace {
   void* clthread(void* opaque)
   {
     EnqeueuKernelInfo* info = static_cast<EnqeueuKernelInfo*>(opaque);
+    pthread_setspecific(thread_info_key, opaque);
 
     cl_arg* a = info->kernel->args;
     //#define A(n) a[n].elem_size, a[n].elem_count, a[n].data
@@ -306,6 +315,27 @@ namespace {
 
 }
 
+extern "C"
+size_t get_group_id()
+{
+  EnqeueuKernelInfo* info = static_cast<EnqeueuKernelInfo*>(pthread_getspecific(thread_info_key));
+  return info->group_id;
+}
+
+extern "C"
+size_t get_local_id()
+{
+  EnqeueuKernelInfo* info = static_cast<EnqeueuKernelInfo*>(pthread_getspecific(thread_info_key));
+  return info->local_id;
+}
+
+extern "C"
+size_t get_local_size(cl_uint x)
+{
+  EnqeueuKernelInfo* info = static_cast<EnqeueuKernelInfo*>(pthread_getspecific(thread_info_key));
+  return info->local_work_size[x];
+}
+
 cl_int clEnqueueNDRangeKernel(cl_command_queue command_queue,
                               cl_kernel kernel,
                               cl_uint work_dim,
@@ -322,6 +352,8 @@ cl_int clEnqueueNDRangeKernel(cl_command_queue command_queue,
   assert(global_work_offset == NULL);
   assert(*local_work_size <= work_group_size);
   assert(num_events_in_wait_list == 0);
+
+  pthread_once(&thread_info_key_once, thread_info_key_init);
 
   pthread_mutex_lock(&barrier_mutex);
   barrier_max = *local_work_size;
