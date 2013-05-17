@@ -188,7 +188,11 @@ cl_kernel clCreateKernel(cl_program  program,
                          cl_int *errcode_ret);
 
 /* does nothing but succeeds */
-cl_program clCreateProgramWithSource(cl_context, int, const char**, int*, int* ret);
+cl_program clCreateProgramWithSource(cl_context context,
+                                     cl_uint count,
+                                     const char **strings,
+                                     const size_t *lengths,
+                                     cl_int *errcode_ret);
 
 /* executes the copy synchronously */
 cl_int clEnqueueWriteBuffer(cl_command_queue command_queue,

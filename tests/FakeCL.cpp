@@ -41,6 +41,7 @@ typedef struct {
 } cl_mem_info;
 
 struct cl_arg {
+  bool is_local;
   std::vector<char> data;
 };
 
@@ -191,10 +192,14 @@ cl_kernel clCreateKernel (cl_program  program,
   return k;
 }
 
-cl_program clCreateProgramWithSource(cl_context, int, const char**, int*, int* ret)
+cl_program clCreateProgramWithSource(cl_context context,
+                                     cl_uint count,
+                                     const char **strings,
+                                     const size_t *lengths,
+                                     cl_int *errcode_ret)
 {
-  if (*ret) {
-    *ret = CL_SUCCESS;
+  if (*errcode_ret) {
+    *errcode_ret = CL_SUCCESS;
   }
   return 0;
 }
@@ -253,20 +258,16 @@ namespace {
 
   void* argPtr(cl_arg& arg)
   {
-    // if it's a cl_mem, deference the pointer from the structure
     void* p = getClMemArg(arg);
     if (!p) {
-      // pass integers as is
-      if (arg.data.size()==sizeof(int)) {
-        p = *(void**) &*arg.data.begin();
-        //printf("Passing integer argument %p\n", p);
-      } else {
-        // otherwise it's a block of data, give a pointer to it
+      if (arg.is_local) {
         p = &*arg.data.begin();
-        //printf("Passing blob argument %p\n", p);
+      } else if (arg.data.size()==sizeof(int)) {
+        p = *(void**) &*arg.data.begin();
+      } else {
+        assert(false);
       }
     } else {
-      //printf("Passing cl_mem argument %p\n", p);
     }
     return p;
   }
@@ -311,6 +312,13 @@ namespace {
     return NULL;
   }
 
+}
+
+extern "C"
+size_t get_global_id()
+{
+  EnqeueuKernelInfo* info = static_cast<EnqeueuKernelInfo*>(pthread_getspecific(thread_info_key));
+  return info->group_id * info->local_work_size[0] + info->local_id;
 }
 
 extern "C"
@@ -386,6 +394,7 @@ void clSetKernelArg(cl_kernel kernel, int idx, int elem_size, void* data)
     assert(kernel->arg_count <= FAKECL_MAX_ARGS);
   }
   cl_arg& arg = kernel->args[idx];
+  arg.is_local = data == 0;
   if (data) {
     arg.data = std::vector<char>((char*) data, (char*) data + elem_size);
   } else {
