@@ -100,6 +100,7 @@
 #define CL_CONTEXT_REFERENCE_COUNT               0
 #define CL_CONTEXT_DEVICES                       1
 #define CL_CONTEXT_PROPERTIES                    2
+#define CL_CONTEXT_PLATFORM                      3
 
 #define CL_TRUE                                  ((cl_bool) false)
 #define CL_FALSE                                 ((cl_bool) true)
