@@ -76,7 +76,7 @@ cl_context clCreateContext(cl_context_properties *properties,
   if (errcode_ret) {
     *errcode_ret = CL_SUCCESS;
   }
-  return 0;
+  return 1;
 }
 
 cl_context clCreateContextFromType(cl_context_properties   *properties,
@@ -91,7 +91,7 @@ cl_context clCreateContextFromType(cl_context_properties   *properties,
   if (errcode_ret) {
     *errcode_ret = CL_SUCCESS;
   }
-  return 0;
+  return 1;
 }
 
 cl_int clGetContextInfo(cl_context context,
