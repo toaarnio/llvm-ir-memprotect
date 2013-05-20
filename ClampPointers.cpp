@@ -986,7 +986,7 @@ namespace WebCL {
     void findLimits(FunctionMap &replacedFunctions,
                     ValueSet &checkOperands,
                     AreaLimitByValueMap &valLimits,
-                    AreaLimitSetByAddressSpaceMap &asLimits,
+                    const AreaLimitSetByAddressSpaceMap &asLimits,
                     const FunctionSet& safeBuiltinFunctions) {
     
       // first trace all uses of function arguments to find their limits
@@ -1032,8 +1032,9 @@ namespace WebCL {
         Value* val = *i;
         DEBUG( dbgs() << "Tracing limits for: "; val->print(dbgs()); dbgs() << "\n"; );
         PointerType *t = dyn_cast<PointerType>(val->getType());
-        AreaLimitSet &limitSet = asLimits[t->getAddressSpace()];
         // allow no limit values in unsafe mode (e.g. externals)
+        AreaLimitSetByAddressSpaceMap::const_iterator limitSetIt = asLimits.find(t->getAddressSpace());
+        const AreaLimitSet &limitSet = limitSetIt == asLimits.end() ? AreaLimitSet() : limitSetIt->second;
         if (limitSet.size() == 0 && RunUnsafeMode) {
           DEBUG( dbgs() << "unrestricted mode and no limits found... skipping\n"; );
           continue;
