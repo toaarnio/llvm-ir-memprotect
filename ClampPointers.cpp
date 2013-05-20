@@ -1576,7 +1576,7 @@ namespace WebCL {
     /**
      * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
      */
-    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
+    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, AreaLimitByValueMap &valLimits, const AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
       // check load instructions... 
       for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
         addChecks((*i)->getPointerOperand(), *i, valLimits, asLimits, safeExceptions);
@@ -1590,7 +1590,7 @@ namespace WebCL {
     /**
      * If val touching pointer operand needs checks, then inject boundary check code.
      */
-    void addChecks(Value *ptrOperand, Instruction *inst, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
+    void addChecks(Value *ptrOperand, Instruction *inst, AreaLimitByValueMap &valLimits, const AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
       
       // If no need to add checks, just skip
       if (safeExceptions.count(ptrOperand)) {
@@ -1603,7 +1603,9 @@ namespace WebCL {
         limits.insert(valLimits[ptrOperand]);
       } else {
         unsigned int addressSpace = dyn_cast<PointerType>(ptrOperand->getType())->getAddressSpace();
-        limits.insert( asLimits[addressSpace].begin(), asLimits[addressSpace].end() );
+        AreaLimitSetByAddressSpaceMap::const_iterator asLimitIt = asLimits.find(addressSpace);
+        assert(asLimitIt != asLimits.end());
+        limits.insert( asLimitIt->second.begin(), asLimitIt->second.end() );
       }
       
       createLimitCheck(ptrOperand, limits, inst);
