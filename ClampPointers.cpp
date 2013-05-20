@@ -1344,6 +1344,9 @@ namespace WebCL {
           
           // add addresses to limit set for the address space
           DEBUG( dbgs() << "AS: " << pointerType->getAddressSpace() << " Adding indirect limits from kernel parameter: "; arg->print(dbgs()); dbgs() << "\n"; );
+          std::stringstream ss; ss << pointerType->getAddressSpace();
+          globalMin->setName(Twine() + origArg->getName() + ".AS" + ss.str() + ".Min");
+          globalMax->setName(Twine() + origArg->getName() + ".AS" + ss.str() + ".Max");
           asLimits[pointerType->getAddressSpace()].insert( AreaLimit::Create(globalMin, globalMax, true) );
           
           Value* elementCount = (++a);
