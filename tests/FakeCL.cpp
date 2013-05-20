@@ -344,6 +344,17 @@ size_t get_local_size(cl_uint x)
   return info->local_work_size[x];
 }
 
+namespace {
+  size_t optimal_work_size(size_t work_group_size, size_t global_work_size)
+  {
+    int size = work_group_size;
+    while (size > 1 && global_work_size % size != 0) {
+      --size;
+    }
+    return size;
+  }
+}
+
 cl_int clEnqueueNDRangeKernel(cl_command_queue command_queue,
                               cl_kernel kernel,
                               cl_uint work_dim,
@@ -354,10 +365,17 @@ cl_int clEnqueueNDRangeKernel(cl_command_queue command_queue,
                               const cl_event *event_wait_list,
                               cl_event *event)
 {
+  size_t temp_local_work_size;
+
   assert(event_wait_list == NULL);
   assert(event == NULL);
   assert(work_dim == 1);
+  assert(global_work_size);
   assert(global_work_offset == NULL);
+  if (!local_work_size) {
+    local_work_size = &temp_local_work_size;
+    temp_local_work_size = optimal_work_size(work_group_size, *global_work_size);
+  }
   assert(*local_work_size <= work_group_size);
   assert(num_events_in_wait_list == 0);
 
