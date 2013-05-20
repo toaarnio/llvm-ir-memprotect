@@ -387,6 +387,8 @@ cl_int clEnqueueNDRangeKernel(cl_command_queue command_queue,
       pthread_join(threads[tid], NULL);
     }
   }
+
+  return CL_SUCCESS;
 }
 
 void clSetKernelArg(cl_kernel kernel, int idx, int elem_size, void* data)
