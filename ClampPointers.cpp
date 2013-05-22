@@ -109,6 +109,11 @@ Instruction *getAsInstruction(ConstantExpr *expr) {
 // Detailed description of the algorithm is documented in [virtual bool runOnModule( Module &M )](#runOnModule)
 namespace WebCL {
 
+  const unsigned globalAddressSpaceNumber  = 0;
+  const unsigned localAddressSpaceNumber   = 3;
+  // an arbitrarily chosen number as LLVM doesn't give an address space for private values
+  const unsigned privateAddressSpaceNumber = 4;
+
   // ### Common helper functions
   
   // Returns demangled function name without argument type prefix.
@@ -534,6 +539,7 @@ namespace WebCL {
     typedef std::set< AreaLimit* > AreaLimitSet;
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
+    typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
       
     // ## <a id="runOnModule"></a> Run On Module
     //
@@ -570,15 +576,23 @@ namespace WebCL {
       AreaLimitByValueMap valueLimits;
       // Bookkeeping of all available limits of address spaces.
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
+      AddressSpaceStructByAddressSpaceMap addressSpaceStructs;
 
       // Set where is collected all values, which will not require boundary checks to
       // memory accesses. These have been resolved to be safe accesses in compile time.
       ValueSet safeExceptions;
 
-      // Collect all allocas and global variables for each address space to struct to be able to
-      // resolve static area reference limits easily. See example in [consolidateStaticMemory( Module &M )](#consolidateStaticMemory).
+      // Collect all allocas and global variables for each address space to struct to be able to resolve
+      // static area reference limits easily. See example in [consolidateStaticMemory( Module &M
+      // )](#consolidateStaticMemory).
+
+      // Allocations of private memory are of special interest (and they (among others) are stored to
+      // addressSpaceStructs along; accesses to them are put into safeExceptions. Later on addressSpaceStructs
+      // is used by createWebClKernel to put the required allocations of the local memory regions to the front
+      // of the new kernels.
+
       DEBUG( dbgs() << "\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n" );
-      consolidateStaticMemory( M );
+      consolidateStaticMemory( M, addressSpaceStructs, safeExceptions );
 
       // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
       // map sorted by address space number. Also adds the address space struct to value limits so that
@@ -683,13 +697,15 @@ namespace WebCL {
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
       moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, safeBuiltinFunctionSet);
       
-      // Finds out kernel functions from Module metadata and creates WebCL kernels from them. `kernel void foo(global float *bar)` ->
-      // `kernel void foo(global float *bar, size_t bar_size)`. Also calculates and creates run-time limits for passed kernel
-      // arguments and adds limits to `addressSpaceLimits` bookkeeping and calls original kernel implementation which has been changed
-      // earlier to use safe pointer arguments. [createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions,
-      // AreaLimitSetByAddressSpaceMap &asLimits)](#createKernelEntryPoints).
+      // Finds out kernel functions from Module metadata and creates WebCL kernels from them. `kernel void
+      // foo(global float *bar)` -> `kernel void foo(global float *bar, size_t bar_size)`. Also calculates and
+      // creates run-time limits for passed kernel arguments and adds limits to `addressSpaceLimits`
+      // bookkeeping and calls original kernel implementation which has been changed earlier to use safe
+      // pointer arguments. [createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions,
+      // AreaLimitSetByAddressSpaceMap &asLimits)](#createKernelEntryPoints). addressSpaceStructs is used for
+      // putting the allocations of private memory structs to the beginning of the kernels.
       DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
-      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits);
+      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits, addressSpaceStructs);
 
       // Traces limits for all instructions and values in the module and adds them to `valueLimits`. After this we should be able
       // to get min and max addresses for all instructions / globals that we are interested in. [findLimits(FunctionMap &replacedFunctions,
@@ -1107,7 +1123,7 @@ namespace WebCL {
      * Collect all allocas and global values for each address space and create one struct for each
      * address space.
      */
-    void consolidateStaticMemory( Module &M ) {
+    void consolidateStaticMemory( Module &M, AddressSpaceStructByAddressSpaceMap& asStructs, ValueSet &safeExceptions ) {
       LLVMContext& c = M.getContext();
       
       ValueVectorByAddressSpaceMap staticAllocations;
@@ -1127,6 +1143,7 @@ namespace WebCL {
         }
       }
 
+      // all 'alloca's are considered private
       for (Module::iterator f = M.begin(); f != M.end(); f++) {
         // skip declarations (they does not even have entry blocks)
         if (f->isDeclaration()) continue;
@@ -1134,7 +1151,7 @@ namespace WebCL {
         for (BasicBlock::iterator i = entry.begin(); i != entry.end(); i++) {
           AllocaInst *alloca = dyn_cast<AllocaInst>(i);
           if (alloca != NULL) {
-            staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
+            staticAllocations[privateAddressSpaceNumber].push_back(alloca);
           }
         }
       }
@@ -1209,39 +1226,85 @@ namespace WebCL {
 
         // create struct of generated type and add to module
         Constant* addressSpaceDataInitializer = ConstantStruct::get( addressSpaceStructType, structElementData );
-        GlobalVariable *aSpaceStruct = new GlobalVariable
-          (M, addressSpaceStructType, false, GlobalValue::InternalLinkage, addressSpaceDataInitializer, 
-           structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
-        
+        bool dereferenceSpaceStruct;
+        GlobalVariable *aSpaceStruct;
+        if (addressSpace == privateAddressSpaceNumber) {
+          // using global address space intead of private as the
+          // existing 'private' address space values are put in the
+          // global address space
+          PointerType* aSpacePointer = llvm::PointerType::get(addressSpaceStructType, globalAddressSpaceNumber);
+          dereferenceSpaceStruct = true;
+          // should this use localAddressSpaceNumber? but that cannot be put into a global
+          aSpaceStruct = new GlobalVariable
+            (M, aSpacePointer, false, GlobalValue::InternalLinkage, Constant::getNullValue(aSpacePointer), 
+             structName.str(), NULL, GlobalVariable::NotThreadLocal, globalAddressSpaceNumber);
+        } else {
+          dereferenceSpaceStruct = false;
+          aSpaceStruct = new GlobalVariable
+            (M, addressSpaceStructType, false, GlobalValue::InternalLinkage, addressSpaceDataInitializer, 
+             structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
+        }
+
+        asStructs[addressSpace] = aSpaceStruct;
+
         // replace all uses of old allocas and globals value with new constant geps and remove original values
         for (size_t valIndex = 0; valIndex < values.size(); valIndex++) {
           Value* origVal = values[valIndex];
 
           // get field of struct
-          Constant *structVal = ConstantExpr::getInBoundsGetElementPtr
-            (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex) );
+          Value *structVal;
+          if (dereferenceSpaceStruct) {
+            FunctionSet parentFuncs;
+
+            for ( Value::use_iterator useIt = origVal->use_begin();
+                  useIt != origVal->use_end();
+                  ++useIt ) {
+              Value* value = *useIt;
+              assert(isa<Instruction>(value));
+              Instruction* instruction = cast<Instruction>(value);
+              parentFuncs.insert(instruction->getParent()->getParent());
+            }
+            fast_assert(parentFuncs.size() <= 1, "Users of a single local variable should be within at most one function");
+
+            if (parentFuncs.size() == 1) {
+              llvm::Instruction* entry = (*parentFuncs.begin())->getEntryBlock().getFirstNonPHI();
+
+              LoadInst* load = new LoadInst( aSpaceStruct, "", entry );
+              Value* v = llvm::GetElementPtrInst::CreateInBounds( load, genIntVector<Value*>( c, 0, valIndex ),
+                                                                  "", entry );
+              safeExceptions.insert(v);
+              structVal = v;
+            } else {
+              structVal = 0;
+            }
+          } else {
+            structVal = ConstantExpr::getInBoundsGetElementPtr
+              (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex) );
+          }
           
           // Currently LLVM IR does not support GEP in alias. If support is added, uncommenting this will greatly improve readability of produced code
           // for alias: GlobalAlias *fieldAlias = new GlobalAlias(structVal->getType(), GlobalValue::InternalLinkage, "", structVal, &M);
-          
-          DEBUG( dbgs() << "Orig val type: "; origVal->getType()->print(dbgs()); 
-                 dbgs() << " new val type: "; structVal->getType()->print(dbgs()); dbgs() << "\n"; );
-          DEBUG( dbgs() << "Orig val: "; origVal->print(dbgs()); 
-                 dbgs() << " new val: "; structVal->print(dbgs()); dbgs() << "\n"; );
 
-          // use alias everywhere
-          // for alias: origVal->replaceAllUsesWith(fieldAlias);
-          origVal->replaceAllUsesWith(structVal);
+          if (structVal) {
+            DEBUG( dbgs() << "Orig val type: "; origVal->getType()->print(dbgs()); dbgs() << "\n";
+                   dbgs() << " new val type: "; structVal->getType()->print(dbgs()); dbgs() << "\n"; );
+            DEBUG( dbgs() << "Orig val: "; origVal->print(dbgs()); dbgs() << "\n";
+                   dbgs() << " new val: "; structVal->print(dbgs()); dbgs() << "\n"; );
+            origVal->replaceAllUsesWith(structVal);
           
-          // set name according to original value type and remove original
-          if ( AllocaInst* alloca = dyn_cast<AllocaInst>(origVal) ) {
-            // for alias: fieldAlias->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
-            structVal->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
-            alloca->eraseFromParent();
-          } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
-            // for alias: fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
-            structVal->setName(aSpaceStruct->getName() + "." + origVal->getName());
-            global->eraseFromParent();
+            // use alias everywhere
+            // for alias: origVal->replaceAllUsesWith(fieldAlias);
+          
+            // set name according to original value type and remove original
+            if ( AllocaInst* alloca = dyn_cast<AllocaInst>(origVal) ) {
+              // for alias: fieldAlias->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
+              structVal->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
+              alloca->eraseFromParent();
+            } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
+              // for alias: fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
+              structVal->setName(aSpaceStruct->getName() + "." + origVal->getName());
+              global->eraseFromParent();
+            }
           }
           
           //DEBUG( dbgs() << "Alias: "; fieldAlias->print(dbgs()); dbgs() << "\n"; );
@@ -1270,7 +1333,9 @@ namespace WebCL {
      * kernel name and add implementation, that just resolves the last address of array and passes
      * it as limit to safepointer version of original kernel.
      */
-    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions, AreaLimitSetByAddressSpaceMap &asLimits) {
+    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions, 
+                                 AreaLimitSetByAddressSpaceMap &asLimits,
+                                 AddressSpaceStructByAddressSpaceMap& asStructs) {
       NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
       if (oclKernels != NULL) {
         for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
@@ -1283,7 +1348,7 @@ namespace WebCL {
           // compatible version.
           if (replacedFunctions.count(oldFun) > 0) {
             Function *smartKernel = replacedFunctions[oldFun];
-            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, asLimits);
+            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, asLimits, asStructs);
             // make smartKernel to be internal linkage to allow better optimization
             smartKernel->setLinkage(GlobalValue::InternalLinkage);
             // TODO: if found nvptx_kernel attribute, move it to new kernel
@@ -1304,7 +1369,9 @@ namespace WebCL {
      * reserved in pointer. Function implementation will convert (pointer, count) to corresponding
      * smart pointer, which is used to make call to smartKernel.
      */
-    Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel, AreaLimitSetByAddressSpaceMap &asLimits) {
+    Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel,
+                                AreaLimitSetByAddressSpaceMap &asLimits,
+                                 AddressSpaceStructByAddressSpaceMap& asStructs) {
       LLVMContext &c = M.getContext();
 
       // create argument list for WebCl kernel
@@ -1369,6 +1436,15 @@ namespace WebCL {
           args.push_back(arg);
         }
         origArg++;
+      }
+
+      // allocate private address space struct in the kernel
+      if (asStructs.count(privateAddressSpaceNumber)) {
+        GlobalValue* asStruct = asStructs[privateAddressSpaceNumber];
+        AllocaInst *asAlloca = blockBuilder.CreateAlloca(asStruct->getType()->getPointerElementType()->getPointerElementType(),
+                                                         0, 
+                                                         "privateAddressSpace");
+        blockBuilder.CreateStore(asAlloca, asStruct);
       }
 
       DEBUG( dbgs() << "\nCreated arguments: "; 
