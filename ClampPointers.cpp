@@ -1247,6 +1247,10 @@ namespace WebCL {
 
         asStructs[addressSpace] = aSpaceStruct;
 
+        // keep track of first load instructions for the private memory structure, so we get to do only one
+        // per function
+        std::map<Function*, LoadInst*> privateMemoryLoads;
+
         // replace all uses of old allocas and globals value with new constant geps and remove original values
         for (size_t valIndex = 0; valIndex < values.size(); valIndex++) {
           Value* origVal = values[valIndex];
@@ -1267,11 +1271,16 @@ namespace WebCL {
             fast_assert(parentFuncs.size() <= 1, "Users of a single local variable should be within at most one function");
 
             if (parentFuncs.size() == 1) {
-              llvm::Instruction* entry = (*parentFuncs.begin())->getEntryBlock().getFirstNonPHI();
-
-              LoadInst* load = new LoadInst( aSpaceStruct, "", entry );
-              Value* v = llvm::GetElementPtrInst::CreateInBounds( load, genIntVector<Value*>( c, 0, valIndex ),
-                                                                  "", entry );
+              Function* parentFunction = *parentFuncs.begin();
+              if ( !privateMemoryLoads.count(parentFunction) ) {
+                LoadInst* load = new LoadInst( aSpaceStruct, "privateMemory", 
+                                               parentFunction->getEntryBlock().getFirstNonPHI() );
+                privateMemoryLoads[parentFunction] = load;
+              }
+              LoadInst* load = privateMemoryLoads[parentFunction];
+              Instruction* v = llvm::GetElementPtrInst::CreateInBounds( load, genIntVector<Value*>( c, 0, valIndex ),
+                                                                         "" );
+              v->insertAfter(load);
               safeExceptions.insert(v);
               structVal = v;
             } else {
