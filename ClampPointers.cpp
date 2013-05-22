@@ -1276,6 +1276,7 @@ namespace WebCL {
                 LoadInst* load = new LoadInst( aSpaceStruct, "privateMemory", 
                                                parentFunction->getEntryBlock().getFirstNonPHI() );
                 privateMemoryLoads[parentFunction] = load;
+                safeExceptions.insert(load);
               }
               LoadInst* load = privateMemoryLoads[parentFunction];
               Instruction* v = llvm::GetElementPtrInst::CreateInBounds( load, genIntVector<Value*>( c, 0, valIndex ),
