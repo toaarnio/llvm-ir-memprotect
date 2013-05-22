@@ -478,6 +478,9 @@ namespace WebCL {
         } else {
           fast_assert(false, "Couldnt resolve type of the limit value.");
         }
+
+        std::stringstream ss; ss << offset;
+        ret_limit->setName(val->getName() + "." + ss.str());
         
         return ret_limit;
       }
