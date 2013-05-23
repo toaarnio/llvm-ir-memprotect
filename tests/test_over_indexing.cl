@@ -4,6 +4,7 @@
 // RUN:   ( [ ! $? -eq 0 ] && echo "OK: heavily overindexing original kernel failed as expected") ||
 // RUN:   ( echo "FAIL: maybe failed, expected overindexing to crash " && false )
 // RUN: ) &&
+// RUN: ../inject-builtin-declarations.pl $OUT_FILE.ll ../../pocl/builtin-declarations.ll &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: opt -Oz -S $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.optimized.ll &&
 // RUN: echo "Running optimized webcl kernel with over indexing parameters" &&

@@ -294,7 +294,7 @@ namespace WebCL {
    * sequential pointers of the same type. It is by no means a certain
    * indicator, you should use it only for builtins where there is no
    * chance of mistake . */
-  bool argsHasSafePointer( llvm::Function::ArgumentListType& args ) {
+  bool argsHasOriginalSafePointer( llvm::Function::ArgumentListType& args ) {
     bool result = false;
     TypeVector types = typesOfArgumentList(args);
     for ( signed i = 0; 
@@ -304,6 +304,27 @@ namespace WebCL {
       llvm::PointerType* pt2 = dyn_cast<PointerType>(types[i + 1]);
       llvm::PointerType* pt3 = dyn_cast<PointerType>(types[i + 2]);
       result = ( pt1 == pt2 && pt2 == pt3 );
+    }
+    return result;
+  }
+
+  /** returns true if an argument list looks like it might contain a
+   * transformed safe pointer; it searches for a record with three
+   * sequential pointers of the same type. It is by no means a certain
+   * indicator, you should use it only for builtins where there is no
+   * chance of mistake . */
+  bool argsHasTransformedSafePointer( llvm::Function::ArgumentListType& args ) {
+    bool result = false;
+    for ( llvm::Function::ArgumentListType::const_iterator argIt = args.begin();
+          !result && argIt != args.end();
+          ++argIt ) {
+      if ( llvm::StructType* st = dyn_cast<StructType>(argIt->getType()) ) {
+        const llvm::StructType::element_iterator firstEl = st->element_begin();
+        result = (st->element_end() - firstEl == 3 &&
+                  firstEl[0]->isPointerTy() &&  
+                  firstEl[1]->isPointerTy() &&  
+                  firstEl[2]->isPointerTy());
+      }
     }
     return result;
   }
@@ -613,12 +634,17 @@ namespace WebCL {
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
 
         if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
-          if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
-            unsafeBuiltinFunctions.push_back(i);
-          } else if ( !i->isDeclaration() && argsHasSafePointer(i->getArgumentList()) ) {
+          if ( !i->isDeclaration() && argsHasOriginalSafePointer(i->getArgumentList()) ) {
             Function* newFunction = transformSafeArguments( *i, replacedArguments );
             replacedFunctions[&*i] = newFunction;
             safeBuiltinFunctions.push_back( newFunction );
+            DUMP("Added as an original safe builtin");
+          } else if ( i->isDeclaration() && argsHasTransformedSafePointer(i->getArgumentList()) ) {
+            safeBuiltinFunctions.push_back( i );
+            DUMP("Added as a transformed safe builtin");
+          } else if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
+            unsafeBuiltinFunctions.push_back(i);
+            DUMP("Added as unsafe safe builtin");
           } else {
             // skip this case, just some other function
           }
@@ -1992,7 +2018,12 @@ namespace WebCL {
         Function* oldFun = i->first;
         Function* newFun = i->second;
         bool isBuiltin = safeBuiltinFunctions.count(newFun);
-        
+
+        // builtin functions may appears as only declarations; skip those
+        if ( oldFun->isDeclaration() ) {
+          continue;
+        }
+
         // move all instructions to new function
         newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
         BasicBlock &entryBlock = newFun->getEntryBlock();

@@ -1898,8 +1898,6 @@ int get_image_width (image2d_t image);
 int get_image_height (image2d_t image);
 
 
-
-#if !defined(BUILDING_RUNKERNEL)
 // Safe versions of builtins... should be in forbidden list to call directly.
 
 #define IS_IN_RANGE(ptr) (ptr >= first && ptr <= last - 1)
@@ -2213,11 +2211,8 @@ int get_image_height (image2d_t image);
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFP(fract)
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFP(modf)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(fract)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(modf)
 #endif
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
 
 // Tn frexp(T x, int *exp)
 // Tn frexp(T x, intn *exp)
@@ -2226,22 +2221,18 @@ IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVIP(frexp)
 DECLARE_FOR_FLOAT_TYPES_VF_VFVIP(remquo)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(frexp)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(remquo)
 #endif
 
 // Ts lgamma_r(T x, Q int *signp)
 // Tn lgamma_r(T x, Q intn *signp)
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r)
 #endif
 
 // Ts remquo(T x, T y, int *quo) { }
 // Tn remquo(T x, T y, intn *quo) { }
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo)
 #endif
 
 // Tn vloadn(long, Q T* p)
@@ -2251,11 +2242,6 @@ DECLARE_SAFE_VLOAD_N(3, (-42, -42, -42))
 DECLARE_SAFE_VLOAD_N(4, (-42, -42, -42, -42))
 DECLARE_SAFE_VLOAD_N(8, (-42, -42, -42, -42, -42, -42, -42, -42))
 DECLARE_SAFE_VLOAD_N(16, (-42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(2, (-42, -42))
-IMPLEMENT_SAFE_VLOAD_N(3, (-42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(4, (-42, -42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(8, (-42, -42, -42, -42, -42, -42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(16, (-42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42))
 #endif
 
 // void vstoren(T x, long, Q T* p)
@@ -2265,11 +2251,6 @@ DECLARE_SAFE_VSTORE_N(3)
 DECLARE_SAFE_VSTORE_N(4)
 DECLARE_SAFE_VSTORE_N(8)
 DECLARE_SAFE_VSTORE_N(16)
-IMPLEMENT_SAFE_VSTORE_N(2)
-IMPLEMENT_SAFE_VSTORE_N(3)
-IMPLEMENT_SAFE_VSTORE_N(4)
-IMPLEMENT_SAFE_VSTORE_N(8)
-IMPLEMENT_SAFE_VSTORE_N(16)
 #endif
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VOLAPT(T, Q, FN)                       \
@@ -2343,17 +2324,9 @@ DECLARE_SAFE_ATOMIC(int, __global)
 DECLARE_SAFE_ATOMIC(uint, __global)
 DECLARE_SAFE_ATOMIC(int, __local )
 DECLARE_SAFE_ATOMIC(uint, __local)
-IMPLEMENT_SAFE_ATOMIC(int, __global)
-IMPLEMENT_SAFE_ATOMIC(uint, __global)
-IMPLEMENT_SAFE_ATOMIC(int, __local )
-IMPLEMENT_SAFE_ATOMIC(uint, __local)
 
 DECLARE_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomic_xchg);
 DECLARE_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomic_xchg);
-IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomic_xchg);
-IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomic_xchg);
-
-#endif // !defined(BUILDING_RUNKERNEL)
 
 // vload_half/vstore_half variants not supported for now. 
 
