@@ -1127,7 +1127,8 @@ namespace WebCL {
           // pointercast all limits to float* to make result more readable
           Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
           Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
-          AreaLimit *gvLimits = AreaLimit::Create(firstValid, firstInvalid, false);
+          bool indirect = g->getType()->getAddressSpace() == privateAddressSpaceNumber;
+          AreaLimit *gvLimits = AreaLimit::Create(firstValid, firstInvalid, indirect);
           asLimits[g->getType()->getAddressSpace()].insert(gvLimits);
           // make sure that references to this global variable always respects its own limits
           valLimits[g] = gvLimits;
