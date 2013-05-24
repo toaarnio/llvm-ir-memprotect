@@ -109,10 +109,9 @@ Instruction *getAsInstruction(ConstantExpr *expr) {
 // Detailed description of the algorithm is documented in [virtual bool runOnModule( Module &M )](#runOnModule)
 namespace WebCL {
 
-  const unsigned globalAddressSpaceNumber  = 0;
+  const unsigned privateAddressSpaceNumber = 0;
+  const unsigned globalAddressSpaceNumber  = 0; // what?
   const unsigned localAddressSpaceNumber   = 3;
-  // an arbitrarily chosen number as LLVM doesn't give an address space for private values
-  const unsigned privateAddressSpaceNumber = 4;
 
   // ### Common helper functions
   
