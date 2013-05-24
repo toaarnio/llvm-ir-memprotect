@@ -1306,7 +1306,7 @@ namespace WebCL {
               }
               LoadInst* load = privateMemoryLoads[parentFunction];
               Instruction* v = llvm::GetElementPtrInst::CreateInBounds( load, genIntVector<Value*>( c, 0, valIndex ),
-                                                                         "" );
+                                                                        origVal->getName() );
               v->insertAfter(load);
               safeExceptions.insert(v);
               structVal = v;
@@ -1315,7 +1315,8 @@ namespace WebCL {
             }
           } else {
             structVal = ConstantExpr::getInBoundsGetElementPtr
-              (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex) );
+              (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex));
+            structVal->setName(origVal->getName());
           }
           
           // Currently LLVM IR does not support GEP in alias. If support is added, uncommenting this will greatly improve readability of produced code
