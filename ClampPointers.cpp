@@ -245,6 +245,7 @@ namespace WebCL {
 
   namespace {
     std::string unsafeBuiltins_tmp[] = {
+      "dumpAddress", // a debugging tool
       "fract", "frexp", "lgamma_r", "modf", "remquo", "sincos", 
       "vload2", "vload3", "vload4", "vload8", "vload16", 
       "vstore2", "vstore3", "vstore4", "vstore8", "vstore16",

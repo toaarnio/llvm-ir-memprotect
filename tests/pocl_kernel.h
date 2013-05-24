@@ -1904,6 +1904,66 @@ int get_image_height (image2d_t image);
 
 #define SMARTPTR(T) T* current, T* first, T* last
 
+#define DECLARE_FOR_DUMP_ADDRESS_T_Q(T, Q)              \
+  void _cl_overloadable dumpAddress(Q T* ptr);          \
+  void _cl_overloadable dumpAddress(SMARTPTR(Q T));
+
+#define IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(T, Q)                            \
+  void _cl_overloadable dumpAddress(SMARTPTR(Q T)) {                    \
+    printf("%p, %p, %p (%s bounds)", current, first, last, IS_IN_RANGE(current) ? "within" : "out of"); \
+  }
+
+#ifndef FAKECL
+#define IMPLEMENT_FOR_DUMP_ADDRESS()                    \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __global);      \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float2, __global);     \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float3, __global);     \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float4, __global);     \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float8, __global);     \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float16, __global);    \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __local);       \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float2, __local);      \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float3, __local);      \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float4, __local);      \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float8, __local);      \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float16, __local);     \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __private);     \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float2, __private);    \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float3, __private);    \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float4, __private);    \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float8, __private);    \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float16, __private);
+#define DECLARE_FOR_DUMP_ADDRESS()                      \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __global);        \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float2, __global);       \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float3, __global);       \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float4, __global);       \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float8, __global);       \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float16, __global);      \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __local);         \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float2, __local);        \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float3, __local);        \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float4, __local);        \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float8, __local);        \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float16, __local);       \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __private);       \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float2, __private);      \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float3, __private);      \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float4, __private);      \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float8, __private);      \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float16, __private);
+#else
+#define IMPLEMENT_FOR_DUMP_ADDRESS(FN)                  \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __global);      \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __local);       \
+  IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __private);
+#define DECLARE_FOR_DUMP_ADDRESS(FN)                    \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __global);        \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __local);         \
+  DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __private);
+#endif
+
+
 #define IMPLEMENT_FOR_T_TYPES_VT_VTVTP(T, Q, FN)        \
   T _cl_overloadable FN(T x, SMARTPTR(Q T)) {           \
     if (IS_IN_RANGE(current)) {                         \
@@ -1916,6 +1976,8 @@ int get_image_height (image2d_t image);
 #define DECLARE_FOR_T_TYPES_VT_VTVTP(T, Q, FN)        \
   T _cl_overloadable FN(T x, Q T*);                   \
   T _cl_overloadable FN(T x, SMARTPTR(Q T));
+
+
 
 #ifndef FAKECL
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \
@@ -2204,6 +2266,8 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_VSTORE_N_TYPES(N, __private);  \
   DECLARE_SAFE_VSTORE_N_TYPES(N, __global);   \
   DECLARE_SAFE_VSTORE_N_TYPES(N, __local);
+
+DECLARE_FOR_DUMP_ADDRESS()
 
 // T fract(T x, Q T *iptr) 
 // T modf(T x, Q T *iptr) 
