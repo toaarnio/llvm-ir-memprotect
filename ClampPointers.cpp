@@ -1372,6 +1372,18 @@ namespace WebCL {
       }
     }
 
+    void createPrivateAllocation(AddressSpaceStructByAddressSpaceMap& asStructs,
+                                 IRBuilder<> blockBuilder) {
+      // allocate private address space struct in the kernel
+      if (asStructs.count(privateAddressSpaceNumber)) {
+        GlobalValue* asStruct = asStructs[privateAddressSpaceNumber];
+        AllocaInst *asAlloca = blockBuilder.CreateAlloca(asStruct->getType()->getPointerElementType()->getPointerElementType(),
+                                                         0, 
+                                                         "privateAddressSpace");
+        blockBuilder.CreateStore(asAlloca, asStruct);
+      }
+    }
+
     /**
      * Creates new WebCl kernel compliant function, which has element count parameter for each
      * pointer parameter and can be called from host.
@@ -1450,14 +1462,7 @@ namespace WebCL {
         origArg++;
       }
 
-      // allocate private address space struct in the kernel
-      if (asStructs.count(privateAddressSpaceNumber)) {
-        GlobalValue* asStruct = asStructs[privateAddressSpaceNumber];
-        AllocaInst *asAlloca = blockBuilder.CreateAlloca(asStruct->getType()->getPointerElementType()->getPointerElementType(),
-                                                         0, 
-                                                         "privateAddressSpace");
-        blockBuilder.CreateStore(asAlloca, asStruct);
-      }
+      createPrivateAllocation(asStructs, blockBuilder);
 
       DEBUG( dbgs() << "\nCreated arguments: "; 
              for ( size_t i = 0; i < args.size(); i++ ) { 
