@@ -707,6 +707,11 @@ namespace WebCL {
       DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
       createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits, addressSpaceStructs);
 
+      // The same but for only 'main' functions; currently only handles the allocation of private structs
+      if (RunUnsafeMode) {
+        createMainEntryPoint(M, replacedFunctions, addressSpaceStructs);
+      }
+
       // Traces limits for all instructions and values in the module and adds them to `valueLimits`. After this we should be able
       // to get min and max addresses for all instructions / globals that we are interested in. [findLimits(FunctionMap &replacedFunctions,
       // ValueSet &checkOperands, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits)](#findLimits).
@@ -1381,6 +1386,23 @@ namespace WebCL {
                                                          0, 
                                                          "privateAddressSpace");
         blockBuilder.CreateStore(asAlloca, asStruct);
+      }
+    }
+
+    void createMainEntryPoint(Module& M,
+                              FunctionMap &replacedFunctions,
+                              AddressSpaceStructByAddressSpaceMap& asStructs) {
+      Function* main = 0;
+      for (FunctionMap::iterator funIt = replacedFunctions.begin();
+           !main && funIt != replacedFunctions.end();
+           ++funIt) {
+        if (funIt->first->getName() == "main") {
+          main = funIt->second;
+        }
+      }
+      if (main) {
+        IRBuilder<> blockBuilder( main->getEntryBlock().begin() );
+        createPrivateAllocation( asStructs, blockBuilder );
       }
     }
 
