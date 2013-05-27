@@ -1,3 +1,5 @@
+#include "pocl_kernel.h"
+
 /* from pocl */
 
 #include "vload.cl"
