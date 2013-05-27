@@ -2270,6 +2270,7 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_VSTORE_N_TYPES(N, __local);
 
 DECLARE_FOR_DUMP_ADDRESS()
+IMPLEMENT_FOR_DUMP_ADDRESS()
 
 // T fract(T x, Q T *iptr) 
 // T modf(T x, Q T *iptr) 
