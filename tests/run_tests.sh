@@ -36,7 +36,7 @@ failed_tests=""
 if [ -z $1 ]; then
     tests=$(ls -1 test_*.c test_*.ll test_*.cl 2> /dev/null);
 else
-    tests=$1;
+    tests=$@;
 fi
 
 function get_run_command {
