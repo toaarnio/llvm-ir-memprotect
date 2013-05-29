@@ -1284,7 +1284,7 @@ namespace WebCL {
         BasicBlock &entry = f->getEntryBlock();
         for (BasicBlock::iterator i = entry.begin(); i != entry.end(); i++) {
           AllocaInst *alloca = dyn_cast<AllocaInst>(i);
-          if (alloca != NULL) {
+          if (alloca != NULL && !unsafeBuiltins.count(extractItaniumDemangledFunctionName(f->getName().str())) ) {
             staticAllocations[privateAddressSpaceNumber].push_back(alloca);
           }
         }
