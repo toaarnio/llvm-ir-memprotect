@@ -460,10 +460,11 @@ namespace WebCL {
     class PrivateAddressSpaceInitializer: public AddressSpaceInitializer {
     private:
       GlobalValue*             asStruct;
+      GlobalValue*             asEndStruct;
       std::vector< Constant* > initData;
     public:
-      PrivateAddressSpaceInitializer(GlobalValue* asStruct, std::vector< Constant* > initData) :
-        asStruct(asStruct), initData(initData) {
+      PrivateAddressSpaceInitializer(GlobalValue* asStruct, GlobalValue* asEndStruct, std::vector< Constant* > initData) :
+        asStruct(asStruct), asEndStruct(asEndStruct), initData(initData) {
         // nothing
       }
       ~PrivateAddressSpaceInitializer() {}
@@ -482,6 +483,8 @@ namespace WebCL {
                                                          0, 
                                                          "privateAddressSpace");
         blockBuilder.CreateStore(asAlloca, asStruct);
+        Value* endLimit = blockBuilder.CreateGEP(asAlloca, genIntVector<Value*>(c, 1));
+        blockBuilder.CreateStore(endLimit, asEndStruct);
         int idx = 0;
         for (std::vector< Constant* >::const_iterator it = initData.begin();
              it != initData.end();
@@ -611,6 +614,7 @@ namespace WebCL {
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
     typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
     typedef std::map< unsigned, AddressSpaceInitializer* > AddressSpaceInitializerByAddressSpaceMap;
+    typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
       
     // ## <a id="runOnModule"></a> Run On Module
     //
@@ -649,6 +653,7 @@ namespace WebCL {
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
       AddressSpaceStructByAddressSpaceMap addressSpaceStructs;
       AddressSpaceInitializerByAddressSpaceMap addressSpaceInitializers;
+      GlobalValueMap addressSpaceEndPtrs;
 
       // Set where is collected all values, which will not require boundary checks to
       // memory accesses. These have been resolved to be safe accesses in compile time.
@@ -664,7 +669,7 @@ namespace WebCL {
       // of the new kernels.
 
       DEBUG( dbgs() << "\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n" );
-      consolidateStaticMemory( M, addressSpaceStructs, addressSpaceInitializers, safeExceptions );
+      consolidateStaticMemory( M, addressSpaceStructs, addressSpaceInitializers, addressSpaceEndPtrs, safeExceptions );
 
       // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
       // map sorted by address space number. Also adds the address space struct to value limits so that
@@ -672,7 +677,7 @@ namespace WebCL {
       // found from limit map as normally `valueLimits[pointerOperand]`. [findAddressSpaceLimits( Module &M,
       // AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits )](#findAddressSpaceLimits).
       DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
-      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits, addressSpaceStructs );
+      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits, addressSpaceStructs, addressSpaceEndPtrs );
 
       FunctionList unsafeBuiltinFunctions;
       FunctionList safeBuiltinFunctions;
@@ -1156,7 +1161,7 @@ namespace WebCL {
      * Goes through global variables and adds limits to bookkeepping
      */
     void findAddressSpaceLimits( Module &M, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits,
-                                 AddressSpaceStructByAddressSpaceMap& asStructs ) {
+                                 AddressSpaceStructByAddressSpaceMap& asStructs, GlobalValueMap& addressSpaceEndPtrs ) {
       LLVMContext& c = M.getContext();
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
         
@@ -1177,10 +1182,16 @@ namespace WebCL {
           std::stringstream aliasName;
           aliasName << "AS" << g->getType()->getAddressSpace();
           // pointercast all limits to float* to make result more readable
-          Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
-          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
-          bool indirect = g->getType()->getAddressSpace() == privateAddressSpaceNumber;
-          AreaLimit *gvLimits = AreaLimit::Create(firstValid, firstInvalid, indirect);
+          AreaLimit *gvLimits = 0;
+          if (addressSpaceEndPtrs.count(g)) {
+            Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
+            Constant *firstInvalid = ConstantExpr::getGetElementPtr(addressSpaceEndPtrs[g], getConstInt(c,0));
+            gvLimits = AreaLimit::Create(firstValid, firstInvalid, true);
+          } else {
+            Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
+            Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
+            gvLimits = AreaLimit::Create(firstValid, firstInvalid, false);
+          }
           asLimits[g->getType()->getAddressSpace()].insert(gvLimits);
           // make sure that references to this global variable always respects its own limits
           valLimits[g] = gvLimits;
@@ -1254,6 +1265,7 @@ namespace WebCL {
     void consolidateStaticMemory( Module &M, 
                                   AddressSpaceStructByAddressSpaceMap& asStructs, 
                                   AddressSpaceInitializerByAddressSpaceMap& asInits,
+                                  GlobalValueMap& addressSpaceEndPtrs,
                                   ValueSet &safeExceptions ) {
       LLVMContext& c = M.getContext();
       
@@ -1371,7 +1383,11 @@ namespace WebCL {
           aSpaceStruct = new GlobalVariable
             (M, aSpacePointer, false, GlobalValue::InternalLinkage, Constant::getNullValue(aSpacePointer), 
              structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
-          asInits[addressSpace] = (init = new PrivateAddressSpaceInitializer(aSpaceStruct, structElementData));
+          GlobalValue* aSpaceEndStruct = new GlobalVariable
+            (M, aSpacePointer, false, GlobalValue::InternalLinkage, Constant::getNullValue(aSpacePointer), 
+             structName.str() + "End", NULL, GlobalVariable::NotThreadLocal, addressSpace);
+          addressSpaceEndPtrs[aSpaceStruct] = aSpaceEndStruct;
+          asInits[addressSpace] = (init = new PrivateAddressSpaceInitializer(aSpaceStruct, aSpaceEndStruct, structElementData));
         } else {
           dereferenceSpaceStruct = false;
           aSpaceStruct = new GlobalVariable
