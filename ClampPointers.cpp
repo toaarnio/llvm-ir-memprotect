@@ -133,7 +133,7 @@ namespace WebCL {
                   "Error when trying to demangle: " + name);
       retVal = name.substr(lastIndex, atoi(functionNameLength.c_str()));
     }
-    DEBUG( dbgs() << "Demangled: " << name << " to " << retVal << "\n" );
+    //DEBUG( dbgs() << "Demangled: " << name << " to " << retVal << "\n" );
     return retVal;
   }
 
