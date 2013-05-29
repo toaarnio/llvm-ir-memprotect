@@ -1126,6 +1126,55 @@ namespace WebCL {
       }
     }
       
+    /** Returns 'true' if a constant is a simple one. Currently simple constants are null values, integers, or
+     * arrays or structs that are built of simpleConstants, but it could be anything that doesn't depend on
+     * other values.
+     */
+    bool simpleConstant( Constant* value ) {
+      if (ConstantExpr* expr = dyn_cast<ConstantExpr>(value)) {        
+        SmallVector<Constant*,4> ConstantOperands;
+        bool isConstant = true;
+        for (ConstantExpr::op_iterator I = expr->op_begin(), E = expr->op_end(); isConstant && I != E; ++I) {
+          if (!isa<Constant>(I)) {
+            isConstant = false;
+          } else {
+            ConstantOperands.push_back(cast<Constant>(I));
+          }
+        }
+        if (isConstant) {
+          ArrayRef<Constant*> Ops(ConstantOperands);
+          switch (expr->getOpcode()) {
+          case Instruction::IntToPtr: {
+            isConstant = simpleConstant(Ops[0]);
+          } break;
+          }
+        }
+        return isConstant;
+      } else if (ConstantArray* ar = dyn_cast<ConstantArray>(value)) {
+        bool isConstant = true;
+        ArrayType* type = ar->getType();
+        for (size_t c = 0; isConstant && c < type->getNumElements(); ++c) {
+          isConstant = simpleConstant(ar->getAggregateElement(c));
+        }
+        return isConstant;
+      } else if (ConstantDataSequential* seq = dyn_cast<ConstantDataSequential>(value)) {
+        bool isConstant = true;
+        for (size_t c = 0; isConstant && c < seq->getNumElements(); ++c) {
+          isConstant = simpleConstant(seq->getElementAsConstant(c));
+        }
+        return isConstant;
+      } else if (ConstantStruct* st = dyn_cast<ConstantStruct>(value)) {
+        bool isConstant = true;
+        StructType* type = st->getType();
+        for (size_t c = 0; isConstant && c < type->getNumElements(); ++c) {
+          isConstant = simpleConstant(st->getAggregateElement(c));
+        }
+        return isConstant;
+      } else {
+        return value->isNullValue() || isa<ConstantInt>(value);
+      }
+    }
+
     /**
      * Collect all allocas and global values for each address space and create one struct for each
      * address space.
@@ -1138,14 +1187,17 @@ namespace WebCL {
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
         // collect only named linked addresses (for unnamed there cannot be relative references anywhere) externals are allowed only in special case.
         DEBUG( dbgs()  << "Found global: "; g->print(dbgs());
-               dbgs() << " of address space: " << g->getType()->getAddressSpace(); );
+               dbgs() << " of address space: " << g->getType()->getAddressSpace() << "\n";  );
+
+        fast_assert(!g->hasInitializer() || simpleConstant(g->getInitializer()),
+                    "Unsupported: Globals cannot have complex initalizers");
 
         if ( g->hasUnnamedAddr() ) {
           DEBUG( dbgs() << " ### Ignored because unnamed address \n"; );
         } else if ( g->hasExternalLinkage() && g->isDeclaration() ) {
           DEBUG( dbgs() << " ### Ignored because extern linkage \n"; );
         } else {
-          DEBUG( dbgs() << " ### Collected to address space structure \n"; );
+          DEBUG( dbgs() << " ### Collected to address space structure " << g->getType()->getAddressSpace() << "\n"; );
           staticAllocations[g->getType()->getAddressSpace()].push_back(g);
         }
       }
