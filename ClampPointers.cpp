@@ -437,6 +437,76 @@ namespace WebCL {
       ModulePass( ID ) {
     }
 
+    typedef std::map< Value*, int > ValueIndexMap;
+    typedef std::set< Value* > ValueSet;
+
+    struct AddressSpaceInitializer {
+    protected:
+      ValueIndexMap replacements;
+
+    public:
+      AddressSpaceInitializer() {}
+      virtual ~AddressSpaceInitializer() {}
+
+      virtual void initialize(LLVMContext& c, IRBuilder<>& at, ValueSet& safeExceptions) const = 0;
+
+      virtual void dump() const {}
+
+      virtual void setValueReplacements(const ValueIndexMap& replacements_) {
+        replacements = replacements_;
+      }
+    };
+
+    class PrivateAddressSpaceInitializer: public AddressSpaceInitializer {
+    private:
+      GlobalValue*             asStruct;
+      std::vector< Constant* > initData;
+    public:
+      PrivateAddressSpaceInitializer(GlobalValue* asStruct, std::vector< Constant* > initData) :
+        asStruct(asStruct), initData(initData) {
+        // nothing
+      }
+      ~PrivateAddressSpaceInitializer() {}
+
+      void dump() const {
+        for (std::vector< Constant* >::const_iterator it = initData.begin();
+             it != initData.end();
+             ++it) {
+          DUMP(**it);
+          DUMP(*(*it)->getType());
+        }
+      }
+      
+      void initialize(LLVMContext& c, IRBuilder<>& blockBuilder, ValueSet& safeExceptions ) const {
+        AllocaInst *asAlloca = blockBuilder.CreateAlloca(asStruct->getType()->getPointerElementType()->getPointerElementType(),
+                                                         0, 
+                                                         "privateAddressSpace");
+        blockBuilder.CreateStore(asAlloca, asStruct);
+        int idx = 0;
+        for (std::vector< Constant* >::const_iterator it = initData.begin();
+             it != initData.end();
+             ++it, ++idx) {
+          Value* storeAt = blockBuilder.CreateGEP(asAlloca, genIntVector<Value*>(c, 0, idx));
+          if (!isa<GlobalValue>(*it)) {
+            blockBuilder.CreateStore(*it, storeAt);
+          } else {
+            assert(replacements.count(*it));
+            Value* loadFrom = blockBuilder.CreateGEP(asAlloca, genIntVector<Value*>(c, 0, replacements.find(*it)->second));
+            blockBuilder.CreateStore(loadFrom, storeAt);
+            safeExceptions.insert(loadFrom);
+          }
+          safeExceptions.insert(storeAt);
+        }
+        for (std::vector< Constant* >::const_iterator it = initData.begin();
+             it != initData.end();
+             ++it, ++idx) {
+          if (GlobalVariable* global = dyn_cast<GlobalVariable>(*it)) {
+            global->eraseFromParent();
+          }
+        }
+      }
+    };
+
     // **AreaLimit** class holds information of single memory area allocation. Limits of the area
     // can be stored directly as constant expressions for *min* and *max* or they can be indirect
     // references to the limits. In case of indirect memory area, the *min* and *max* contains memory
@@ -533,7 +603,6 @@ namespace WebCL {
     typedef std::set< GetElementPtrInst* > GepInstrSet;
     typedef std::set< LoadInst* > LoadInstrSet;
     typedef std::set< StoreInst* > StoreInstrSet;
-    typedef std::set< Value* > ValueSet;
     typedef std::set< int > IntSet;
     typedef std::vector< Value* > ValueVector;
     typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
@@ -541,6 +610,7 @@ namespace WebCL {
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
     typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
+    typedef std::map< unsigned, AddressSpaceInitializer* > AddressSpaceInitializerByAddressSpaceMap;
       
     // ## <a id="runOnModule"></a> Run On Module
     //
@@ -578,6 +648,7 @@ namespace WebCL {
       // Bookkeeping of all available limits of address spaces.
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
       AddressSpaceStructByAddressSpaceMap addressSpaceStructs;
+      AddressSpaceInitializerByAddressSpaceMap addressSpaceInitializers;
 
       // Set where is collected all values, which will not require boundary checks to
       // memory accesses. These have been resolved to be safe accesses in compile time.
@@ -593,7 +664,7 @@ namespace WebCL {
       // of the new kernels.
 
       DEBUG( dbgs() << "\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n" );
-      consolidateStaticMemory( M, addressSpaceStructs, safeExceptions );
+      consolidateStaticMemory( M, addressSpaceStructs, addressSpaceInitializers, safeExceptions );
 
       // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
       // map sorted by address space number. Also adds the address space struct to value limits so that
@@ -601,7 +672,7 @@ namespace WebCL {
       // found from limit map as normally `valueLimits[pointerOperand]`. [findAddressSpaceLimits( Module &M,
       // AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits )](#findAddressSpaceLimits).
       DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
-      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits );
+      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits, addressSpaceStructs );
 
       FunctionList unsafeBuiltinFunctions;
       FunctionList safeBuiltinFunctions;
@@ -706,11 +777,11 @@ namespace WebCL {
       // AreaLimitSetByAddressSpaceMap &asLimits)](#createKernelEntryPoints). addressSpaceStructs is used for
       // putting the allocations of private memory structs to the beginning of the kernels.
       DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
-      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits, addressSpaceStructs);
+      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits, addressSpaceStructs, addressSpaceInitializers, safeExceptions );
 
       // The same but for only 'main' functions; currently only handles the allocation of private structs
       if (RunUnsafeMode) {
-        createMainEntryPoint(M, replacedFunctions, addressSpaceStructs);
+        createMainEntryPoint(M, replacedFunctions, addressSpaceInitializers, safeExceptions);
       }
 
       // Traces limits for all instructions and values in the module and adds them to `valueLimits`. After this we should be able
@@ -1084,7 +1155,8 @@ namespace WebCL {
     /**
      * Goes through global variables and adds limits to bookkeepping
      */
-    void findAddressSpaceLimits( Module &M, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits ) {
+    void findAddressSpaceLimits( Module &M, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits,
+                                 AddressSpaceStructByAddressSpaceMap& asStructs ) {
       LLVMContext& c = M.getContext();
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
         
@@ -1179,7 +1251,10 @@ namespace WebCL {
      * Collect all allocas and global values for each address space and create one struct for each
      * address space.
      */
-    void consolidateStaticMemory( Module &M, AddressSpaceStructByAddressSpaceMap& asStructs, ValueSet &safeExceptions ) {
+    void consolidateStaticMemory( Module &M, 
+                                  AddressSpaceStructByAddressSpaceMap& asStructs, 
+                                  AddressSpaceInitializerByAddressSpaceMap& asInits,
+                                  ValueSet &safeExceptions ) {
       LLVMContext& c = M.getContext();
       
       ValueVectorByAddressSpaceMap staticAllocations;
@@ -1287,16 +1362,18 @@ namespace WebCL {
         Constant* addressSpaceDataInitializer = ConstantStruct::get( addressSpaceStructType, structElementData );
         bool dereferenceSpaceStruct;
         GlobalVariable *aSpaceStruct;
+        PrivateAddressSpaceInitializer* init = 0;
         if (addressSpace == privateAddressSpaceNumber) {
           // using global address space intead of private as the
           // existing 'private' address space values are put in the
           // global address space
-          PointerType* aSpacePointer = llvm::PointerType::get(addressSpaceStructType, globalAddressSpaceNumber);
+          PointerType* aSpacePointer = llvm::PointerType::get(addressSpaceStructType, addressSpace);
           dereferenceSpaceStruct = true;
           // should this use localAddressSpaceNumber? but that cannot be put into a global
           aSpaceStruct = new GlobalVariable
             (M, aSpacePointer, false, GlobalValue::InternalLinkage, Constant::getNullValue(aSpacePointer), 
-             structName.str(), NULL, GlobalVariable::NotThreadLocal, globalAddressSpaceNumber);
+             structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
+          asInits[addressSpace] = (init = new PrivateAddressSpaceInitializer(aSpaceStruct, structElementData));
         } else {
           dereferenceSpaceStruct = false;
           aSpaceStruct = new GlobalVariable
@@ -1310,9 +1387,12 @@ namespace WebCL {
         // per function
         std::map<Function*, LoadInst*> privateMemoryLoads;
 
-        // replace all uses of old allocas and globals value with new constant geps and remove original values
+        ValueIndexMap valueReplacements;
+
         for (size_t valIndex = 0; valIndex < values.size(); valIndex++) {
           Value* origVal = values[valIndex];
+
+          if (!origVal) continue;
 
           // get field of struct
           Value *structVal;
@@ -1323,9 +1403,11 @@ namespace WebCL {
                   useIt != origVal->use_end();
                   ++useIt ) {
               Value* value = *useIt;
-              assert(isa<Instruction>(value));
-              Instruction* instruction = cast<Instruction>(value);
-              parentFuncs.insert(instruction->getParent()->getParent());
+              if (isa<Instruction>(value)) {
+                assert(isa<Instruction>(value));
+                Instruction* instruction = cast<Instruction>(value);
+                parentFuncs.insert(instruction->getParent()->getParent());
+              }
             }
             fast_assert(parentFuncs.size() <= 1, "Users of a single local variable should be within at most one function");
 
@@ -1346,6 +1428,7 @@ namespace WebCL {
             } else {
               structVal = 0;
             }
+            valueReplacements[origVal] = valIndex;
           } else {
             structVal = ConstantExpr::getInBoundsGetElementPtr
               (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex));
@@ -1375,9 +1458,18 @@ namespace WebCL {
               structVal->setName(aSpaceStruct->getName() + "." + origVal->getName());
               global->eraseFromParent();
             }
+          } else {
+            assert(isa<GlobalVariable>(origVal));
+            if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
+              fast_assert(global->getNumUses() == 0, "A global was to be erased but it was still used?");
+              global->eraseFromParent();
+            }
           }
           
           //DEBUG( dbgs() << "Alias: "; fieldAlias->print(dbgs()); dbgs() << "\n"; );
+        }
+        if (init) {
+          init->setValueReplacements(valueReplacements);
         }
       }
     }
@@ -1405,7 +1497,9 @@ namespace WebCL {
      */
     void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions, 
                                  AreaLimitSetByAddressSpaceMap &asLimits,
-                                 AddressSpaceStructByAddressSpaceMap& asStructs) {
+                                 AddressSpaceStructByAddressSpaceMap& asStructs,
+                                 const AddressSpaceInitializerByAddressSpaceMap& asInits,
+                                 ValueSet& safeExceptions) {
       NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
       if (oclKernels != NULL) {
         for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
@@ -1418,7 +1512,7 @@ namespace WebCL {
           // compatible version.
           if (replacedFunctions.count(oldFun) > 0) {
             Function *smartKernel = replacedFunctions[oldFun];
-            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, asLimits, asStructs);
+            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, asLimits, asStructs, asInits, safeExceptions);
             // make smartKernel to be internal linkage to allow better optimization
             smartKernel->setLinkage(GlobalValue::InternalLinkage);
             // TODO: if found nvptx_kernel attribute, move it to new kernel
@@ -1430,21 +1524,10 @@ namespace WebCL {
       }
     }
 
-    void createPrivateAllocation(AddressSpaceStructByAddressSpaceMap& asStructs,
-                                 IRBuilder<> blockBuilder) {
-      // allocate private address space struct in the kernel
-      if (asStructs.count(privateAddressSpaceNumber)) {
-        GlobalValue* asStruct = asStructs[privateAddressSpaceNumber];
-        AllocaInst *asAlloca = blockBuilder.CreateAlloca(asStruct->getType()->getPointerElementType()->getPointerElementType(),
-                                                         0, 
-                                                         "privateAddressSpace");
-        blockBuilder.CreateStore(asAlloca, asStruct);
-      }
-    }
-
     void createMainEntryPoint(Module& M,
                               FunctionMap &replacedFunctions,
-                              AddressSpaceStructByAddressSpaceMap& asStructs) {
+                              AddressSpaceInitializerByAddressSpaceMap& asInits,
+                              ValueSet& safeExceptions) {
       Function* main = 0;
       for (FunctionMap::iterator funIt = replacedFunctions.begin();
            !main && funIt != replacedFunctions.end();
@@ -1454,8 +1537,13 @@ namespace WebCL {
         }
       }
       if (main) {
+        LLVMContext& c = M.getContext();
         IRBuilder<> blockBuilder( main->getEntryBlock().begin() );
-        createPrivateAllocation( asStructs, blockBuilder );
+        for (AddressSpaceInitializerByAddressSpaceMap::const_iterator it = asInits.begin();
+             it != asInits.end();
+             ++it) {
+          it->second->initialize(c, blockBuilder, safeExceptions);
+        }
       }
     }
 
@@ -1470,7 +1558,9 @@ namespace WebCL {
      */
     Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel,
                                 AreaLimitSetByAddressSpaceMap &asLimits,
-                                 AddressSpaceStructByAddressSpaceMap& asStructs) {
+                                AddressSpaceStructByAddressSpaceMap& asStructs,
+                                const AddressSpaceInitializerByAddressSpaceMap& asInits,
+                                ValueSet& safeExceptions) {
       LLVMContext &c = M.getContext();
 
       // create argument list for WebCl kernel
@@ -1537,7 +1627,11 @@ namespace WebCL {
         origArg++;
       }
 
-      createPrivateAllocation(asStructs, blockBuilder);
+      for (AddressSpaceInitializerByAddressSpaceMap::const_iterator it = asInits.begin();
+           it != asInits.end();
+           ++it) {
+        it->second->initialize(c, blockBuilder, safeExceptions);
+      }
 
       DEBUG( dbgs() << "\nCreated arguments: "; 
              for ( size_t i = 0; i < args.size(); i++ ) { 
