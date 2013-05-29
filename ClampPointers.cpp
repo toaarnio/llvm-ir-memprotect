@@ -1459,10 +1459,14 @@ namespace WebCL {
               global->eraseFromParent();
             }
           } else {
-            assert(isa<GlobalVariable>(origVal));
-            if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
+            if (Instruction* ins = dyn_cast<Instruction>(origVal)) {
+              fast_assert(ins->getNumUses() == 0, "An instruction was to be erased but it was still used?");
+              ins->eraseFromParent();
+            } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(origVal)) {
               fast_assert(global->getNumUses() == 0, "A global was to be erased but it was still used?");
               global->eraseFromParent();
+            } else {
+              assert(false);
             }
           }
           
