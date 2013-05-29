@@ -1354,9 +1354,7 @@ namespace WebCL {
         
         std::stringstream structName;
         structName << "AddressSpace" << addressSpace << "StaticData";
-        StructType *addressSpaceStructType = StructType::get( c, structElementTypesArrayRef );
-        // NOTE: cant give name to struct literal type, would be nice to have for readability
-        // addressSpaceStructType->setName(structName.str() + "Type");
+        StructType* addressSpaceStructType = StructType::create(c, structElementTypesArrayRef, structName.str() + "Type");
 
         // create struct of generated type and add to module
         Constant* addressSpaceDataInitializer = ConstantStruct::get( addressSpaceStructType, structElementData );
