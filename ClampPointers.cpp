@@ -1209,9 +1209,9 @@ namespace WebCL {
       }
     }
       
-    /** Returns 'true' if a constant is a simple one. Currently simple constants are null values, integers, or
-     * arrays or structs that are built of simpleConstants, but it could be anything that doesn't depend on
-     * other values.
+    /** Returns 'true' if a constant is a simple one. Currently simple constants are null values, integers,
+     * floats, or arrays, structs of expressions that are built of simpleConstants, but it could be anything
+     * that doesn't depend on other values.
      */
     bool simpleConstant( Constant* value ) {
       if (ConstantExpr* expr = dyn_cast<ConstantExpr>(value)) {        
@@ -1254,7 +1254,7 @@ namespace WebCL {
         }
         return isConstant;
       } else {
-        return value->isNullValue() || isa<ConstantInt>(value);
+        return value->isNullValue() || isa<ConstantInt>(value) || isa<ConstantFP>(value);
       }
     }
 
