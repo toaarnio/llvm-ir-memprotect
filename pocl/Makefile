@@ -31,11 +31,8 @@ library.bc: builtin-implementations.bc
 library-fakecl.bc: builtin-implementations-fakecl.bc
 	llvm-link $^ -o $@
 
-%.s: %.bc
-	llc $< -o $@
-
-%.o: %.s
-	as -o $@ $<
+%.o: %.bc
+	clang -c $< -o $@
 
 .PRECIOUS: %.s
 
