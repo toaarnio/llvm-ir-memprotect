@@ -3,8 +3,7 @@
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
 // RUN: lli $OUT_FILE.clamped.ll; [ $? = 0 ]
 
-volatile int val = 5;
-
 int main(void) {
-  return *(&val + 1);
+  int a;
+  return *(&a + 1);
 }

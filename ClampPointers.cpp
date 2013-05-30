@@ -1539,6 +1539,7 @@ namespace WebCL {
                   useIt != origVal->use_end();
                   ++useIt ) {
               Value* value = *useIt;
+              fast_assert(!isa<ConstantExpr>(value), "Constant expressions based on consolidated values not supported");
               if (isa<Instruction>(value)) {
                 assert(isa<Instruction>(value));
                 Instruction* instruction = cast<Instruction>(value);
