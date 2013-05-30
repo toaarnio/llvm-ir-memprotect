@@ -1903,6 +1903,9 @@ int get_image_height (image2d_t image);
 // Safe versions of builtins... should be in forbidden list to call directly.
 
 #define IS_IN_RANGE(ptr) (ptr >= first && ptr <= last - 1)
+#define IS_RANGE_IN_RANGE(base, n)                                      \
+  ((base##Ptr >= base##First && base##Ptr <= base##Last - 1) &&         \
+   ((base##Ptr + n) >= base##First && (base##Ptr + n) <= base##Last - 1))
 
 #define SMARTPTR(T) T* current, T* first, T* last
 
@@ -1914,6 +1917,154 @@ int get_image_height (image2d_t image);
   void _cl_overloadable dumpAddress(SMARTPTR(Q T)) {                    \
     printf("%p, %p, %p (%s bounds)", current, first, last, IS_IN_RANGE(current) ? "within" : "out of"); \
   }
+
+#define DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)                   \
+  _cl_overloadable                                                      \
+  event_t async_work_group_copy (__local GENTYPE *dstPtr,               \
+                                 __local GENTYPE *dstFirst,             \
+                                 __local GENTYPE *dstLast,              \
+                                 const __global GENTYPE *srcPtr,        \
+                                 const __global GENTYPE *srcFirst,      \
+                                 const __global GENTYPE *srcLast,       \
+                                 size_t num_gentypes,                   \
+                                 event_t event);                        \
+                                                                        \
+  _cl_overloadable                                                      \
+  event_t async_work_group_copy (__global GENTYPE *dstPtr,              \
+                                 __global GENTYPE *dstFirst,            \
+                                 __global GENTYPE *dstLast,             \
+                                 const __local GENTYPE *srcPtr,         \
+                                 const __local GENTYPE *srcFirst,       \
+                                 const __local GENTYPE *srcLast,        \
+                                 size_t num_gentypes,                   \
+                                 event_t event);                        \
+                                                                        \
+  _cl_overloadable                                                      \
+  event_t async_work_group_strided_copy (__local GENTYPE *dstPtr,       \
+                                         __local GENTYPE *dstFirst,     \
+                                         __local GENTYPE *dstLast,      \
+                                         const __global GENTYPE *srcPtr, \
+                                         const __global GENTYPE *srcFirst, \
+                                         const __global GENTYPE *srcLast, \
+                                         size_t num_gentypes,           \
+                                         event_t event);                \
+                                                                        \
+  _cl_overloadable                                                      \
+  event_t async_work_group_strided_copy (__global GENTYPE *dstPtr,      \
+                                         __global GENTYPE *dstFirst,    \
+                                         __global GENTYPE *dstLast,     \
+                                         const __local GENTYPE *src,    \
+                                         size_t num_gentypes,           \
+                                         event_t event);                \
+
+#define DECLARE_SAFE_ASYNC_COPY_FUNCS(GENTYPE)          \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)         \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##2)      \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##3)      \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##4)      \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##8)      \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##16)     \
+
+#define DECLARE_SAFE_ASYNC_COPY_FUNCS_ALL()                     \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS(char);                          \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS(uchar);                         \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS(short);                         \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS(ushort);                        \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS(int);                           \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS(uint);                          \
+  __IF_INT64(DECLARE_SAFE_ASYNC_COPY_FUNCS(long));              \
+  __IF_INT64(DECLARE_SAFE_ASYNC_COPY_FUNCS(ulong));             \
+                                                                \
+  __IF_FP16(DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(half));        \
+  DECLARE_SAFE_ASYNC_COPY_FUNCS(float);                         \
+  __IF_FP64(DECLARE_SAFE_ASYNC_COPY_FUNCS(double));
+
+#define IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)                 \
+  _cl_overloadable                                                      \
+  event_t async_work_group_copy (__local GENTYPE *dstPtr,               \
+                                 __local GENTYPE *dstFirst,             \
+                                 __local GENTYPE *dstLast,              \
+                                 const __global GENTYPE *srcPtr,        \
+                                 const __global GENTYPE *srcFirst,      \
+                                 const __global GENTYPE *srcLast,       \
+                                 size_t num_gentypes,                   \
+                                 event_t event) {                       \
+    if (IS_RANGE_IN_RANGE(dst, num_gentypes) && IS_RANGE_IN_RANGE(src, num_gentypes)) { \
+      return async_work_group_copy(dstPtr, srcPtr, num_gentypes, event); \
+    } else {                                                            \
+      return async_work_group_copy(dstPtr, srcPtr, 0, event);           \
+    }                                                                   \
+  }                                                                     \
+                                                                        \
+  _cl_overloadable                                                      \
+  event_t async_work_group_copy (__global GENTYPE *dstPtr,              \
+                                 __global GENTYPE *dstFirst,            \
+                                 __global GENTYPE *dstLast,             \
+                                 const __local GENTYPE *srcPtr,         \
+                                 const __local GENTYPE *srcFirst,       \
+                                 const __local GENTYPE *srcLast,        \
+                                 size_t num_gentypes,                   \
+                                 event_t event) {                       \
+    if (IS_RANGE_IN_RANGE(dst, num_gentypes) && IS_RANGE_IN_RANGE(src, num_gentypes)) { \
+      return async_work_group_copy(dstPtr, srcPtr, num_gentypes, event); \
+    } else {                                                            \
+      return async_work_group_copy(dstPtr, srcPtr, 0, event);           \
+    }                                                                   \
+  }                                                                     \
+                                                                        \
+  _cl_overloadable                                                      \
+  event_t async_work_group_strided_copy (__local GENTYPE *dstPtr,       \
+                                         __local GENTYPE *dstFirst,     \
+                                         __local GENTYPE *dstLast,      \
+                                         const __global GENTYPE *srcPtr, \
+                                         const __global GENTYPE *srcFirst, \
+                                         const __global GENTYPE *srcLast, \
+                                         size_t num_gentypes,           \
+                                         event_t event) {               \
+    if (IS_RANGE_IN_RANGE(dst, num_gentypes) && IS_RANGE_IN_RANGE(src, num_gentypes)) { \
+      return async_work_group_strided_copy(dstPtr, srcPtr, num_gentypes, event); \
+    } else {                                                            \
+      return async_work_group_strided_copy(dstPtr, srcPtr, 0, event);   \
+    }                                                                   \
+  }                                                                     \
+                                                                        \
+  _cl_overloadable                                                      \
+  event_t async_work_group_strided_copy (__global GENTYPE *dstPtr,      \
+                                         __global GENTYPE *dstFirst,    \
+                                         __global GENTYPE *dstLast,     \
+                                         const __local GENTYPE *srcPtr, \
+                                         const __local GENTYPE *srcFirst, \
+                                         const __local GENTYPE *srcLast, \
+                                         size_t num_gentypes,           \
+                                         event_t event) {               \
+    if (IS_RANGE_IN_RANGE(dst, num_gentypes) && IS_RANGE_IN_RANGE(src, num_gentypes)) { \
+      return async_work_group_strided_copy(dstPtr, srcPtr, num_gentypes, event); \
+    } else {                                                            \
+      return async_work_group_strided_copy(dstPtr, srcPtr, 0, event);   \
+    }                                                                   \
+  }
+
+#define IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(GENTYPE)          \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)         \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##2)      \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##3)      \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##4)      \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##8)      \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##16)     \
+
+#define IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_ALL()                   \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(char);                        \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(uchar);                       \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(short);                       \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(ushort);                      \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(int);                         \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(uint);                        \
+  __IF_INT64(IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(long));            \
+  __IF_INT64(IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(ulong));           \
+                                                                \
+  __IF_FP16(IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(half));      \
+  IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(float);                       \
+  __IF_FP64(IMPLEMENT_SAFE_ASYNC_COPY_FUNCS(double));
 
 #ifndef FAKECL
 #define IMPLEMENT_FOR_DUMP_ADDRESS()                    \
@@ -2268,6 +2419,9 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_VSTORE_N_TYPES(N, __private);  \
   DECLARE_SAFE_VSTORE_N_TYPES(N, __global);   \
   DECLARE_SAFE_VSTORE_N_TYPES(N, __local);
+
+DECLARE_SAFE_ASYNC_COPY_FUNCS_ALL()
+IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_ALL()
 
 DECLARE_FOR_DUMP_ADDRESS()
 IMPLEMENT_FOR_DUMP_ADDRESS()
