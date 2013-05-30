@@ -109,6 +109,7 @@ Instruction *getAsInstruction(ConstantExpr *expr) {
 // Detailed description of the algorithm is documented in [virtual bool runOnModule( Module &M )](#runOnModule)
 namespace WebCL {
 
+  // Numbers according to SPIR target
   const unsigned privateAddressSpaceNumber  = 0;
   const unsigned globalAddressSpaceNumber   = 1;
   const unsigned constantAddressSpaceNumber = 2;
