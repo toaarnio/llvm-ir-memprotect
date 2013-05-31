@@ -109,12 +109,22 @@ Instruction *getAsInstruction(ConstantExpr *expr) {
 // Detailed description of the algorithm is documented in [virtual bool runOnModule( Module &M )](#runOnModule)
 namespace WebCL {
 
+  // maybe we could avoid using the numbers if we always allocate
+  // address spaces, whose variables are in global scope from global scope
+  // and address spaces allocated with alloca in function scope
+  
   // Numbers according to SPIR target
+  //const unsigned privateAddressSpaceNumber  = 0;
+  //const unsigned globalAddressSpaceNumber   = 1;
+  //const unsigned constantAddressSpaceNumber = 2;
+  //const unsigned localAddressSpaceNumber    = 3;
+
+  // Numbers of NVPTX backend
   const unsigned privateAddressSpaceNumber  = 0;
   const unsigned globalAddressSpaceNumber   = 1;
-  const unsigned constantAddressSpaceNumber = 2;
-  const unsigned localAddressSpaceNumber    = 3;
-
+  const unsigned constantAddressSpaceNumber = 4;
+  const unsigned localAddressSpaceNumber    = 5;
+  
   // ### Common helper functions
   
   // Returns demangled function name without argument type prefix.
@@ -458,6 +468,33 @@ namespace WebCL {
       }
     };
 
+    // contains all requred information to be able to allocate area for an
+    // address space structure and to fix references of values to struct fields
+    class AddressSpaceInfo {
+    };
+      
+    class GlobalScopeAddressSpace : public AddressSpaceInfo {
+    };
+      
+    class FunctionScopeAddressSpace : public AddressSpaceInfo {
+    };
+      
+    // handles creating and bookkeeping address space info objects
+    class AddressSpaceInfoManager {
+    public:
+      void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, std::vector<Value*> &values) {
+        // TODO: make copy of values and all other data..
+        // TODO: implement!
+      }
+      void addDynamicLimitRange(Function* kernel, PointerType *type) {
+        // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
+      }
+    };
+
+    class LimitAnalyser {
+    public:
+    };
+      
     class PrivateAddressSpaceInitializer: public AddressSpaceInitializer {
     private:
       GlobalValue*             asStruct;
@@ -608,6 +645,7 @@ namespace WebCL {
     typedef std::set< LoadInst* > LoadInstrSet;
     typedef std::set< StoreInst* > StoreInstrSet;
     typedef std::set< int > IntSet;
+    typedef std::set< unsigned > UIntSet;
     typedef std::vector< Value* > ValueVector;
     typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
     typedef std::set< AreaLimit* > AreaLimitSet;
@@ -668,10 +706,22 @@ namespace WebCL {
       // addressSpaceStructs along; accesses to them are put into safeExceptions. Later on addressSpaceStructs
       // is used by createWebClKernel to put the required allocations of the local memory regions to the front
       // of the new kernels.
+      AddressSpaceInfoManager addressSpaceInfoManager;
+      LimitAnalyser limitAnalyser;
+      
+      DEBUG( dbgs() << "\n --------------- COLLECT INFORMATION OF STATIC MEMORY ALLOCATIONS --------------\n" );
+      scanStaticMemory( M, addressSpaceInfoManager );
 
-      DEBUG( dbgs() << "\n --------------- COLLECT ALLOCAS AND GLOBALS AND CREATE ONE BIG STRUCT --------------\n" );
-      consolidateStaticMemory( M, addressSpaceStructs, addressSpaceInitializers, addressSpaceEndPtrs, safeExceptions );
+      // Collect rest of the info about address space limits from kernel function arguments
+      DEBUG( dbgs() << "\n --------------- COLLECT LIMITS FROM KERNEL ARGUMENTS --------------\n" );
+      scanKernelArguments( M, addressSpaceInfoManager );
 
+      // Do the rest of the analysis to be able to resolve all places where we have to do limit checks and where to find limits for it
+      // if can be traced to some argument or to some alloca or if we can trace it to single address space
+      DEBUG( dbgs() << "\n --------------- ANALYZE WHICH OPERANDS NEEDS TO BE CHECKED --------------\n" );
+      collectOperandsWhichRequireChecking( M, limitAnalyser );
+      
+/* PROBABLY SHOULD BE DONE INTERNALLY IN MAYBE ANALYSER
       // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
       // map sorted by address space number. Also adds the address space struct to value limits so that
       // if lookups traces limits all the way up to address space allocation struct, then limits are
@@ -679,7 +729,7 @@ namespace WebCL {
       // AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits )](#findAddressSpaceLimits).
       DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
       findAddressSpaceLimits( M, valueLimits, addressSpaceLimits, addressSpaceStructs, addressSpaceEndPtrs );
-
+*/
       FunctionList unsafeBuiltinFunctions;
       FunctionList safeBuiltinFunctions;
       
@@ -724,36 +774,6 @@ namespace WebCL {
         // ArgumentMap &argumentMapping )](#createNewFunctionSignature).
         DEBUG( dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n" );
         createNewFunctionSignature( i, replacedFunctions, replacedArguments );
-
-        // Runs through all instructions in function and collects instructions.
-        // [sortInstructions( Function *F, ... ) ](#sortInstructions).
-        DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
-        sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
-
-        // Initialize the additional `allCalls` and `resolveLimitsOperands` sets which are useful in later phases.
-        allCalls.insert(internalCalls.begin(), internalCalls.end());
-        allCalls.insert(externalCalls.begin(), externalCalls.end());
-        
-        for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
-          LoadInst *load = *i;
-          resolveLimitsOperands.insert(load->getPointerOperand());
-        }
-        
-        for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
-          StoreInst *store = *i;
-          resolveLimitsOperands.insert(store->getPointerOperand());
-        }
-        
-        for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
-          CallInst *call = *i;
-          for (size_t op = 0; op < call->getNumOperands(); op++) {
-            Value *operand = call->getOperand(op);
-            /* ignore function pointers operands (not allowed in opencl)... no need to check them, but add all other pointer operands */
-            if ( operand->getType()->isPointerTy() && !operand->getType()->getPointerElementType()->isFunctionTy() ) {
-              resolveLimitsOperands.insert(operand);
-            }
-          }
-        }
       }
 
       FunctionMap unsafeToSafeBuiltin = makeUnsafeToSafeMapping( M.getContext(), 
@@ -828,6 +848,61 @@ namespace WebCL {
       dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
       */
       return true;
+    }
+      
+    void collectOperandsWhichRequireChecking( Module &M, LimitAnalyser &limitAnalyser ) {
+
+      // Sets of different type of instructions we are interested in.
+      CallInstrSet internalCalls;
+      CallInstrSet externalCalls;
+      CallInstrSet allCalls;
+      AllocaInstrSet allocas;
+      StoreInstrSet stores;
+      LoadInstrSet loads;
+      ValueSet resolveLimitsOperands;
+
+      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
+
+        if ( i->isIntrinsic() || i->isDeclaration() ) {
+            continue;
+        }
+        
+        // Runs through all instructions in function and collects instructions.
+        // [sortInstructions( Function *F, ... ) ](#sortInstructions).
+
+        DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
+        sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
+        
+        // Initialize the additional `allCalls` and `resolveLimitsOperands` sets which are useful in later phases.
+        allCalls.insert(internalCalls.begin(), internalCalls.end());
+        allCalls.insert(externalCalls.begin(), externalCalls.end());
+        
+        for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
+          LoadInst *load = *i;
+          resolveLimitsOperands.insert(load->getPointerOperand());
+        }
+        
+        for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+          StoreInst *store = *i;
+          resolveLimitsOperands.insert(store->getPointerOperand());
+        }
+        
+        for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
+          CallInst *call = *i;
+          for (size_t op = 0; op < call->getNumOperands(); op++) {
+            Value *operand = call->getOperand(op);
+            /* ignore function pointers operands (not allowed in opencl)... no need to check them, but add all other pointer operands */
+            if ( operand->getType()->isPointerTy() && !operand->getType()->getPointerElementType()->isFunctionTy() ) {
+              resolveLimitsOperands.insert(operand);
+            }
+          }
+        }
+        
+        for (ValueSet::iterator limitOperand = resolveLimitsOperands.begin(); limitOperand != resolveLimitsOperands.end() ; limitOperand++) {
+          // TODO: add all limits to analyzer... still figure out what exaclty is needed
+          // limitAnalyzer.addOperandWhichRequireChecks(*limitOperand);
+        }
+      }
     }
 
     /** Given a list of unsafe builtin functions and safe builtin
@@ -1259,19 +1334,37 @@ namespace WebCL {
       }
     }
 
+    void scanKernelArguments( Module &M, AddressSpaceInfoManager &infoManager ) {
+      NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
+      if (oclKernels != NULL) {
+        for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
+          MDNode* md = oclKernels->getOperand(op);
+          DEBUG( dbgs() << "Scanning arguments of " << op << ": "; md->print(dbgs()); dbgs() << " --> " );
+          Function* kernel = dyn_cast<Function>(md->getOperand(0));
+          
+          for( Function::arg_iterator a = kernel->arg_begin(); a != kernel->arg_end(); ++a ) {
+            Argument* arg = a;
+            Type* t = arg->getType();
+            if ( t->isPointerTy() ) {
+              infoManager.addDynamicLimitRange(kernel, dyn_cast<PointerType>(t));
+            }
+          }
+        }
+      }
+    }
+
     /**
      * Collect all allocas and global values for each address space and create one struct for each
      * address space.
      */
-    void consolidateStaticMemory( Module &M, 
-                                  AddressSpaceStructByAddressSpaceMap& asStructs, 
-                                  AddressSpaceInitializerByAddressSpaceMap& asInits,
-                                  GlobalValueMap& addressSpaceEndPtrs,
-                                  ValueSet &safeExceptions ) {
+    void scanStaticMemory( Module &M, AddressSpaceInfoManager &infoManager ) {
+      
       LLVMContext& c = M.getContext();
       
       ValueVectorByAddressSpaceMap staticAllocations;
-
+      // set of address spaces which we need to allocate from global scope
+      UIntSet globalScopeAdressSpaces;
+            
       for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
         // collect only named linked addresses (for unnamed there cannot be relative references anywhere) externals are allowed only in special case.
         DEBUG( dbgs()  << "Found global: "; g->print(dbgs());
@@ -1287,6 +1380,7 @@ namespace WebCL {
         } else {
           DEBUG( dbgs() << " ### Collected to address space structure " << g->getType()->getAddressSpace() << "\n"; );
           staticAllocations[g->getType()->getAddressSpace()].push_back(g);
+          globalScopeAdressSpaces.insert(g->getType()->getAddressSpace());
         }
       }
 
@@ -1297,13 +1391,13 @@ namespace WebCL {
         BasicBlock &entry = f->getEntryBlock();
         for (BasicBlock::iterator i = entry.begin(); i != entry.end(); i++) {
           AllocaInst *alloca = dyn_cast<AllocaInst>(i);
-          if (alloca != NULL && !unsafeBuiltins.count(extractItaniumDemangledFunctionName(f->getName().str())) ) {
-            staticAllocations[privateAddressSpaceNumber].push_back(alloca);
+          if (alloca != NULL && !unsafeBuiltins.count(extractItaniumDemangledFunctionName(f->getName().str())) ) { 
+            staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
           }
         }
       }
       
-      // simple fix of alignment of mem intrinsics
+      // simple fix of alignment of mem intrinsics because some alignments might change when variables are moved to struct
       for (Module::iterator f = M.begin(); f != M.end(); f++) {
         if (f->isIntrinsic()) {
           if (f->getName().find("llvm.mem") == 0) {
@@ -1319,7 +1413,7 @@ namespace WebCL {
         }
       }
       
-      // create struct for each address space, currently not doing any special ordering 
+      // create struct for each address space, currently not doing any special ordering
       for (ValueVectorByAddressSpaceMap::iterator i = staticAllocations.begin(); i != staticAllocations.end(); i++) {
         unsigned addressSpace = i->first;
         std::vector<Value*> &values = i->second;
@@ -1363,17 +1457,38 @@ namespace WebCL {
 
         ArrayRef< Type* > structElementTypesArrayRef( structElementTypes );
         ArrayRef<Constant*> structElementData( structInitData );
-
         
         std::stringstream structName;
         structName << "AddressSpace" << addressSpace << "StaticData";
         StructType* addressSpaceStructType = StructType::create(c, structElementTypesArrayRef, structName.str() + "Type");
 
         // create struct of generated type and add to module
+        // by opencl specs the only struct with initializers is constant address space
         Constant* addressSpaceDataInitializer = ConstantStruct::get( addressSpaceStructType, structElementData );
+
+        // just add collected data to our info manager, which can later on create necessary requi
+        infoManager.addAddressSpace(addressSpace, globalScopeAdressSpaces.count(addressSpace) > 0, addressSpaceStructType, addressSpaceDataInitializer, values);
+      }
+    }
+        /*
+        // if global address space struct, create global variable
+        if (globalScopeAdressSpaces.count(addressSpace)) {
+          
+          
+          GlobalVariable *aSpaceStruct = new GlobalVariable
+            (M, addressSpaceStructType, false, GlobalValue::InternalLinkage, addressSpaceDataInitializer,
+             structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
+          asStructs[addressSpace] = aSpaceStruct;
+        } else {
+          // TODO: not global so just add this to map, which tells that we need to allocate this in kernel initialization code
+          // TODO: how to store mapping, which field refers to which value? index, Value map?
+        }
+
+
         bool dereferenceSpaceStruct;
         GlobalVariable *aSpaceStruct;
         PrivateAddressSpaceInitializer* init = 0;
+
         if (addressSpace == privateAddressSpaceNumber) {
           // using global address space intead of private as the
           // existing 'private' address space values are put in the
@@ -1407,7 +1522,13 @@ namespace WebCL {
         for (size_t valIndex = 0; valIndex < values.size(); valIndex++) {
           Value* origVal = values[valIndex];
 
+          // TODO: when this might happen?
           if (!origVal) continue;
+          
+          // should we also do the
+          structVal = ConstantExpr::getInBoundsGetElementPtr
+            (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex));
+          structVal->setName(origVal->getName());
 
           // get field of struct
           Value *structVal;
@@ -1449,7 +1570,7 @@ namespace WebCL {
               (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex));
             structVal->setName(origVal->getName());
           }
-          
+
           // Currently LLVM IR does not support GEP in alias. If support is added, uncommenting this will greatly improve readability of produced code
           // for alias: GlobalAlias *fieldAlias = new GlobalAlias(structVal->getType(), GlobalValue::InternalLinkage, "", structVal, &M);
 
@@ -1469,7 +1590,8 @@ namespace WebCL {
               structVal->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
               alloca->eraseFromParent();
             } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
-              // for alias: fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
+
+ // for alias: fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
               structVal->setName(aSpaceStruct->getName() + "." + origVal->getName());
               global->eraseFromParent();
             }
@@ -1492,7 +1614,9 @@ namespace WebCL {
         }
       }
     }
+         */
 
+         
     /**
      * Checks if given function declaration is one of webcl builtins
      * 
