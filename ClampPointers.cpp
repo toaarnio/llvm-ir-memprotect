@@ -148,6 +148,18 @@ namespace WebCL {
     return retVal;
   }
 
+  // useful for getting the next-of-iterator in an expression
+  template <typename T>
+  T next(T v) {
+    ++v;
+    return v;
+  }
+
+  // used for skipping programAllocationsArgument. This label is useful for reading and searching the code.
+  Function::arg_iterator skipPaa(Function::arg_iterator it) {
+    return next(it);
+  }
+
   // Creates mangled name (own mangling scheme) to be able to select correct safe builtin function implementations to call.
   // All calls to functions with names mangled by this algorithm should be inlined and removed afterwards by later optimizations.
   //
@@ -344,9 +356,13 @@ namespace WebCL {
      */
     SafeArgTypes( LLVMContext& c,
                   const TypeVector& types,
-                  bool dontTouchArguments ) {
+                  bool dontTouchArguments,
+                  Type* programAllocationsType ) {
         
       int argNo = 0;
+      if (programAllocationsType) {
+        argTypes.push_back( programAllocationsType );
+      }
       for( TypeVector::const_iterator typeIt = types.begin(); typeIt != types.end(); ++typeIt, ++argNo ) {
         Type* t = *typeIt;
 
@@ -415,8 +431,8 @@ namespace WebCL {
       }
     }
 
-    Signature safe( LLVMContext& c ) {
-      SafeArgTypes safeAt( c, argTypes, false );
+    Signature safe( LLVMContext& c, Type* programAllocationsType ) {
+      SafeArgTypes safeAt( c, argTypes, false, programAllocationsType );
       Signature s;
       s.name = name;
       s.argTypes = safeAt.argTypes;
@@ -697,6 +713,12 @@ namespace WebCL {
       // Set where is collected all values, which will not require boundary checks to
       // memory accesses. These have been resolved to be safe accesses in compile time.
       ValueSet safeExceptions;
+      Type* programAllocationsType;
+      { 
+        // insert code here
+        LLVMContext& c = M.getContext();
+        programAllocationsType = IntegerType::get(c, 32);
+      }
 
       // Collect all allocas and global variables for each address space to struct to be able to resolve
       // static area reference limits easily. See example in [consolidateStaticMemory( Module &M
@@ -773,7 +795,7 @@ namespace WebCL {
         // [Function* createNewFunctionSignature(Function *F, FunctionMap &functionMapping,
         // ArgumentMap &argumentMapping )](#createNewFunctionSignature).
         DEBUG( dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n" );
-        createNewFunctionSignature( i, replacedFunctions, replacedArguments );
+        createNewFunctionSignature( i, replacedFunctions, replacedArguments, programAllocationsType );
       }
 
       FunctionMap unsafeToSafeBuiltin = makeUnsafeToSafeMapping( M.getContext(), 
@@ -838,7 +860,7 @@ namespace WebCL {
       // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
       // [makeBuiltinCallsSafe( ... )](#makeBuiltinCallsSafe)
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
-      makeBuiltinCallsSafe(externalCalls, valueLimits, unsafeToSafeBuiltin);
+      makeBuiltinCallsSafe(externalCalls, valueLimits, unsafeToSafeBuiltin, programAllocationsType);
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
@@ -928,7 +950,7 @@ namespace WebCL {
             unsafeIt != unsafeBuiltinFunctions.end();
             ++unsafeIt ) {
         Signature origSig = Signature(*unsafeIt);
-        Signature safeSig = origSig.safe(c);
+        Signature safeSig = origSig.safe(c, 0);
         std::map<Signature, Function*>::const_iterator safeSigIt = 
           safeSignatureMap.find(safeSig);
         if ( safeSigIt != safeSignatureMap.end() ) {
@@ -938,6 +960,13 @@ namespace WebCL {
       }
       
       return mapping;
+    }
+
+    /** Given a function, retrieve the value for the program allocations value passed as the function's first
+        parameter. */
+    Argument* getProgramAllocations(Function& F) {
+      Argument& arg = *F.arg_begin();
+      return &arg;
     }
 
     /** Given a manually written safeptr C function returns a function
@@ -1178,7 +1207,9 @@ namespace WebCL {
 
         Function::arg_iterator originalArgIter = originalFunc->arg_begin();
 
-        for( Function::arg_iterator a = safePointerFunction->arg_begin(); a != safePointerFunction->arg_end(); ++a ) {
+        for( Function::arg_iterator a = skipPaa(safePointerFunction->arg_begin());
+             a != safePointerFunction->arg_end();
+             ++a ) {
           Argument &originalArg = *originalArgIter;
           Argument &replaceArg = *a;
           
@@ -1731,6 +1762,9 @@ namespace WebCL {
       IRBuilder<> blockBuilder( kernelBlock );
 
       std::vector<Value*> args;
+      Value* programAllocationsArgument = getConstInt(c, 1919);
+      args.push_back(programAllocationsArgument);
+
       Function::arg_iterator origArg = origKernel->arg_begin();
       for( Function::arg_iterator a = webClKernel->arg_begin(); a != webClKernel->arg_end(); ++a ) {
         Argument* arg = a;
@@ -2154,7 +2188,8 @@ namespace WebCL {
      * Goes through external function calls and if call is unsafe opencl call convert it to safe webcl implementation
      * which operates with smart pointers
      */
-    void makeBuiltinCallsSafe(CallInstrSet &calls, AreaLimitByValueMap &valLimits, const FunctionMap& unsafeToSafeBuiltin) {
+    void makeBuiltinCallsSafe(CallInstrSet &calls, AreaLimitByValueMap &valLimits, const FunctionMap& unsafeToSafeBuiltin,
+                              Type* programAllocationsType) {
       // if mapping is needed outside export this to be reference parameter instead of local 
       FunctionMap safeBuiltins;
       ArgumentMap dummyArgMap;
@@ -2171,7 +2206,7 @@ namespace WebCL {
         if ( unsafeToSafeBuiltinIt != unsafeToSafeBuiltin.end() ) {
           Function *newFun = unsafeToSafeBuiltinIt->second;
           ArgumentMap dummyArg;
-          convertCallToUseSmartPointerArgs( call, newFun, dummyArg, valLimits );
+          convertCallToUseSmartPointerArgs( call, newFun, dummyArg, valLimits, false );
         } else if ( isWebClBuiltin(oldFun) ) {
 
           std::string demangledName = extractItaniumDemangledFunctionName(oldFun->getName().str());
@@ -2185,7 +2220,7 @@ namespace WebCL {
             
             // if safe version is not yet generated do it first..
             if ( safeBuiltins.count(oldFun) == 0 ) {
-              Function *newFun = createNewFunctionSignature(oldFun, safeBuiltins, dummyArgMap);
+              Function *newFun = createNewFunctionSignature(oldFun, safeBuiltins, dummyArgMap, programAllocationsType);
               // simple name mangler to be able to select, which implementation to call (couldn't find easy way to do Itanium C++ mangling here)
               // luckily the cases that needs mangling are pretty limited so we can keep it simple
               newFun->setName(customMangle(oldFun, demangledName + "__safe__"));
@@ -2193,7 +2228,7 @@ namespace WebCL {
             
             Function *newFun = safeBuiltins[oldFun];
             ArgumentMap dummyArg;
-            convertCallToUseSmartPointerArgs(call, newFun, dummyArg, valLimits);
+            convertCallToUseSmartPointerArgs(call, newFun, dummyArg, valLimits, false);
           }
 
         } else {
@@ -2232,14 +2267,15 @@ namespace WebCL {
         }
 
         Function* newFun = replacedFunctions[oldFun];
-        convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, valLimits);
+        convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, valLimits, true);
       }
     }
     
     /**
      * Converts call function to use new function as called function and changes all pointer parameters to be smart pointers.
      */
-    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, ArgumentMap &replacedArguments, AreaLimitByValueMap &valLimits) {
+    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, ArgumentMap &replacedArguments, AreaLimitByValueMap &valLimits,
+                                          bool useProgramAllocationsArgument) {
 
       Function* oldFun = call->getCalledFunction();
       call->setCalledFunction(newFun);
@@ -2248,8 +2284,21 @@ namespace WebCL {
       // instead of pointers directly
       int op = 0;
       Function::arg_iterator newArgIter = newFun->arg_begin();
+      LLVMContext& c = newFun->getContext();
+      if (useProgramAllocationsArgument) {
+        newArgIter = skipPaa(newArgIter);
+        std::vector<Value*> newCallArguments = std::vector<Value*>(call->value_op_begin(), call->value_op_end());
+        // erase the function argument from the end
+        newCallArguments.erase(newCallArguments.end() - 1, newCallArguments.end());
+        // and insert the programAllocationsArgument to the front
+        newCallArguments.insert(newCallArguments.begin(), getProgramAllocations(*call->getParent()->getParent()));
+        CallInst* newCall = CallInst::Create(newFun, newCallArguments, "", call);
+        call->replaceAllUsesWith(newCall);
+        call->eraseFromParent();
+        call = newCall;
+        op = 1; // start processing after the programAllocationsArgument
+      }
       for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
-        LLVMContext& c = newFun->getContext();
         Argument* oldArg = a;
         Argument* newArg = newArgIter;
         newArgIter++;
@@ -2402,10 +2451,10 @@ namespace WebCL {
      * If int main(int argc, char *argv[]) add to safe functions and safe arguments or assert because of those parameters for now.
      * 
      */
-    virtual Function* createNewFunctionSignature( 
-      Function *F,  
-      FunctionMap &functionMapping, 
-      ArgumentMap &argumentMapping ) {
+    virtual Function* createNewFunctionSignature(Function *F,  
+                                                 FunctionMap &functionMapping, 
+                                                 ArgumentMap &argumentMapping,
+                                                 Type* programAllocationsType) {
        
       LLVMContext& c = F->getContext();
 
@@ -2424,7 +2473,7 @@ namespace WebCL {
       }
       
       // convert function signature to use pointer structs instead of direct pointers
-      SafeArgTypes args(c, typesOfArgumentList(F->getArgumentList()), dontTouchArguments);
+      SafeArgTypes args(c, typesOfArgumentList(F->getArgumentList()), dontTouchArguments, programAllocationsType);
       TypeVector& param_types = args.argTypes;
       IntSet& safeTypeArgNos = args.safeArgNos; // argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute
 
@@ -2434,9 +2483,11 @@ namespace WebCL {
 
       Function *new_function = Function::Create( new_function_type, F->getLinkage() );
       new_function->copyAttributesFrom( F );
-      
+      new_function->arg_begin()->setName("ProgramAllocations");
+ 
       F->getParent()->getFunctionList().insert( F, new_function );
       new_function->setName( F->getName() + "__smart_ptrs__" );
+
 
       // add new function to book keepig to show what was replaced
       functionMapping.insert( std::pair< Function*, Function* >( F, new_function ) );
@@ -2444,12 +2495,14 @@ namespace WebCL {
       DEBUG( dbgs() << "-- Created new signature for: " << F->getName() << " "; F->getType()->print(dbgs()) );
       DEBUG( dbgs() << "\nnew signature: " << new_function->getName() << " "; new_function->getType()->print(dbgs()); dbgs() << "\n" );
 
+      Function::arg_iterator a_new = skipPaa(new_function->arg_begin());
+
       // map arguments of original function to new replacements
       for( Function::arg_iterator 
              a = F->arg_begin(), 
-             E = F->arg_end(), 
-             a_new = new_function->arg_begin(); a != E; ++a, ++a_new ) {             
-
+             E = F->arg_end();
+           a != E;
+           ++a, ++a_new ) {             
         // remove attribute which does not make sense for non-pointer argument
         // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
         int argIdx = a_new->getArgNo()+1;
