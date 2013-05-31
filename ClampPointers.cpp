@@ -505,6 +505,11 @@ namespace WebCL {
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
         // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
       }
+      void generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
+      }
+      void replaceUsesOfOriginalVariables() {
+        // TODO: go through value mappings of every address space that we have created and replace all uses with.
+      }
     };
 
     class LimitAnalyser {
@@ -689,19 +694,16 @@ namespace WebCL {
       // Function arguments mapping to find replacement arguments for old function arguments.
       ArgumentMap replacedArguments;
 
-      // Sets of different type of instructions we are interested in.
+      // TODO: remove thees
       CallInstrSet internalCalls;
       CallInstrSet externalCalls;
       CallInstrSet allCalls;
       AllocaInstrSet allocas;
       StoreInstrSet stores;
       LoadInstrSet loads;
-      
-      // All values which might require that limits are resolved. Basically all load/store/call
-      // pointer operands are added here. Call pointer operands needs to be resolved, because we need
-      // to know which limits we have to pass with a pointer.
       ValueSet resolveLimitsOperands;
-
+      // TODO: --- end
+      
       // Bookkeeping of which limits certain value respects.
       AreaLimitByValueMap valueLimits;
       // Bookkeeping of all available limits of address spaces.
@@ -825,19 +827,25 @@ namespace WebCL {
       // AreaLimitSetByAddressSpaceMap &asLimits)](#createKernelEntryPoints). addressSpaceStructs is used for
       // putting the allocations of private memory structs to the beginning of the kernels.
       DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
-      createKernelEntryPoints(M, replacedFunctions, addressSpaceLimits, addressSpaceStructs, addressSpaceInitializers, safeExceptions );
+      createKernelEntryPoints(M, replacedFunctions, addressSpaceInfoManager );
 
       // The same but for only 'main' functions; currently only handles the allocation of private structs
       if (RunUnsafeMode) {
         createMainEntryPoint(M, replacedFunctions, addressSpaceInitializers, safeExceptions);
       }
 
+      /** TODO: THIS SHOULD HAVE BEEN ALREADY DONE IN ANALYZE PHASE FOR THE ORIGINAL PROGRAM OR INTERNALLY IN LIMIT ANALYSER
       // Traces limits for all instructions and values in the module and adds them to `valueLimits`. After this we should be able
       // to get min and max addresses for all instructions / globals that we are interested in. [findLimits(FunctionMap &replacedFunctions,
       // ValueSet &checkOperands, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits)](#findLimits).
       // Limit finding is not performed for manually written safe builtin functions.
       DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY REQUIRED OPERAND --------------\n" );
       findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits, safeBuiltinFunctionSet);
+      */
+      
+      // fix all old alloca and globals uses to point new variables (required to be able to get limits correctly for call replacement ?)
+      DEBUG( dbgs() << "\n --------------- FIX REFRENCES OF OLD ALLOCAS AND GLOBALS TO POINT ADDRESS SPACE STRUCT FIELDS --------------\n" );
+      addressSpaceInfoManager.replaceUsesOfOriginalVariables();
       
       // Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
       // [fixCallsToUseChangedSignatures(...)](#fixCallsToUseChangedSignatures)
@@ -1670,11 +1678,9 @@ namespace WebCL {
      * kernel name and add implementation, that just resolves the last address of array and passes
      * it as limit to safepointer version of original kernel.
      */
-    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions, 
-                                 AreaLimitSetByAddressSpaceMap &asLimits,
-                                 AddressSpaceStructByAddressSpaceMap& asStructs,
-                                 const AddressSpaceInitializerByAddressSpaceMap& asInits,
-                                 ValueSet& safeExceptions) {
+    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions,
+                                 AddressSpaceInfoManager &infoManager) {
+
       NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
       if (oclKernels != NULL) {
         for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
@@ -1687,7 +1693,7 @@ namespace WebCL {
           // compatible version.
           if (replacedFunctions.count(oldFun) > 0) {
             Function *smartKernel = replacedFunctions[oldFun];
-            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, asLimits, asStructs, asInits, safeExceptions);
+            newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, infoManager);
             // make smartKernel to be internal linkage to allow better optimization
             smartKernel->setLinkage(GlobalValue::InternalLinkage);
             // TODO: if found nvptx_kernel attribute, move it to new kernel
@@ -1732,10 +1738,8 @@ namespace WebCL {
      * smart pointer, which is used to make call to smartKernel.
      */
     Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel,
-                                AreaLimitSetByAddressSpaceMap &asLimits,
-                                AddressSpaceStructByAddressSpaceMap& asStructs,
-                                const AddressSpaceInitializerByAddressSpaceMap& asInits,
-                                ValueSet& safeExceptions) {
+                                AddressSpaceInfoManager &infoManager) {
+
       LLVMContext &c = M.getContext();
 
       // create argument list for WebCl kernel
@@ -1761,10 +1765,18 @@ namespace WebCL {
       BasicBlock* kernelBlock = BasicBlock::Create( c, "entry", webClKernel );
       IRBuilder<> blockBuilder( kernelBlock );
 
+      // TODO: tell address space info manager that it should generate the programAllocations structure and its init code here
+      // NOTE: this also generates GlobalScope address space structures on demand (they are needed to pass some limits).
+      infoManager.generateProgramAllocationCode(blockBuilder);
+      
       std::vector<Value*> args;
       Value* programAllocationsArgument = getConstInt(c, 1919);
       args.push_back(programAllocationsArgument);
 
+      
+/* TODO: fix calling smart kernel.. probably one can ask limits or even safe pointer directly from manager... 
+ 
+>>>>>>> Drafted new algorithm a bit further.
       Function::arg_iterator origArg = origKernel->arg_begin();
       for( Function::arg_iterator a = webClKernel->arg_begin(); a != webClKernel->arg_end(); ++a ) {
         Argument* arg = a;
@@ -1817,9 +1829,9 @@ namespace WebCL {
              } dbgs() << "\n"; ) ;
       DEBUG( dbgs() << "Function arguments: "; 
              for ( Function::arg_iterator a = smartKernel->arg_begin(); a != smartKernel->arg_end(); ++a ) { 
-               a->getType()->print(dbgs()); dbgs() << " "; 
+               a->getType()->print(dbgs()); dbgs() << " ";
              } dbgs() << "\n"; ) ;
-      
+*/
       blockBuilder.CreateCall(smartKernel, args);
       blockBuilder.CreateRetVoid();
 
