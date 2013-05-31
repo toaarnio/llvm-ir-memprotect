@@ -11,7 +11,7 @@ if [ $# -lt 1 ]; then
 fi
 
 # hacky way to get list of kernel function names
-KERNELS=$(cat $1 | grep metadata | grep "@" | sed -E 's/.*{.*@(.*)}.*/\1/')
+KERNELS=$(cat $1 | grep metadata | grep "@" | sed -e 's/.*{.*@\(.*\)}.*/\1/')
 
 #create list of functions
 API=""
