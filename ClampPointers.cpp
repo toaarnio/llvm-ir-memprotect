@@ -1498,7 +1498,8 @@ namespace WebCL {
             elementType = global->getType()->getElementType();
             if (global->hasInitializer()) {
               initializer = global->getInitializer();
-              global->setInitializer(NULL);
+              // TODO: disable initializer removal for now (so it compiles)
+              //global->setInitializer(NULL);
             }
           } else {
             dbgs() << "Got unexpected static allocation: "; val->print(dbgs()); dbgs() << "\n";
@@ -1796,9 +1797,8 @@ namespace WebCL {
       args.push_back(programAllocationsArgument);
 
       
-/* TODO: fix calling smart kernel.. probably one can ask limits or even safe pointer directly from manager... 
+      //TODO: fix calling smart kernel.. probably one can ask limits or even safe pointer directly from manager... 
  
->>>>>>> Drafted new algorithm a bit further.
       Function::arg_iterator origArg = origKernel->arg_begin();
       for( Function::arg_iterator a = webClKernel->arg_begin(); a != webClKernel->arg_end(); ++a ) {
         Argument* arg = a;
@@ -1818,7 +1818,8 @@ namespace WebCL {
           std::stringstream ss; ss << pointerType->getAddressSpace();
           globalMin->setName(Twine() + origArg->getName() + ".AS" + ss.str() + ".Min");
           globalMax->setName(Twine() + origArg->getName() + ".AS" + ss.str() + ".Max");
-          asLimits[pointerType->getAddressSpace()].insert( AreaLimit::Create(globalMin, globalMax, true) );
+          // TODO: disable address space insertion for now (so it compiles)
+          //asLimits[pointerType->getAddressSpace()].insert( AreaLimit::Create(globalMin, globalMax, true) );
           
           Value* elementCount = (++a);
           a->setName(origArg->getName() + ".size");
@@ -1839,11 +1840,11 @@ namespace WebCL {
         origArg++;
       }
 
-      for (AddressSpaceInitializerByAddressSpaceMap::const_iterator it = asInits.begin();
-           it != asInits.end();
-           ++it) {
-        it->second->initialize(c, blockBuilder, safeExceptions);
-      }
+      // for (AddressSpaceInitializerByAddressSpaceMap::const_iterator it = asInits.begin();
+      //      it != asInits.end();
+      //      ++it) {
+      //   it->second->initialize(c, blockBuilder, safeExceptions);
+      // }
 
       DEBUG( dbgs() << "\nCreated arguments: "; 
              for ( size_t i = 0; i < args.size(); i++ ) { 
@@ -1853,7 +1854,7 @@ namespace WebCL {
              for ( Function::arg_iterator a = smartKernel->arg_begin(); a != smartKernel->arg_end(); ++a ) { 
                a->getType()->print(dbgs()); dbgs() << " ";
              } dbgs() << "\n"; ) ;
-*/
+
       blockBuilder.CreateCall(smartKernel, args);
       blockBuilder.CreateRetVoid();
 

@@ -1,5 +1,6 @@
 // RUN: $OCLANG $TEST_SRC -S -o $OUT_FILE.ll &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll
+// RUN: ../clean_unused_code.sh $OUT_FILE.ll &&
+// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll.cleaned.ll -o $OUT_FILE.clamped.ll
 
 __kernel void test_kernel(__global float* in, __global float* out) {
   int i = get_global_id(0);
