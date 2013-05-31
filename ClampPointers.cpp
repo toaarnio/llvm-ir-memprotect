@@ -518,39 +518,12 @@ namespace WebCL {
       }
     };
 
-    // contains all requred information to be able to allocate area for an
-    // address space structure and to fix references of values to struct fields
-    class AddressSpaceInfo {
-    };
-      
-    class GlobalScopeAddressSpace : public AddressSpaceInfo {
-    };
-      
-    class FunctionScopeAddressSpace : public AddressSpaceInfo {
-    };
-      
-    // handles creating and bookkeeping address space info objects
-    class AddressSpaceInfoManager {
-    public:
-      void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, std::vector<Value*> &values) {
-        // TODO: make copy of values and all other data..
-        // TODO: implement!
-      }
-      void addDynamicLimitRange(Function* kernel, PointerType *type) {
-        // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
-      }
-      void generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
-      }
-      void replaceUsesOfOriginalVariables() {
-        // TODO: go through value mappings of every address space that we have created and replace all uses with.
-      }
-    };
-
     typedef std::map< Function*, Function* > FunctionMap;
     typedef std::list< Function* > FunctionList;
     typedef std::map< Argument*, Argument* > ArgumentMap;
     typedef std::set< Function* > FunctionSet;
     typedef std::set< Argument* > ArgumentSet;
+    typedef std::set< Instruction* > InstrSet;
     typedef std::set< CallInst* > CallInstrSet;
     typedef std::set< AllocaInst* > AllocaInstrSet;
     typedef std::set< GetElementPtrInst* > GepInstrSet;
@@ -677,10 +650,7 @@ namespace WebCL {
       FunctionSet    safeBuiltinFunctions;
     };
 
-    class LimitAnalyser {
-    public:
-    };
-      
+
     class PrivateAddressSpaceInitializer: public AddressSpaceInitializer {
     private:
       GlobalValue*             asStruct;
@@ -823,7 +793,49 @@ namespace WebCL {
     typedef std::set< AreaLimit* > AreaLimitSet;
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
+
+    // contains all requred information to be able to allocate area for an
+    // address space structure and to fix references of values to struct fields
+    class AddressSpaceInfo {
+    };
     
+    class GlobalScopeAddressSpace : public AddressSpaceInfo {
+    };
+    
+    class FunctionScopeAddressSpace : public AddressSpaceInfo {
+    };
+    
+    // handles creating and bookkeeping address space info objects
+    class AddressSpaceInfoManager {
+    public:
+      void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, std::vector<Value*> &values) {
+        // TODO: make copy of values and all other data..
+        // TODO: implement!
+      }
+      void addDynamicLimitRange(Function* kernel, PointerType *type) {
+        // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
+      }
+      void generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
+      }
+      void replaceUsesOfOriginalVariables() {
+        // TODO: go through value mappings of every address space that we have created and replace all uses with.
+      }
+    };
+    
+    class LimitAnalyser {
+    private:
+      std::map< Value*, AreaLimitSet> limitsOfValue;
+      InstrSet needChecks;
+    public:
+      AreaLimitSet& getAreaLimitSet(Value *val) {
+        return limitsOfValue[val];
+      }
+      
+      InstrSet& needCheck() {
+        return needChecks;
+      }
+    };
+
     // ## <a id="runOnModule"></a> Run On Module
     //
     // This function does the top-level algorithm for instrumentation.
@@ -982,14 +994,32 @@ namespace WebCL {
       // Analyze code and find out the cases where we can be sure that memory access is safe in compile time and check can be omitted.
       // NOTE: better place for this could be already before any changes has been made to original code.
       // [collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions)](#collectSafeExceptions)
+      
+      /*
       DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED --------------\n" );
       collectSafeExceptions(resolveLimitsOperands, functionManager.getReplacedFunctions(), safeExceptions);
+      collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions);
+       */
+      
 
       // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
       // creates some memory intrinsics we might need to take care of checking their operands as well.
       // [addBoundaryChecks( ... )](#addBoundaryChecks)
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
-      addBoundaryChecks(functionManager.getStores(), functionManager.getLoads(), valueLimits, addressSpaceLimits, safeExceptions);
+      // addBoundaryChecks(functionManager.getStores(), functionManager.getLoads(), valueLimits, addressSpaceLimits, safeExceptions);
+
+      // TODO: wrap to addBoundaryChecks function....
+      for (InstrSet::iterator inst = limitAnalyser.needCheck().begin(); inst != limitAnalyser.needCheck().end(); inst++) {
+        Value *ptrOperand = NULL;
+        if (LoadInst *load = dyn_cast<LoadInst>(*inst)) {
+          ptrOperand = load->getPointerOperand();
+        } else if (StoreInst *store = dyn_cast<StoreInst>(*inst)) {
+          ptrOperand = store->getPointerOperand();
+        } else {
+          fast_assert(false, "Can add check only for load or store");
+        }
+        createLimitCheck(ptrOperand, limitAnalyser.getAreaLimitSet(ptrOperand), *inst);
+      }
 
       // Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
       // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
