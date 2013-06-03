@@ -31,6 +31,7 @@
 #include <iostream>
 #include <sstream>
 #include <cstdio>
+#include <iterator>
 
 using namespace llvm;
 
@@ -576,6 +577,22 @@ namespace WebCL {
       void replaceFunction(Function *orig, Function *replacement) {
         replacedFunctions[orig] = replacement;
       }
+      std::insert_iterator<FunctionMap> replaceFunctionInserter() {
+        return std::inserter(replacedFunctions, replacedFunctions.begin());
+      }
+      const FunctionMap &getReplacedFunctions() const {
+        return replacedFunctions;
+      }
+
+      void replaceArguments(Argument *orig, Argument *replacement) {
+        replacedArguments.insert(std::make_pair(orig, replacement));
+      }
+      std::insert_iterator<ArgumentMap> replaceArgumentInserter() {
+        return std::inserter(replacedArguments, replacedArguments.begin());
+      }
+      const ArgumentMap &getReplacedArguments() const {
+        return replacedArguments;
+      }
 
       void replaceArguments(const ArgumentMap& replacements) {
         replacedArguments.insert(replacements.begin(), replacements.end());
@@ -640,7 +657,7 @@ namespace WebCL {
         return unsafeBuiltinFunctions;
       }
 
-    public: // temporary
+    private:
       // doesn't exist: the class is not copyable
       void operator=(FunctionManager& other);
 
@@ -655,7 +672,6 @@ namespace WebCL {
       AllocaInstrSet allocas;
       StoreInstrSet  stores;
       LoadInstrSet   loads;
-      ValueSet       resolveLimitsOperands;
 
       FunctionSet    unsafeBuiltinFunctions;
       FunctionSet    safeBuiltinFunctions;
@@ -821,17 +837,9 @@ namespace WebCL {
     // 7. Fix calls to unsafe builtin functions to call safe versions instead.
     virtual bool runOnModule( Module &M ) {
       FunctionManager functionManager;
-      // Functions which has been replaced with new ones when signatures are modified.
-      FunctionMap &replacedFunctions = functionManager.replacedFunctions;
-      // Function arguments mapping to find replacement arguments for old function arguments.
-      ArgumentMap &replacedArguments = functionManager.replacedArguments;
-
-      // TODO: remove thees
-      StoreInstrSet &stores = functionManager.stores;
-      LoadInstrSet &loads = functionManager.loads;
-      ValueSet &resolveLimitsOperands = functionManager.resolveLimitsOperands;
-      // TODO: --- end
       
+      ValueSet       resolveLimitsOperands;
+
       // Bookkeeping of which limits certain value respects.
       AreaLimitByValueMap valueLimits;
       // Bookkeeping of all available limits of address spaces.
@@ -916,7 +924,8 @@ namespace WebCL {
         // [Function* createNewFunctionSignature(Function *F, FunctionMap &functionMapping,
         // ArgumentMap &argumentMapping )](#createNewFunctionSignature).
         DEBUG( dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n" );
-        createNewFunctionSignature( i, replacedFunctions, replacedArguments, programAllocationsType );
+        createNewFunctionSignature( i, functionManager.replaceFunctionInserter(), functionManager.replaceArgumentInserter(), 
+                                    programAllocationsType );
       }
 
       FunctionMap unsafeToSafeBuiltin = makeUnsafeToSafeMapping( M.getContext(), functionManager);
@@ -931,7 +940,9 @@ namespace WebCL {
       // Manually written safe implementations of unsafe builtin functions are handled slightly differently, so a list of them
       // is passed as an argument.
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
-      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, functionManager.getSafeBuiltinFunctions());
+      moveOldFunctionImplementationsToNewSignatures(functionManager.getReplacedFunctions(), 
+                                                    functionManager.getReplacedArguments(),
+                                                    functionManager.getSafeBuiltinFunctions());
       
       // Finds out kernel functions from Module metadata and creates WebCL kernels from them. `kernel void
       // foo(global float *bar)` -> `kernel void foo(global float *bar, size_t bar_size)`. Also calculates and
@@ -941,11 +952,11 @@ namespace WebCL {
       // AreaLimitSetByAddressSpaceMap &asLimits)](#createKernelEntryPoints). addressSpaceStructs is used for
       // putting the allocations of private memory structs to the beginning of the kernels.
       DEBUG( dbgs() << "\n --------------- CREATE KERNEL ENTRY POINTS AND GET ADDITIONAL LIMITS FROM KERNEL ARGUMENTS --------------\n" );
-      createKernelEntryPoints(M, replacedFunctions, addressSpaceInfoManager );
+      createKernelEntryPoints(M, functionManager.getReplacedFunctions(), addressSpaceInfoManager );
 
       // The same but for only 'main' functions; currently only handles the allocation of private structs
       if (RunUnsafeMode) {
-        createMainEntryPoint(M, replacedFunctions, addressSpaceInitializers, safeExceptions);
+        createMainEntryPoint(M, functionManager.getReplacedFunctions(), addressSpaceInitializers, safeExceptions);
       }
 
       /** TODO: THIS SHOULD HAVE BEEN ALREADY DONE IN ANALYZE PHASE FOR THE ORIGINAL PROGRAM OR INTERNALLY IN LIMIT ANALYSER
@@ -964,19 +975,21 @@ namespace WebCL {
       // Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
       // [fixCallsToUseChangedSignatures(...)](#fixCallsToUseChangedSignatures)
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
-      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, functionManager.getInternalCalls(), valueLimits);
+      fixCallsToUseChangedSignatures(functionManager.getReplacedFunctions(),
+                                     functionManager.getReplacedArguments(), 
+                                     functionManager.getInternalCalls(), valueLimits);
       
       // Analyze code and find out the cases where we can be sure that memory access is safe in compile time and check can be omitted.
       // NOTE: better place for this could be already before any changes has been made to original code.
       // [collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions)](#collectSafeExceptions)
       DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED --------------\n" );
-      collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions);
+      collectSafeExceptions(resolveLimitsOperands, functionManager.getReplacedFunctions(), safeExceptions);
 
       // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
       // creates some memory intrinsics we might need to take care of checking their operands as well.
       // [addBoundaryChecks( ... )](#addBoundaryChecks)
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
-      addBoundaryChecks(stores, loads, valueLimits, addressSpaceLimits, safeExceptions);
+      addBoundaryChecks(functionManager.getStores(), functionManager.getLoads(), valueLimits, addressSpaceLimits, safeExceptions);
 
       // Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
       // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
@@ -1818,7 +1831,7 @@ namespace WebCL {
      * kernel name and add implementation, that just resolves the last address of array and passes
      * it as limit to safepointer version of original kernel.
      */
-    void createKernelEntryPoints(Module &M, FunctionMap &replacedFunctions,
+    void createKernelEntryPoints(Module &M, const FunctionMap &replacedFunctions,
                                  AddressSpaceInfoManager &infoManager) {
 
       NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
@@ -1832,7 +1845,7 @@ namespace WebCL {
           // If there is need, create new kernel wrapper and replace old kernel reference with new WebCl
           // compatible version.
           if (replacedFunctions.count(oldFun) > 0) {
-            Function *smartKernel = replacedFunctions[oldFun];
+            Function *smartKernel = replacedFunctions.find(oldFun)->second;
             newKernelEntryFunction = createWebClKernel(M, oldFun, smartKernel, infoManager);
             // make smartKernel to be internal linkage to allow better optimization
             smartKernel->setLinkage(GlobalValue::InternalLinkage);
@@ -1846,11 +1859,11 @@ namespace WebCL {
     }
 
     void createMainEntryPoint(Module& M,
-                              FunctionMap &replacedFunctions,
+                              const FunctionMap &replacedFunctions,
                               AddressSpaceInitializerByAddressSpaceMap& asInits,
                               ValueSet& safeExceptions) {
       Function* main = 0;
-      for (FunctionMap::iterator funIt = replacedFunctions.begin();
+      for (FunctionMap::const_iterator funIt = replacedFunctions.begin();
            !main && funIt != replacedFunctions.end();
            ++funIt) {
         if (funIt->first->getName() == "main") {
@@ -2140,7 +2153,7 @@ namespace WebCL {
      *
      * Note: this is quite dirty symbol name based hack...
      */
-    void collectSafeExceptions(ValueSet &checkOperands, FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
+    void collectSafeExceptions(ValueSet &checkOperands, const FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
 
       for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
         Value *operand = *i;
@@ -2151,7 +2164,7 @@ namespace WebCL {
       }
       
       if (RunUnsafeMode) {
-        for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
+        for ( FunctionMap::const_iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
           Function *check = i->second;
           if (check->getName() == "main__smart_ptrs__") {
             check->takeName(i->first);
@@ -2174,13 +2187,13 @@ namespace WebCL {
     /**
      * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
      */
-    void addBoundaryChecks(StoreInstrSet &stores, LoadInstrSet &loads, AreaLimitByValueMap &valLimits, const AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
+    void addBoundaryChecks(const StoreInstrSet &stores, const LoadInstrSet &loads, AreaLimitByValueMap &valLimits, const AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
       // check load instructions... 
-      for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
+      for (LoadInstrSet::const_iterator i = loads.begin(); i != loads.end(); i++) {
         addChecks((*i)->getPointerOperand(), *i, valLimits, asLimits, safeExceptions);
       }   
       // check store instructions
-      for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+      for (StoreInstrSet::const_iterator i = stores.begin(); i != stores.end(); i++) {
         addChecks((*i)->getPointerOperand(), *i, valLimits, asLimits, safeExceptions);
       }
     }
@@ -2372,7 +2385,10 @@ namespace WebCL {
             
             // if safe version is not yet generated do it first..
             if ( safeBuiltins.count(oldFun) == 0 ) {
-              Function *newFun = createNewFunctionSignature(oldFun, safeBuiltins, dummyArgMap, programAllocationsType);
+              Function *newFun = createNewFunctionSignature(oldFun,
+                                                            std::inserter(safeBuiltins, safeBuiltins.begin()),
+                                                            std::inserter(dummyArgMap, dummyArgMap.begin()),
+                                                            programAllocationsType);
               // simple name mangler to be able to select, which implementation to call (couldn't find easy way to do Itanium C++ mangling here)
               // luckily the cases that needs mangling are pretty limited so we can keep it simple
               newFun->setName(customMangle(oldFun, demangledName + "__safe__"));
@@ -2401,8 +2417,8 @@ namespace WebCL {
      * Also updates param.Cur value before making call to make sure that smart pointer has always the latest 
      * value stored.
      */
-    void fixCallsToUseChangedSignatures(FunctionMap &replacedFunctions, 
-                                        ArgumentMap &replacedArguments, 
+    void fixCallsToUseChangedSignatures(const FunctionMap &replacedFunctions, 
+                                        const ArgumentMap &replacedArguments, 
                                         const CallInstrSet &internalCalls,
                                         AreaLimitByValueMap &valLimits) {
       DUMP(iteratorDistance(internalCalls.begin(), internalCalls.end()));
@@ -2418,12 +2434,13 @@ namespace WebCL {
           continue;
         }
 
-        Function* newFun = replacedFunctions[oldFun];
+        Function* newFun = replacedFunctions.find(oldFun)->second;
         convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, valLimits, true);
       }
     }
 
-    Value* replaceCallArgument(CallInst* call, Value* operand, Value* oldArg, Value* newArg, ArgumentMap &replacedArguments, bool& removeAttribute, AreaLimitByValueMap &valLimits)
+    Value* replaceCallArgument(CallInst* call, Value* operand, Value* oldArg, Value* newArg, 
+                               const ArgumentMap &replacedArguments, bool& removeAttribute, AreaLimitByValueMap &valLimits)
     {
       removeAttribute = false;
 
@@ -2436,7 +2453,7 @@ namespace WebCL {
         if ( Argument* arg = dyn_cast<Argument>(operand) ) {
           // if operand is argument it should be found from replacement map
           DEBUG( dbgs() << "Operand is argument of the same func! Passing it through.\n"; );
-          retArg = replacedArguments[arg];
+          retArg = replacedArguments.find(arg)->second;
           
         } else if (ExtractValueInst *extract = dyn_cast<ExtractValueInst>(operand)) {
           // TODO: REMOVE THIS HACK IT OPENS SECURITY HOLE, ALWAYS GET LIMITS FROM RESULT OF ANALYSIS
@@ -2468,7 +2485,8 @@ namespace WebCL {
     /**
      * Converts call function to use new function as called function and changes all pointer parameters to be smart pointers.
      */
-    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun, ArgumentMap &replacedArguments, AreaLimitByValueMap &valLimits,
+    void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun,
+                                          const ArgumentMap &replacedArguments, AreaLimitByValueMap &valLimits,
                                           bool useProgramAllocationsArgument) {
 
       Function* oldFun = call->getCalledFunction();
@@ -2545,11 +2563,11 @@ namespace WebCL {
      * 2. For each argument if necessary adds exctractvalue instruction to get passed pointer value
      * 3. Replaces all uses of old function argument with extractvalue instruction or with new function argument if it was not pointer.
      */
-    void moveOldFunctionImplementationsToNewSignatures(FunctionMap &replacedFunctions, 
-                                                       ArgumentMap &replacedArguments,
+    void moveOldFunctionImplementationsToNewSignatures(const FunctionMap &replacedFunctions, 
+                                                       const ArgumentMap &replacedArguments,
                                                        const FunctionSet &safeBuiltinFunctions) {
             
-      for (FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
+      for (FunctionMap::const_iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
         // loop through arguments and if type has changed, then create label to access original arg 
         Function* oldFun = i->first;
         Function* newFun = i->second;
@@ -2576,7 +2594,7 @@ namespace WebCL {
               Argument*   argBegin = oldArgIt;
               ++oldArgIt; assert(oldArgIt != oldFun->arg_end());
               Argument*   argEnd   = oldArgIt;
-              Argument*   oldArg  = replacedArguments[oldArgIt];
+              Argument*   oldArg  = replacedArguments.find(oldArgIt)->second;
               std::string name     = argCur->getName();
 
               BasicBlock::iterator instAt = entryBlock.begin();
@@ -2588,13 +2606,13 @@ namespace WebCL {
               argBegin->replaceAllUsesWith(exBegin);
               argEnd->replaceAllUsesWith(exEnd);
             } else {
-              oldArgIt->replaceAllUsesWith(replacedArguments[oldArgIt]);
+              oldArgIt->replaceAllUsesWith(replacedArguments.find(oldArgIt)->second);
             }
           }          
         } else {
           for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
             Argument* oldArg = a;
-            Argument* newArg = replacedArguments[a];
+            Argument* newArg = replacedArguments.find(a)->second;
 
             DEBUG( dbgs() << "Fixing arg: "; oldArg->print(dbgs()); dbgs() << " : \n" );
 
@@ -2645,8 +2663,8 @@ namespace WebCL {
      * 
      */
     virtual Function* createNewFunctionSignature(Function *F,  
-                                                 FunctionMap &functionMapping, 
-                                                 ArgumentMap &argumentMapping,
+                                                 std::insert_iterator<FunctionMap> functionMappingInserter,
+                                                 std::insert_iterator<ArgumentMap> argumentMappingInserter,
                                                  Type* programAllocationsType) {
        
       LLVMContext& c = F->getContext();
@@ -2683,7 +2701,7 @@ namespace WebCL {
 
 
       // add new function to book keepig to show what was replaced
-      functionMapping.insert( std::pair< Function*, Function* >( F, new_function ) );
+      *functionMappingInserter++ = std::make_pair(F, new_function);
 
       DEBUG( dbgs() << "-- Created new signature for: " << F->getName() << " "; F->getType()->print(dbgs()) );
       DEBUG( dbgs() << "\nnew signature: " << new_function->getName() << " "; new_function->getType()->print(dbgs()); dbgs() << "\n" );
@@ -2704,7 +2722,7 @@ namespace WebCL {
           new_function->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
         }
         
-        argumentMapping.insert( std::pair< Argument*, Argument* >( a, a_new ) ); 
+        *argumentMappingInserter++ = std::make_pair(a, a_new);
         DEBUG( dbgs() << "Mapped orig arg: "; a->print(dbgs()); dbgs() << " -----> "; a_new->print(dbgs()); dbgs() << "\n" );
         
       }
