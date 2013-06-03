@@ -545,6 +545,99 @@ namespace WebCL {
       }
     };
 
+    typedef std::map< Function*, Function* > FunctionMap;
+    typedef std::list< Function* > FunctionList;
+    typedef std::map< Argument*, Argument* > ArgumentMap;
+    typedef std::set< Function* > FunctionSet;
+    typedef std::set< Argument* > ArgumentSet;
+    typedef std::set< CallInst* > CallInstrSet;
+    typedef std::set< AllocaInst* > AllocaInstrSet;
+    typedef std::set< GetElementPtrInst* > GepInstrSet;
+    typedef std::set< LoadInst* > LoadInstrSet;
+    typedef std::set< StoreInst* > StoreInstrSet;
+    typedef std::set< int > IntSet;
+    typedef std::set< unsigned > UIntSet;
+    typedef std::vector< Value* > ValueVector;
+    typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
+    typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
+    typedef std::map< unsigned, AddressSpaceInitializer* > AddressSpaceInitializerByAddressSpaceMap;
+    typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
+      
+    // keeps track of function replacements and builtin functions
+    class FunctionManager {
+    public:
+      FunctionManager() {
+        // nothing
+      }
+      ~FunctionManager() {
+        // nothing
+      }
+
+      void replaceFunction(Function *orig, Function *replacement) {
+        replacedFunctions[orig] = replacement;
+      }
+
+      const CallInstrSet& getInternalCalls() const {
+        return internalCalls;
+      }
+      void addInternalCall(CallInst* call) {
+        internalCalls.insert(call);
+        allCalls.insert(call);
+      }
+
+      const CallInstrSet& getExternalCalls() const {
+        return externalCalls;
+      }
+      void addExternalCall(CallInst* call) {
+        externalCalls.insert(call);
+        allCalls.insert(call);
+      }
+      const CallInstrSet& getAllCalls() const {
+        return allCalls;
+      }
+
+      void addAlloca(AllocaInst* call) {
+        allocas.insert(call);
+      }
+
+      void addStore(StoreInst* call) {
+        stores.insert(call);
+      }
+
+      void addLoad(LoadInst* call) {
+        loads.insert(call);
+      }
+
+      const AllocaInstrSet &getAllocas() const {
+        return allocas;
+      }
+
+      const StoreInstrSet &getStores() const {
+        return stores;
+      }
+
+      const LoadInstrSet &getLoads() const {
+        return loads;
+      }
+
+    public: // temporary
+      // doesn't exist: the class is not copyable
+      void operator=(FunctionManager& other);
+
+      // Functions which has been replaced with new ones when signatures are modified.
+      FunctionMap replacedFunctions;
+      // Function arguments mapping to find replacement arguments for old function arguments.
+      ArgumentMap replacedArguments;
+
+      CallInstrSet   internalCalls;
+      CallInstrSet   externalCalls;
+      CallInstrSet   allCalls;
+      AllocaInstrSet allocas;
+      StoreInstrSet  stores;
+      LoadInstrSet   loads;
+      ValueSet       resolveLimitsOperands;
+    };
+
     class LimitAnalyser {
     public:
     };
@@ -687,28 +780,11 @@ namespace WebCL {
       }
 
     };
-    
-    typedef std::map< Function*, Function* > FunctionMap;
-    typedef std::list< Function* > FunctionList;
-    typedef std::map< Argument*, Argument* > ArgumentMap;
-    typedef std::set< Function* > FunctionSet;
-    typedef std::set< Argument* > ArgumentSet;
-    typedef std::set< CallInst* > CallInstrSet;
-    typedef std::set< AllocaInst* > AllocaInstrSet;
-    typedef std::set< GetElementPtrInst* > GepInstrSet;
-    typedef std::set< LoadInst* > LoadInstrSet;
-    typedef std::set< StoreInst* > StoreInstrSet;
-    typedef std::set< int > IntSet;
-    typedef std::set< unsigned > UIntSet;
-    typedef std::vector< Value* > ValueVector;
-    typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
+
     typedef std::set< AreaLimit* > AreaLimitSet;
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
-    typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
-    typedef std::map< unsigned, AddressSpaceInitializer* > AddressSpaceInitializerByAddressSpaceMap;
-    typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
-      
+    
     // ## <a id="runOnModule"></a> Run On Module
     //
     // This function does the top-level algorithm for instrumentation.
@@ -721,20 +797,16 @@ namespace WebCL {
     // 6. Add boundary checks to loads/stores if instruction was not proved to be valid in compile time.
     // 7. Fix calls to unsafe builtin functions to call safe versions instead.
     virtual bool runOnModule( Module &M ) {
-      
+      FunctionManager functionManager;
       // Functions which has been replaced with new ones when signatures are modified.
-      FunctionMap replacedFunctions;
+      FunctionMap &replacedFunctions = functionManager.replacedFunctions;
       // Function arguments mapping to find replacement arguments for old function arguments.
-      ArgumentMap replacedArguments;
+      ArgumentMap &replacedArguments = functionManager.replacedArguments;
 
       // TODO: remove thees
-      CallInstrSet internalCalls;
-      CallInstrSet externalCalls;
-      CallInstrSet allCalls;
-      AllocaInstrSet allocas;
-      StoreInstrSet stores;
-      LoadInstrSet loads;
-      ValueSet resolveLimitsOperands;
+      StoreInstrSet &stores = functionManager.stores;
+      LoadInstrSet &loads = functionManager.loads;
+      ValueSet &resolveLimitsOperands = functionManager.resolveLimitsOperands;
       // TODO: --- end
       
       // Bookkeeping of which limits certain value respects.
@@ -776,7 +848,7 @@ namespace WebCL {
       // Do the rest of the analysis to be able to resolve all places where we have to do limit checks and where to find limits for it
       // if can be traced to some argument or to some alloca or if we can trace it to single address space
       DEBUG( dbgs() << "\n --------------- ANALYZE WHICH OPERANDS NEEDS TO BE CHECKED --------------\n" );
-      collectOperandsWhichRequireChecking( M, limitAnalyser );
+      collectOperandsWhichRequireChecking( M, limitAnalyser, functionManager );
       
 /* PROBABLY SHOULD BE DONE INTERNALLY IN MAYBE ANALYSER
       // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
@@ -876,7 +948,7 @@ namespace WebCL {
       // Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
       // [fixCallsToUseChangedSignatures(...)](#fixCallsToUseChangedSignatures)
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
-      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, internalCalls, valueLimits);
+      fixCallsToUseChangedSignatures(replacedFunctions, replacedArguments, functionManager.getInternalCalls(), valueLimits);
       
       // Analyze code and find out the cases where we can be sure that memory access is safe in compile time and check can be omitted.
       // NOTE: better place for this could be already before any changes has been made to original code.
@@ -894,7 +966,7 @@ namespace WebCL {
       // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
       // [makeBuiltinCallsSafe( ... )](#makeBuiltinCallsSafe)
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
-      makeBuiltinCallsSafe(externalCalls, valueLimits, unsafeToSafeBuiltin, programAllocationsType);
+      makeBuiltinCallsSafe(functionManager.getExternalCalls(), valueLimits, unsafeToSafeBuiltin, programAllocationsType);
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
@@ -903,18 +975,13 @@ namespace WebCL {
       M.print(dbgs(), NULL);
       dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
       */
+      dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
+      M.print(dbgs(), NULL);
+      dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
       return true;
     }
       
-    void collectOperandsWhichRequireChecking( Module &M, LimitAnalyser &limitAnalyser ) {
-
-      // Sets of different type of instructions we are interested in.
-      CallInstrSet internalCalls;
-      CallInstrSet externalCalls;
-      CallInstrSet allCalls;
-      AllocaInstrSet allocas;
-      StoreInstrSet stores;
-      LoadInstrSet loads;
+    void collectOperandsWhichRequireChecking( Module &M, LimitAnalyser &limitAnalyser, FunctionManager &functionManager ) {
       ValueSet resolveLimitsOperands;
 
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
@@ -927,22 +994,23 @@ namespace WebCL {
         // [sortInstructions( Function *F, ... ) ](#sortInstructions).
 
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
-        sortInstructions( i,  internalCalls, externalCalls, allocas, stores, loads );
+        sortInstructions( i,  functionManager );
+        // , functionManager.accessExternalCalls(), 
+        //                   allocas, stores, loads );
         
-        // Initialize the additional `allCalls` and `resolveLimitsOperands` sets which are useful in later phases.
-        allCalls.insert(internalCalls.begin(), internalCalls.end());
-        allCalls.insert(externalCalls.begin(), externalCalls.end());
-        
+        const LoadInstrSet& loads = functionManager.getLoads();
         for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
           LoadInst *load = *i;
           resolveLimitsOperands.insert(load->getPointerOperand());
         }
         
+        const StoreInstrSet& stores = functionManager.getStores();
         for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
           StoreInst *store = *i;
           resolveLimitsOperands.insert(store->getPointerOperand());
         }
         
+        const CallInstrSet& allCalls = functionManager.getAllCalls();
         for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
           CallInst *call = *i;
           for (size_t op = 0; op < call->getNumOperands(); op++) {
@@ -2253,16 +2321,16 @@ namespace WebCL {
     }
 
     /**
-     * Goes through external function calls and if call is unsafe opencl call convert it to safe webcl implementation
-     * which operates with smart pointers
+     * Goes through external function externalCalls and if call is unsafe opencl call convert it to safe webcl
+     * implementation which operates with smart pointers
      */
-    void makeBuiltinCallsSafe(CallInstrSet &calls, AreaLimitByValueMap &valLimits, const FunctionMap& unsafeToSafeBuiltin,
+    void makeBuiltinCallsSafe(const CallInstrSet &externalCalls, AreaLimitByValueMap &valLimits, const FunctionMap& unsafeToSafeBuiltin,
                               Type* programAllocationsType) {
       // if mapping is needed outside export this to be reference parameter instead of local 
       FunctionMap safeBuiltins;
       ArgumentMap dummyArgMap;
 
-      for (CallInstrSet::iterator i = calls.begin(); i != calls.end(); i++) {
+      for (CallInstrSet::const_iterator i = externalCalls.begin(); i != externalCalls.end(); i++) {
         CallInst *call = *i;
 
         DEBUG( dbgs() << "---- Checking builtin call:"; call->print(dbgs()); dbgs() << "\n" );
@@ -2319,10 +2387,10 @@ namespace WebCL {
      */
     void fixCallsToUseChangedSignatures(FunctionMap &replacedFunctions, 
                                         ArgumentMap &replacedArguments, 
-                                        CallInstrSet &calls,
+                                        const CallInstrSet &internalCalls,
                                         AreaLimitByValueMap &valLimits) {
-
-      for (CallInstrSet::iterator i = calls.begin(); i != calls.end(); i++) {
+      DUMP(iteratorDistance(internalCalls.begin(), internalCalls.end()));
+      for (CallInstrSet::const_iterator i = internalCalls.begin(); i != internalCalls.end(); i++) {
         CallInst *call = *i;
 
         DEBUG( dbgs() << "---- Started fixing:"; call->print(dbgs()); dbgs() << "\n" );
@@ -2630,11 +2698,7 @@ namespace WebCL {
     }
 
     virtual void sortInstructions( Function *F, 
-                                   CallInstrSet &internalCalls, 
-                                   CallInstrSet &externalCalls, 
-                                   AllocaInstrSet &allocas,
-                                   StoreInstrSet &stores,
-                                   LoadInstrSet &loads) {
+                                   FunctionManager& functionManager ) {
       
       DEBUG( dbgs() << "-- Finding interesting instructions from: " << F->getName() << "\n" );
 
@@ -2646,10 +2710,10 @@ namespace WebCL {
           if ( CallInst *call = dyn_cast< CallInst >(&inst) ) {
             if (!call->getCalledFunction()->isIntrinsic()) {
               if (call->getCalledFunction()->isDeclaration()) {
-                externalCalls.insert(call);
+                functionManager.addExternalCall(call);
                 DEBUG( dbgs() << "Found external call: " );
               } else {
-                internalCalls.insert(call);
+                functionManager.addInternalCall(call);
                 DEBUG( dbgs() << "Found internal call: " );
               }
               DEBUG( call->print(dbgs()); dbgs() << "\n" );
@@ -2663,7 +2727,7 @@ namespace WebCL {
             // ( for these we should no do traditional smart pointer initialization, 
             //  but initialize them from sp read from argument )
             
-            allocas.insert(alloca);
+            functionManager.addAlloca(alloca);
             DEBUG( dbgs() << "Found alloca: "; alloca->print(dbgs()); dbgs() << "\n" );
             
           } else if ( StoreInst *store = dyn_cast< StoreInst >(&inst) ) {
@@ -2673,12 +2737,12 @@ namespace WebCL {
               continue;
             } 
             
-            stores.insert(store);
+            functionManager.addStore(store);
             DEBUG( dbgs() << "Found store: "; store->print(dbgs()); dbgs() << "\n" );
             
           } else if ( LoadInst *load = dyn_cast< LoadInst >(&inst) ) {            
             
-            loads.insert(load);
+            functionManager.addLoad(load);
             DEBUG( dbgs() << "Found load: "; load->print(dbgs()); dbgs() << "\n" );
 
           } else if ( dyn_cast<FenceInst>(&inst) || 
