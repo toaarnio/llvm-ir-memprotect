@@ -1448,11 +1448,13 @@ namespace WebCL {
       // all 'alloca's are considered private
       for (Module::iterator f = M.begin(); f != M.end(); f++) {
         // skip declarations (they does not even have entry blocks)
-        if (f->isDeclaration()) continue;
+        // skip builtins
+        if (f->isDeclaration() || unsafeBuiltins.count(extractItaniumDemangledFunctionName(f->getName().str()))) 
+          continue;
         BasicBlock &entry = f->getEntryBlock();
         for (BasicBlock::iterator i = entry.begin(); i != entry.end(); i++) {
           AllocaInst *alloca = dyn_cast<AllocaInst>(i);
-          if (alloca != NULL && !unsafeBuiltins.count(extractItaniumDemangledFunctionName(f->getName().str())) ) { 
+          if (alloca != NULL) { 
             staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
           }
         }
