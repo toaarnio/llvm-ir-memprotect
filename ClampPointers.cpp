@@ -778,7 +778,9 @@ namespace WebCL {
 */
       FunctionList unsafeBuiltinFunctions;
       FunctionList safeBuiltinFunctions;
-      
+      collectBuiltinFunctions(M, unsafeBuiltinFunctions, safeBuiltinFunctions,
+                              replacedArguments, replacedFunctions);
+
       // **Analyze all original functions.** Goes through all functions in module
       // and creates new function signature for them and collects information of instructions
       // that we will need in later transformations.
@@ -787,16 +789,7 @@ namespace WebCL {
       for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
 
         if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
-          if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
-            unsafeBuiltinFunctions.push_back(i);
-          } else if ( !i->isDeclaration() && argsHasSafePointer(i->getArgumentList()) ) {
-            Function* newFunction = transformSafeArguments( *i, replacedArguments );
-            replacedFunctions[&*i] = newFunction;
-            safeBuiltinFunctions.push_back( newFunction );
-          } else {
-            // skip this case, just some other function
-          }
-          continue;          
+          continue;
         }
 
         if ( i->isIntrinsic() || i->isDeclaration() ) {
@@ -990,6 +983,33 @@ namespace WebCL {
       }
       
       return mapping;
+    }
+
+    void collectBuiltinFunctions(Module& M, 
+                                 FunctionList& unsafeBuiltinFunctions,
+                                 FunctionList& safeBuiltinFunctions,
+                                 ArgumentMap& replacedArguments,
+                                 FunctionMap& replacedFunctions) {
+      // **Analyze all original functions.** Goes through all functions in module
+      // and creates new function signature for them and collects information of instructions
+      // that we will need in later transformations.
+      // If function is intrinsic or WebCL builtin declaration (we know how it will behave) we
+      // just skip it. If function is unknown external call compilation will fail.
+      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
+
+        if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
+          if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
+            unsafeBuiltinFunctions.push_back(i);
+          } else if ( !i->isDeclaration() && argsHasSafePointer(i->getArgumentList()) ) {
+            Function* newFunction = transformSafeArguments( *i, replacedArguments );
+            replacedFunctions[&*i] = newFunction;
+            safeBuiltinFunctions.push_back( newFunction );
+          } else {
+            // skip this case, just some other function
+          }
+          continue;          
+        }
+      }
     }
 
     /** Given a function, retrieve the value for the program allocations value passed as the function's first
