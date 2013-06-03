@@ -577,6 +577,10 @@ namespace WebCL {
         replacedFunctions[orig] = replacement;
       }
 
+      void replaceArguments(const ArgumentMap& replacements) {
+        replacedArguments.insert(replacements.begin(), replacements.end());
+      }
+
       const CallInstrSet& getInternalCalls() const {
         return internalCalls;
       }
@@ -620,14 +624,30 @@ namespace WebCL {
         return loads;
       }
 
+      void addSafeBuiltinFunction(Function* function) {
+        safeBuiltinFunctions.insert(function);
+      }
+
+      void addUnsafeBuiltinFunction(Function* function) {
+        unsafeBuiltinFunctions.insert(function);
+      }
+
+      const FunctionSet& getSafeBuiltinFunctions() const {
+        return safeBuiltinFunctions;
+      }
+
+      const FunctionSet& getUnsafeBuiltinFunctions() const {
+        return unsafeBuiltinFunctions;
+      }
+
     public: // temporary
       // doesn't exist: the class is not copyable
       void operator=(FunctionManager& other);
 
       // Functions which has been replaced with new ones when signatures are modified.
-      FunctionMap replacedFunctions;
+      FunctionMap    replacedFunctions;
       // Function arguments mapping to find replacement arguments for old function arguments.
-      ArgumentMap replacedArguments;
+      ArgumentMap    replacedArguments;
 
       CallInstrSet   internalCalls;
       CallInstrSet   externalCalls;
@@ -636,6 +656,9 @@ namespace WebCL {
       StoreInstrSet  stores;
       LoadInstrSet   loads;
       ValueSet       resolveLimitsOperands;
+
+      FunctionSet    unsafeBuiltinFunctions;
+      FunctionSet    safeBuiltinFunctions;
     };
 
     class LimitAnalyser {
@@ -859,10 +882,8 @@ namespace WebCL {
       DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
       findAddressSpaceLimits( M, valueLimits, addressSpaceLimits, addressSpaceStructs, addressSpaceEndPtrs );
 */
-      FunctionList unsafeBuiltinFunctions;
-      FunctionList safeBuiltinFunctions;
-      collectBuiltinFunctions(M, unsafeBuiltinFunctions, safeBuiltinFunctions,
-                              replacedArguments, replacedFunctions);
+
+      collectBuiltinFunctions(M, functionManager);
 
       // **Analyze all original functions.** Goes through all functions in module
       // and creates new function signature for them and collects information of instructions
@@ -898,12 +919,7 @@ namespace WebCL {
         createNewFunctionSignature( i, replacedFunctions, replacedArguments, programAllocationsType );
       }
 
-      FunctionMap unsafeToSafeBuiltin = makeUnsafeToSafeMapping( M.getContext(), 
-                                                                 unsafeBuiltinFunctions,
-                                                                 safeBuiltinFunctions );
-      
-      FunctionSet safeBuiltinFunctionSet = FunctionSet( safeBuiltinFunctions.begin(),
-                                                        safeBuiltinFunctions.end() );
+      FunctionMap unsafeToSafeBuiltin = makeUnsafeToSafeMapping( M.getContext(), functionManager);
       
       // **End of analyze phase.** After this `replacedFunctions`, `replacedArguments`, `internalCalls`, `externalCalls`,
       // `allCalls`, `allocas`, `stores`, `loads` and `resolveLimitsOperands` should not be changed, but only used for lookup.
@@ -915,7 +931,7 @@ namespace WebCL {
       // Manually written safe implementations of unsafe builtin functions are handled slightly differently, so a list of them
       // is passed as an argument.
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
-      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, safeBuiltinFunctionSet);
+      moveOldFunctionImplementationsToNewSignatures(replacedFunctions, replacedArguments, functionManager.getSafeBuiltinFunctions());
       
       // Finds out kernel functions from Module metadata and creates WebCL kernels from them. `kernel void
       // foo(global float *bar)` -> `kernel void foo(global float *bar, size_t bar_size)`. Also calculates and
@@ -938,7 +954,7 @@ namespace WebCL {
       // ValueSet &checkOperands, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits)](#findLimits).
       // Limit finding is not performed for manually written safe builtin functions.
       DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY REQUIRED OPERAND --------------\n" );
-      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits, safeBuiltinFunctionSet);
+      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits, safeBuiltinFunctions);
       */
       
       // fix all old alloca and globals uses to point new variables (required to be able to get limits correctly for call replacement ?)
@@ -1037,18 +1053,19 @@ namespace WebCL {
      * functions.
      */
     FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, 
-                                         const FunctionList& unsafeBuiltinFunctions,
-                                         const FunctionList& safeBuiltinFunctions ) {
+                                         FunctionManager& functionManager ) {
       FunctionMap mapping;
       std::map<Signature, Function*> safeSignatureMap;
       
-      for ( FunctionList::const_iterator safeIt = safeBuiltinFunctions.begin();
+      const FunctionSet& safeBuiltinFunctions = functionManager.getSafeBuiltinFunctions();
+      for ( FunctionSet::const_iterator safeIt = safeBuiltinFunctions.begin();
             safeIt != safeBuiltinFunctions.end();
             ++safeIt ) {
         safeSignatureMap[Signature(*safeIt)] = *safeIt;
       }
 
-      for ( FunctionList::const_iterator unsafeIt = unsafeBuiltinFunctions.begin();
+      const FunctionSet& unsafeBuiltinFunctions = functionManager.getUnsafeBuiltinFunctions();
+      for ( FunctionSet::const_iterator unsafeIt = unsafeBuiltinFunctions.begin();
             unsafeIt != unsafeBuiltinFunctions.end();
             ++unsafeIt ) {
         Signature origSig = Signature(*unsafeIt);
@@ -1065,10 +1082,7 @@ namespace WebCL {
     }
 
     void collectBuiltinFunctions(Module& M, 
-                                 FunctionList& unsafeBuiltinFunctions,
-                                 FunctionList& safeBuiltinFunctions,
-                                 ArgumentMap& replacedArguments,
-                                 FunctionMap& replacedFunctions) {
+                                 FunctionManager& functionManager) {
       // **Analyze all original functions.** Goes through all functions in module
       // and creates new function signature for them and collects information of instructions
       // that we will need in later transformations.
@@ -1078,11 +1092,13 @@ namespace WebCL {
 
         if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
           if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
-            unsafeBuiltinFunctions.push_back(i);
+            functionManager.addUnsafeBuiltinFunction(i);
           } else if ( !i->isDeclaration() && argsHasSafePointer(i->getArgumentList()) ) {
-            Function* newFunction = transformSafeArguments( *i, replacedArguments );
-            replacedFunctions[&*i] = newFunction;
-            safeBuiltinFunctions.push_back( newFunction );
+            ArgumentMap replacedArguments;
+            Function* newFunction = transformSafeArguments(*i, replacedArguments);
+            functionManager.replaceArguments(replacedArguments);
+            functionManager.replaceFunction(&*i, newFunction);
+            functionManager.addSafeBuiltinFunction(newFunction);
           } else {
             // skip this case, just some other function
           }
