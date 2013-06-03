@@ -19,4 +19,4 @@ for i in $KERNELS; do API=$API,$i ;done
 API=$(echo $API | cut -b2-)
 
 # mark only kernel functions to be public and run global dce
-opt -internalize -internalize-public-api-list=$API -globaldce $1 -S -o $1.cleaned.ll
+opt -internalize -internalize-public-api-list=$API -globaldce $1 -S -o $(basename $1 .ll).cleaned.ll
