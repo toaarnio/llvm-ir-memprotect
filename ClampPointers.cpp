@@ -182,6 +182,17 @@ namespace WebCL {
     return next(it);
   }
 
+  // distance from an intertor to another. b must be reachable from a.
+  template <typename Iterator>
+  int iteratorDistance(Iterator a, Iterator b) {
+    int n = 0;
+    while (a != b) {
+      ++n;
+      ++a;
+    }
+    return n;
+  }
+
   // Creates mangled name (own mangling scheme) to be able to select correct safe builtin function implementations to call.
   // All calls to functions with names mangled by this algorithm should be inlined and removed afterwards by later optimizations.
   //
