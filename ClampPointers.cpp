@@ -859,9 +859,6 @@ namespace WebCL {
       AddressSpaceInfoManager(Module& M) : 
         M(M),
         programAllocationsType(0),
-        constantAllocationsType(0),
-        localAllocationsType(0),
-        privateAllocationsType(0),
         constantLimitsType(0),
         globalLimitsType(0),
         localLimitsType(0) {
@@ -885,10 +882,6 @@ namespace WebCL {
         GetElementPtrInst* globalLimitsField   = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
         GetElementPtrInst* localLimitsField    = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
         GetElementPtrInst* privateLimitsField  = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
-        DUMP(*paa);
-        DUMP(*ConstantStruct::get(getConstantAllocationsType(), genIntVector<Constant*>(c, 0)));
-        DUMP(*constantLimitsField);
-        DUMP(*constantLimitsField->getType());
         if (Value* init = getConstantLimits(blockBuilder)) {
           blockBuilder.CreateStore(init, constantLimitsField);
         }
@@ -907,13 +900,12 @@ namespace WebCL {
         if (!programAllocationsType) {
           LLVMContext& c = M.getContext();
 
-          Type* constantLimitsType = getConstantLimitsType();
-          Type* globalLimitsType = getGlobalLimitsType();
-          Type* localLimitsType = getLocalLimitsType();
-          Type* privateAllocationsType = getPrivateAllocationsType();
           programAllocationsType =
             PointerType::get(StructType::create(c,
-                                                genVector(constantLimitsType, globalLimitsType, localLimitsType, privateAllocationsType),
+                                                genVector<Type*>(getConstantLimitsType(),
+                                                                 getGlobalLimitsType(),
+                                                                 getLocalLimitsType(),
+                                                                 getASAllocationsType(privateAddressSpaceNumber)),
                                                 "ProgramAllocationsType"),
                              privateAddressSpaceNumber);
         }
@@ -922,65 +914,41 @@ namespace WebCL {
       void replaceUsesOfOriginalVariables() {
         // TODO: go through value mappings of every address space that we have created and replace all uses with.
       }
-
     private:
       Module& M;
       PointerType* programAllocationsType;
-      StructType* constantAllocationsType;
-      StructType* localAllocationsType;
-      StructType* privateAllocationsType;
+      typedef std::map<unsigned, StructType*> AddressSpaceStructTypeMap;
+      AddressSpaceStructTypeMap allocationsTypes;
       StructType* constantLimitsType;
       StructType* globalLimitsType;
       StructType* localLimitsType;
 
       ValueVectorByAddressSpaceMap asValues;
 
-      StructType* getConstantAllocationsType() {
-        if (!constantAllocationsType) {
-          LLVMContext& c = M.getContext();
-          std::vector<Type*> fields;
-          fields.push_back(Type::getInt32Ty(c));
-          // TODO
-          constantAllocationsType = StructType::create(c, fields, "ConstantAllocationsType");
-        }
-        return constantAllocationsType;
-      }
-
       Value* getConstantAllocations(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
-        return ConstantStruct::get(getConstantAllocationsType(), genIntVector<Constant*>(c, 0));
-      }
-
-      StructType* getLocalAllocationsType() {
-        if (!localAllocationsType) {
-          LLVMContext& c = M.getContext();
-          std::vector<Type*> fields;
-          fields.push_back(Type::getInt32Ty(c));
-          // TODO
-          localAllocationsType = StructType::create(c, fields, "LocalAllocationsType");
-        }
-        return localAllocationsType;
+        return ConstantStruct::get(getASAllocationsType(constantAddressSpaceNumber), genIntVector<Constant*>(c, 0));
       }
 
       Value* getLocalAllocations(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
-        return ConstantStruct::get(getLocalAllocationsType(), genIntVector<Constant*>(c, 0));
+        return ConstantStruct::get(getASAllocationsType(localAddressSpaceNumber), genIntVector<Constant*>(c, 0));
       }
 
-      StructType* getPrivateAllocationsType() {
-        if (!privateAllocationsType) {
+      StructType* getASAllocationsType(int asNumber) {
+        if (!allocationsTypes[asNumber]) {
           LLVMContext& c = M.getContext();
           std::vector<Type*> fields;
-          ValueVector values = asValues[privateAddressSpaceNumber];
+          ValueVector values = asValues[asNumber];
           for (ValueVector::const_iterator it = values.begin(); it != values.end(); ++it) {
             fields.push_back((*it)->getType());
           }
           // TODO
-          privateAllocationsType = StructType::create(c, fields, "PrivateAllocationsType");
+          allocationsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "AllocationsType");
         }
-        return privateAllocationsType;
+        return allocationsTypes[asNumber];
       }
 
       Value* getPrivateAllocations(IRBuilder<> &blockBuilder) {
