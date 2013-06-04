@@ -1039,9 +1039,6 @@ namespace WebCL {
       M.print(dbgs(), NULL);
       dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
       */
-      dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
-      M.print(dbgs(), NULL);
-      dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
       return true;
     }
       
