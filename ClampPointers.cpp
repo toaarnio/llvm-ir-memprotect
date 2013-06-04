@@ -1413,15 +1413,15 @@ namespace WebCL {
      *
      * Call operands are not a problem anymore, since they has been converted to pass structs, not direct pointers.
      */
-    void findLimits(FunctionMap &replacedFunctions,
-                    ValueSet &checkOperands,
+    void findLimits(const FunctionMap &replacedFunctions,
+                    const ValueSet &checkOperands,
                     AreaLimitByValueMap &valLimits,
                     const AreaLimitSetByAddressSpaceMap &asLimits,
                     const FunctionSet& safeBuiltinFunctions) {
     
       // first trace all uses of function arguments to find their limits
       DEBUG( dbgs() << "----- Tracing function pointer argument uses \n"; );
-      for ( FunctionMap::iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
+      for ( FunctionMap::const_iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
         Function *originalFunc = i->first;
         Function *safePointerFunction = i->second;
 
@@ -1460,7 +1460,7 @@ namespace WebCL {
       
       // optimize single area address space limits
       DEBUG( dbgs() << "----- Tracing call/load/store operands: \n"; );
-      for (ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
+      for (ValueSet::const_iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
         Value* val = *i;
         DEBUG( dbgs() << "Tracing limits for: "; val->print(dbgs()); dbgs() << "\n"; );
         PointerType *t = dyn_cast<PointerType>(val->getType());
