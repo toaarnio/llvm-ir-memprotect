@@ -816,6 +816,10 @@ namespace WebCL {
     // handles creating and bookkeeping address space info objects
     class AddressSpaceInfoManager {
     public:
+      AddressSpaceInfoManager(Module& M) : 
+        M(M) {
+        // nothing
+      }
       void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, std::vector<Value*> &values) {
         // TODO: make copy of values and all other data..
         // TODO: implement!
@@ -825,9 +829,16 @@ namespace WebCL {
       }
       void generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
       }
+      Type* getProgramAllocationsType() {
+        LLVMContext& c = M.getContext();
+        return IntegerType::get(c, 32);
+      }
       void replaceUsesOfOriginalVariables() {
         // TODO: go through value mappings of every address space that we have created and replace all uses with.
       }
+
+    private:
+      Module& M;
     };
     
     class LimitAnalyser {
@@ -879,12 +890,6 @@ namespace WebCL {
       // Set where is collected all values, which will not require boundary checks to
       // memory accesses. These have been resolved to be safe accesses in compile time.
       ValueSet safeExceptions;
-      Type* programAllocationsType;
-      { 
-        // insert code here
-        LLVMContext& c = M.getContext();
-        programAllocationsType = IntegerType::get(c, 32);
-      }
 
       // Collect all allocas and global variables for each address space to struct to be able to resolve
       // static area reference limits easily. See example in [consolidateStaticMemory( Module &M
@@ -894,7 +899,7 @@ namespace WebCL {
       // addressSpaceStructs along; accesses to them are put into safeExceptions. Later on addressSpaceStructs
       // is used by createWebClKernel to put the required allocations of the local memory regions to the front
       // of the new kernels.
-      AddressSpaceInfoManager addressSpaceInfoManager;
+      AddressSpaceInfoManager addressSpaceInfoManager(M);
       LimitAnalyser limitAnalyser;
       
       DEBUG( dbgs() << "\n --------------- COLLECT INFORMATION OF STATIC MEMORY ALLOCATIONS --------------\n" );
@@ -920,6 +925,8 @@ namespace WebCL {
 */
 
       collectBuiltinFunctions(M, functionManager);
+
+      Type* programAllocationsType = addressSpaceInfoManager.getProgramAllocationsType();
 
       // **Analyze all original functions.** Goes through all functions in module
       // and creates new function signature for them and collects information of instructions
