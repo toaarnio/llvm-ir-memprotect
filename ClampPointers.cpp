@@ -540,7 +540,8 @@ namespace WebCL {
     // keeps track of function replacements and builtin functions
     class FunctionManager {
     public:
-      FunctionManager() {
+      FunctionManager(Module& M) :
+        M(M) {
         // nothing
       }
       ~FunctionManager() {
@@ -630,9 +631,15 @@ namespace WebCL {
         return unsafeBuiltinFunctions;
       }
 
+      const FunctionMap getUnsafeToSafeBuiltin() const {
+        return makeUnsafeToSafeMapping(M.getContext(), *this);
+      }
+
     private:
       // doesn't exist: the class is not copyable
       void operator=(FunctionManager& other);
+
+      Module&         M;
 
       // Functions which has been replaced with new ones when signatures are modified.
       FunctionMap    replacedFunctions;
@@ -848,7 +855,7 @@ namespace WebCL {
     // 6. Add boundary checks to loads/stores if instruction was not proved to be valid in compile time.
     // 7. Fix calls to unsafe builtin functions to call safe versions instead.
     virtual bool runOnModule( Module &M ) {
-      FunctionManager functionManager;
+      FunctionManager functionManager(M);
       
       ValueSet       resolveLimitsOperands;
 
@@ -940,8 +947,6 @@ namespace WebCL {
                                     programAllocationsType );
       }
 
-      FunctionMap unsafeToSafeBuiltin = makeUnsafeToSafeMapping( M.getContext(), functionManager);
-      
       // **End of analyze phase.** After this `replacedFunctions`, `replacedArguments`, `internalCalls`, `externalCalls`,
       // `allCalls`, `allocas`, `stores`, `loads` and `resolveLimitsOperands` should not be changed, but only used for lookup.
       
@@ -1025,7 +1030,7 @@ namespace WebCL {
       // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
       // [makeBuiltinCallsSafe( ... )](#makeBuiltinCallsSafe)
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
-      makeBuiltinCallsSafe(functionManager.getExternalCalls(), valueLimits, unsafeToSafeBuiltin, programAllocationsType);
+      makeBuiltinCallsSafe(functionManager.getExternalCalls(), valueLimits, functionManager.getUnsafeToSafeBuiltin(), programAllocationsType);
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
@@ -1095,8 +1100,8 @@ namespace WebCL {
      * matching signature can be found from the list of safe builtin
      * functions.
      */
-    FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, 
-                                         FunctionManager& functionManager ) {
+    static FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, 
+                                                const FunctionManager& functionManager ) {
       FunctionMap mapping;
       std::map<Signature, Function*> safeSignatureMap;
       
