@@ -868,10 +868,18 @@ namespace WebCL {
         DUMP(*ConstantStruct::get(getConstantAllocationsType(), genIntVector<Constant*>(c, 0)));
         DUMP(*constantLimitsField);
         DUMP(*constantLimitsField->getType());
-        blockBuilder.CreateStore(getConstantLimits(blockBuilder), constantLimitsField);
-        blockBuilder.CreateStore(getGlobalLimits(blockBuilder), globalLimitsField);
-        blockBuilder.CreateStore(getLocalLimits(blockBuilder), localLimitsField);
-        blockBuilder.CreateStore(getPrivateAllocations(blockBuilder), privateLimitsField);
+        if (Value* init = getConstantLimits(blockBuilder)) {
+          blockBuilder.CreateStore(init, constantLimitsField);
+        }
+        if (Value* init = getGlobalLimits(blockBuilder)) {
+          blockBuilder.CreateStore(init, globalLimitsField);
+        }
+        if (Value* init = getLocalLimits(blockBuilder)) {
+          blockBuilder.CreateStore(init, localLimitsField);
+        }
+        if (Value* init = getPrivateAllocations(blockBuilder)) {
+          blockBuilder.CreateStore(init, privateLimitsField);
+        }
         return paa;
       }
       PointerType* getProgramAllocationsType() {
