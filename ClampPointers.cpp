@@ -837,7 +837,14 @@ namespace WebCL {
     class AddressSpaceInfoManager {
     public:
       AddressSpaceInfoManager(Module& M) : 
-        M(M) {
+        M(M),
+        programAllocationsType(0),
+        constantAllocationsType(0),
+        localAllocationsType(0),
+        privateAllocationsType(0),
+        constantLimitsType(0),
+        globalLimitsType(0),
+        localLimitsType(0) {
         // nothing
       }
       void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, std::vector<Value*> &values) {
@@ -847,11 +854,41 @@ namespace WebCL {
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
         // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
       }
-      void generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
-      }
-      Type* getProgramAllocationsType() {
+      Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
-        return IntegerType::get(c, 32);
+        Value* paa = blockBuilder.CreateAlloca(dyn_cast<PointerType>(getProgramAllocationsType())->getTypeAtIndex(0u),
+                                               0,
+                                               "ProgramAllocations");
+        
+        GetElementPtrInst* constantLimitsField = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
+        GetElementPtrInst* globalLimitsField   = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
+        GetElementPtrInst* localLimitsField    = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
+        GetElementPtrInst* privateLimitsField  = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+        DUMP(*paa);
+        DUMP(*ConstantStruct::get(getConstantAllocationsType(), genIntVector<Constant*>(c, 0)));
+        DUMP(*constantLimitsField);
+        DUMP(*constantLimitsField->getType());
+        blockBuilder.CreateStore(getConstantLimits(blockBuilder), constantLimitsField);
+        blockBuilder.CreateStore(getGlobalLimits(blockBuilder), globalLimitsField);
+        blockBuilder.CreateStore(getLocalLimits(blockBuilder), localLimitsField);
+        blockBuilder.CreateStore(getPrivateAllocations(blockBuilder), privateLimitsField);
+        return paa;
+      }
+      PointerType* getProgramAllocationsType() {
+        if (!programAllocationsType) {
+          LLVMContext& c = M.getContext();
+
+          Type* constantLimitsType = getConstantLimitsType();
+          Type* globalLimitsType = getGlobalLimitsType();
+          Type* localLimitsType = getLocalLimitsType();
+          Type* privateAllocationsType = getPrivateAllocationsType();
+          programAllocationsType =
+            PointerType::get(StructType::create(c,
+                                                genVector(constantLimitsType, globalLimitsType, localLimitsType, privateAllocationsType),
+                                                "ProgramAllocationsType"),
+                             privateAddressSpaceNumber);
+        }
+        return programAllocationsType;
       }
       void replaceUsesOfOriginalVariables() {
         // TODO: go through value mappings of every address space that we have created and replace all uses with.
@@ -859,6 +896,125 @@ namespace WebCL {
 
     private:
       Module& M;
+      PointerType* programAllocationsType;
+      StructType* constantAllocationsType;
+      StructType* localAllocationsType;
+      StructType* privateAllocationsType;
+      StructType* constantLimitsType;
+      StructType* globalLimitsType;
+      StructType* localLimitsType;
+
+      StructType* getConstantAllocationsType() {
+        if (!constantAllocationsType) {
+          LLVMContext& c = M.getContext();
+          std::vector<Type*> fields;
+          fields.push_back(Type::getInt32Ty(c));
+          // TODO
+          constantAllocationsType = StructType::create(c, fields, "ConstantAllocationsType");
+        }
+        return constantAllocationsType;
+      }
+
+      Value* getConstantAllocations(IRBuilder<> &blockBuilder) {
+        LLVMContext& c = M.getContext();
+        // TODO
+        return ConstantStruct::get(getConstantAllocationsType(), genIntVector<Constant*>(c, 0));
+      }
+
+      StructType* getLocalAllocationsType() {
+        if (!localAllocationsType) {
+          LLVMContext& c = M.getContext();
+          std::vector<Type*> fields;
+          fields.push_back(Type::getInt32Ty(c));
+          // TODO
+          localAllocationsType = StructType::create(c, fields, "LocalAllocationsType");
+        }
+        return localAllocationsType;
+      }
+
+      Value* getLocalAllocations(IRBuilder<> &blockBuilder) {
+        LLVMContext& c = M.getContext();
+        // TODO
+        return ConstantStruct::get(getLocalAllocationsType(), genIntVector<Constant*>(c, 0));
+      }
+
+      StructType* getPrivateAllocationsType() {
+        if (!privateAllocationsType) {
+          LLVMContext& c = M.getContext();
+          std::vector<Type*> fields;
+          fields.push_back(Type::getInt32Ty(c));
+          // TODO
+          privateAllocationsType = StructType::create(c, fields, "PrivateAllocationsType");
+        }
+        return privateAllocationsType;
+      }
+
+      Value* getPrivateAllocations(IRBuilder<> &blockBuilder) {
+        LLVMContext& c = M.getContext();
+        // TODO
+        return ConstantStruct::get(getPrivateAllocationsType(), genIntVector<Constant*>(c, 0));
+      }
+
+      StructType* getConstantLimitsType() {
+        if (!constantLimitsType) {
+          LLVMContext& c = M.getContext();
+          std::vector<Type*> fields;
+          fields.push_back(Type::getInt32Ty(c)); // constantAllocations_min
+          fields.push_back(Type::getInt32Ty(c)); // constantAllocations_max
+          fields.push_back(Type::getInt32Ty(c)); // factors_min
+          fields.push_back(Type::getInt32Ty(c)); // factors_max
+          // TODO
+          constantLimitsType = StructType::create(c, fields, "ConstantLimitsType");
+        }
+        return constantLimitsType;
+      }
+
+      Value* getConstantLimits(IRBuilder<> &blockBuilder) {
+        LLVMContext& c = M.getContext();
+        // TODO
+        return ConstantStruct::get(getConstantLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
+      }
+
+      StructType* getGlobalLimitsType() {
+        if (!globalLimitsType) {
+          LLVMContext& c = M.getContext();
+          std::vector<Type*> fields;
+          fields.push_back(Type::getInt32Ty(c)); // input_min
+          fields.push_back(Type::getInt32Ty(c)); // input_max
+          fields.push_back(Type::getInt32Ty(c)); // output_min
+          fields.push_back(Type::getInt32Ty(c)); // output_max
+          // TODO
+          globalLimitsType = StructType::create(c, fields, "GlobalLimitsType");
+        }
+        return globalLimitsType;
+      }
+
+      Value* getGlobalLimits(IRBuilder<> &blockBuilder) {
+        LLVMContext& c = M.getContext();
+        // TODO
+        return ConstantStruct::get(getGlobalLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
+      }
+
+      StructType* getLocalLimitsType() {
+        if (!localLimitsType) {
+          LLVMContext& c = M.getContext();
+          std::vector<Type*> fields;
+          fields.push_back(Type::getInt32Ty(c)); // localAllocations_min
+          fields.push_back(Type::getInt32Ty(c)); // localAllocations_max
+          fields.push_back(Type::getInt32Ty(c)); // scratch_min
+          fields.push_back(Type::getInt32Ty(c)); // scratch_max
+          // TODO
+          localLimitsType = StructType::create(c, fields, "LocalLimitsType");
+        }
+        return localLimitsType;
+      }
+
+      Value* getLocalLimits(IRBuilder<> &blockBuilder) {
+        LLVMContext& c = M.getContext();
+        // TODO
+        return ConstantStruct::get(getLocalLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
+      }
+
     };
     
     class LimitAnalyser {
@@ -2013,10 +2169,9 @@ namespace WebCL {
 
       // TODO: tell address space info manager that it should generate the programAllocations structure and its init code here
       // NOTE: this also generates GlobalScope address space structures on demand (they are needed to pass some limits).
-      infoManager.generateProgramAllocationCode(blockBuilder);
+      Value* programAllocationsArgument = infoManager.generateProgramAllocationCode(blockBuilder);
       
       std::vector<Value*> args;
-      Value* programAllocationsArgument = getConstInt(c, 1919);
       args.push_back(programAllocationsArgument);
 
       
