@@ -2715,6 +2715,11 @@ namespace WebCL {
           } // -- end arguments for loop
         }  
       }
+
+      // remove old functions
+      for (FunctionMap::const_iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
+        i->first->removeFromParent();
+      }
     }
     
     /**
