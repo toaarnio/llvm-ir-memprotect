@@ -847,9 +847,10 @@ namespace WebCL {
         localLimitsType(0) {
         // nothing
       }
-      void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, std::vector<Value*> &values) {
+      void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, const std::vector<Value*> &values) {
         // TODO: make copy of values and all other data..
         // TODO: implement!
+        std::copy(values.begin(), values.end(), std::back_inserter(asValues[asNumber]));
       }
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
         // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
@@ -912,6 +913,8 @@ namespace WebCL {
       StructType* globalLimitsType;
       StructType* localLimitsType;
 
+      ValueVectorByAddressSpaceMap asValues;
+
       StructType* getConstantAllocationsType() {
         if (!constantAllocationsType) {
           LLVMContext& c = M.getContext();
@@ -950,7 +953,10 @@ namespace WebCL {
         if (!privateAllocationsType) {
           LLVMContext& c = M.getContext();
           std::vector<Type*> fields;
-          fields.push_back(Type::getInt32Ty(c));
+          ValueVector values = asValues[privateAddressSpaceNumber];
+          for (ValueVector::const_iterator it = values.begin(); it != values.end(); ++it) {
+            fields.push_back((*it)->getType());
+          }
           // TODO
           privateAllocationsType = StructType::create(c, fields, "PrivateAllocationsType");
         }
@@ -958,9 +964,15 @@ namespace WebCL {
       }
 
       Value* getPrivateAllocations(IRBuilder<> &blockBuilder) {
-        LLVMContext& c = M.getContext();
-        // TODO
-        return ConstantStruct::get(getPrivateAllocationsType(), genIntVector<Constant*>(c, 0));
+        // LLVMContext& c = M.getContext();
+        // ValueVector values = asValues[privateAddressSpaceNumber];
+        // std::vector<Constant*> initValues;
+        // for (int c = 0; c < values.length(); ++c) {
+        //   initValues.push_back();
+        // }
+        // // TODO
+        // return ConstantStruct::get(getPrivateAllocationsType(), genIntVector<Constant*>(c, 0));
+        return 0;
       }
 
       StructType* getConstantLimitsType() {
