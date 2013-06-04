@@ -2531,13 +2531,15 @@ namespace WebCL {
           retArg = aggregateOp;
         } else {
           AreaLimit *limit = NULL;
-          if (valLimits.count(operand) > 0) {
-            limit = valLimits[operand];
-          } else {
-            DEBUG( dbgs() << "In basic block: \n"; call->getParent()->print(dbgs()); dbgs() << "\nin call:\n"; call->print(dbgs()); dbgs() << "\nOperand:"; operand->print(dbgs()); dbgs() << "\n"; );
-            fast_assert(false, "Could not resolve limits for a value passed as operand. Try to make code less obscure, write better limit analysis or do not change signature of this method at all and check against all limits of address space.");
-          }
-          retArg = convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call);
+          // TODO: Temporarily disabled mechanism to allow running the app through for development purposes.
+          // if (valLimits.count(operand) > 0) {
+          //   limit = valLimits[operand];
+          // } else {
+          //   DEBUG( dbgs() << "In basic block: \n"; call->getParent()->print(dbgs()); dbgs() << "\nin call:\n"; call->print(dbgs()); dbgs() << "\nOperand:"; operand->print(dbgs()); dbgs() << "\n"; );
+          //   fast_assert(false, "Could not resolve limits for a value passed as operand. Try to make code less obscure, write better limit analysis or do not change signature of this method at all and check against all limits of address space.");
+          // }
+          // retArg = convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call);
+          retArg = convertArgumentToSmartStruct(operand, operand, operand, false, call);
           removeAttribute = true;
         }
       } else {
