@@ -24,6 +24,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Analysis/MemoryDependenceAnalysis.h"
 
 #include <vector>
 #include <map>
@@ -843,6 +844,14 @@ namespace WebCL {
       }
     };
 
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+      // check lib/Analysis/MemDepPrinter.cpp how to use memdap anaylsis
+      AU.addRequiredTransitive<AliasAnalysis>();
+      AU.addRequiredTransitive<MemoryDependenceAnalysis>();
+      AU.setPreservesAll();
+      dbgs() << "Analysis usage was actually called.\n";
+    }
+      
     // ## <a id="runOnModule"></a> Run On Module
     //
     // This function does the top-level algorithm for instrumentation.
@@ -917,33 +926,58 @@ namespace WebCL {
       // that we will need in later transformations.
       // If function is intrinsic or WebCL builtin declaration (we know how it will behave) we
       // just skip it. If function is unknown external call compilation will fail.
-      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
+      for( Module::iterator F = M.begin(); F != M.end(); ++F ) {
 
-        if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
+        if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(F->getName().str())) ) {
           continue;
         }
 
-        if ( i->isIntrinsic() || i->isDeclaration() ) {
+        if ( F->isIntrinsic() || F->isDeclaration() ) {
           if (RunUnsafeMode) {
-            DEBUG( dbgs() << "Skipping: " << i->getName() << " which is intrinsic and/or declaration\n" );
+            DEBUG( dbgs() << "Skipping: " << F->getName() << " which is intrinsic and/or declaration\n" );
             continue;
           }
-          if (!isWebClBuiltin(i)) {
-            dbgs() << "Found: " << i->getName() << " which is intrinsic and/or declaration\n";
+          
+          if (!isWebClBuiltin(F)) {
+            dbgs() << "Found: " << F->getName() << " which is intrinsic and/or declaration\n";
             fast_assert(false, "Calling external functions is not allowed in strict mode. "
                         "Also intrinsics should be lowered before runnin pass.");
           } else {
-            DEBUG( dbgs() << "Recognized builtin: "; i->print(dbgs()); );
+            DEBUG( dbgs() << "Recognized builtin: "; F->print(dbgs()); );
             continue;
           }
         }
 
+        if (!F->isIntrinsic()) {
+          DEBUG( dbgs() << "\n --------------- PRINTING OUT SOME DEBUG FROM MEMDEP ANALYSIS --------------\n" );
+          // this should be wrapped inside limitanalyser
+          AliasAnalysis *AA = &getAnalysis<AliasAnalysis>(*F);
+          MemoryDependenceAnalysis *MD = &getAnalysis<MemoryDependenceAnalysis>(*F);
+          for ( Function::iterator bb = F->begin(); bb != F->end(); bb++) {
+            for( BasicBlock::iterator i = bb->begin(); i != bb->end(); ++i ) {
+              Instruction &inst = *i;
+              if (inst.mayReadFromMemory() || inst.mayWriteToMemory()) {
+                const MemDepResult &result = MD->getDependency(&inst);
+                dbgs() << "DEP FOR: "; i->print(dbgs()); dbgs() << "\n";
+                
+                dbgs() << " isClobber: " << result.isClobber()
+                << " isDef: " << result.isDef()
+                << " isNonLocal: " << result.isNonLocal()
+                << " isNonFuncLocal: " << result.isNonFuncLocal()
+                << " isUnknown: " << result.isUnknown();
+                
+                dbgs() << "\nRESULT getInst()->print(): "; result.getInst()->print(dbgs()); dbgs() << "\n";                
+              }
+            }
+          }
+        }
+        
         // Creates new signatures for internal functions in the program and adds mapping between
         // old and new functions. Also creates mapping between old and new function arguments.
         // [Function* createNewFunctionSignature(Function *F, FunctionMap &functionMapping,
         // ArgumentMap &argumentMapping )](#createNewFunctionSignature).
         DEBUG( dbgs() << "\n --------------- CREATING NEW FUNCTION SIGNATURE --------------\n" );
-        createNewFunctionSignature( i, functionManager.replaceFunctionInserter(), functionManager.replaceArgumentInserter(), 
+        createNewFunctionSignature( F, functionManager.replaceFunctionInserter(), functionManager.replaceArgumentInserter(),
                                     programAllocationsType );
       }
 
