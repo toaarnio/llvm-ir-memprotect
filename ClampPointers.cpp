@@ -143,11 +143,31 @@ namespace WebCL {
   //const unsigned constantAddressSpaceNumber = 2;
   //const unsigned localAddressSpaceNumber    = 3;
 
+  // std::string addressSpaceLabel(unsigned as) {
+  //   switch (as) {
+  //   case 0: return "Private";
+  //   case 1: return "Global";
+  //   case 2: return "Constant";
+  //   case 3: return "Local";
+  //   }
+  //   return "Unknown";
+  // }
+
   // Numbers of NVPTX backend
   const unsigned privateAddressSpaceNumber  = 0;
   const unsigned globalAddressSpaceNumber   = 1;
   const unsigned constantAddressSpaceNumber = 4;
   const unsigned localAddressSpaceNumber    = 5;
+
+  std::string addressSpaceLabel(unsigned as) {
+    switch (as) {
+    case 0: return "Private";
+    case 1: return "Global";
+    case 4: return "Constant";
+    case 5: return "Local";
+    }
+    return "Unknown";
+  }
   
   // ### Common helper functions
   
