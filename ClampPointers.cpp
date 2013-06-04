@@ -247,6 +247,16 @@ namespace WebCL {
     return temp;
   }
   
+  template <class T>
+  std::vector<T> genIntVector(LLVMContext &context, int i1, int i2, int i3, int i4) {
+    std::vector<T> temp;
+    temp.push_back(getConstInt(context, i1));
+    temp.push_back(getConstInt(context, i2));
+    temp.push_back(getConstInt(context, i3));
+    temp.push_back(getConstInt(context, i4));
+    return temp;
+  }
+  
   // Helpers to create array refs of any type of Values
   template <class T>
   std::vector<T> genVector(T v1) {
@@ -269,6 +279,16 @@ namespace WebCL {
     temp.push_back(v1);
     temp.push_back(v2);
     temp.push_back(v3);
+    return temp;
+  }    
+
+  template <class T>
+  std::vector<T> genVector(T v1, T v2, T v3, T v4) {
+    std::vector<T> temp;
+    temp.push_back(v1);
+    temp.push_back(v2);
+    temp.push_back(v3);
+    temp.push_back(v4);
     return temp;
   }    
   
