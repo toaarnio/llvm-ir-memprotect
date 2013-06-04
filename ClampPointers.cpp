@@ -881,7 +881,7 @@ namespace WebCL {
         GetElementPtrInst* constantLimitsField = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
         GetElementPtrInst* globalLimitsField   = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
         GetElementPtrInst* localLimitsField    = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
-        GetElementPtrInst* privateLimitsField  = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+        GetElementPtrInst* privateAllocationsField = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
         if (Value* init = getConstantLimits(blockBuilder)) {
           blockBuilder.CreateStore(init, constantLimitsField);
         }
@@ -892,7 +892,7 @@ namespace WebCL {
           blockBuilder.CreateStore(init, localLimitsField);
         }
         if (Value* init = getPrivateAllocations(blockBuilder)) {
-          blockBuilder.CreateStore(init, privateLimitsField);
+          blockBuilder.CreateStore(init, privateAllocationsField);
         }
         return paa;
       }
