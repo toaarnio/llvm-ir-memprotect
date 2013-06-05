@@ -861,7 +861,8 @@ namespace WebCL {
         programAllocationsType(0),
         constantLimitsType(0),
         globalLimitsType(0),
-        localLimitsType(0) {
+        localLimitsType(0),
+        localAllocations(0) {
         // nothing
       }
       void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, const std::vector<Value*> &values) {
@@ -871,6 +872,15 @@ namespace WebCL {
       }
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
         // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
+      }
+      GlobalVariable* getLocalAllocations() {
+        if (!localAllocations) {
+          localAllocations = new GlobalVariable
+            (M, getASAllocationsType(localAddressSpaceNumber), false, GlobalValue::InternalLinkage, 
+             ConstantAggregateZero::get(getASAllocationsType(localAddressSpaceNumber)), 
+             "localAllocations", NULL, GlobalVariable::NotThreadLocal, localAddressSpaceNumber);
+        }
+        return localAllocations;
       }
       Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
@@ -882,6 +892,9 @@ namespace WebCL {
         GetElementPtrInst* globalLimitsField   = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
         GetElementPtrInst* localLimitsField    = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
         GetElementPtrInst* privateAllocationsField = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+
+        getLocalAllocations();
+
         if (Value* init = getConstantLimits(blockBuilder)) {
           blockBuilder.CreateStore(init, constantLimitsField);
         }
@@ -922,6 +935,7 @@ namespace WebCL {
       StructType* constantLimitsType;
       StructType* globalLimitsType;
       StructType* localLimitsType;
+      GlobalVariable* localAllocations;
 
       ValueVectorByAddressSpaceMap asValues;
 
