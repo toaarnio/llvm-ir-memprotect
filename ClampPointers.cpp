@@ -898,6 +898,30 @@ namespace WebCL {
         PointerType* type = cast<PointerType>(arg->getType());
         dynamicRanges[type->getAddressSpace()].push_back(arg);
       }
+      // for a given kernel argument, return the pointers where we store its minimum and maximum limit
+      void getArgumentLimits(Argument* arg, IRBuilder<> &blockBuilder, GetElementPtrInst*& min, GetElementPtrInst*& max) {
+        PointerType* type = cast<PointerType>(arg->getType());
+        unsigned as = type->getAddressSpace();
+        int idx = 0;
+        const ArgumentVector args = dynamicRanges[as];
+        ArgumentVector::const_iterator it;
+        for (it = args.begin();
+             it != args.end() && *it != arg;
+             ++it, ++idx) {
+          // iterate
+        }
+        assert(it != args.end());
+        if (as == globalAddressSpaceNumber) {
+          getGlobalLimits(blockBuilder, idx, min, max);
+        } else if (as == localAddressSpaceNumber) {
+          getLocalLimits(blockBuilder, idx, min, max);
+        } else if (as == constantAddressSpaceNumber) {
+          getConstantLimits(blockBuilder, idx, min, max);
+        } else if (as == privateAddressSpaceNumber) {
+          getPrivateLimits(blockBuilder, idx, min, max);
+        } else {
+          assert(0);
+        }
       }
       GlobalVariable* getLocalAllocations() {
         fixed = true;
@@ -919,39 +943,6 @@ namespace WebCL {
         }
         return constantAllocations;
       }
-      GetElementPtrInst* getConstantLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
-        LLVMContext& c = M.getContext();
-        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
-      }
-      GetElementPtrInst* getGlobalLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
-        LLVMContext& c = M.getContext();
-        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
-      }
-      GetElementPtrInst* getLocalLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
-        LLVMContext& c = M.getContext();
-        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
-      }
-      GetElementPtrInst* getPrivateAllocationsField(IRBuilder<> &blockBuilder, Value* paa) const {
-        LLVMContext& c = M.getContext();
-        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
-      }
-      GetElementPtrInst* getPrivateAllocationsField(IRBuilder<> &blockBuilder, Value* paa, int n) const {
-        LLVMContext& c = M.getContext();
-        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3, n)));
-      }
-      ConstantExpr* getConstantAllocationsField(IRBuilder<> &blockBuilder, int n) {
-        LLVMContext& c = M.getContext();
-        GlobalVariable* root = getConstantAllocations();
-        Value* v = blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n));
-        DUMP(*v);
-        DUMP(v->getValueID());
-        return cast<ConstantExpr>(v);
-      }
-      ConstantExpr* getLocalAllocationsField(IRBuilder<> &blockBuilder, int n) {
-        LLVMContext& c = M.getContext();
-        GlobalVariable* root = getLocalAllocations();
-        return cast<ConstantExpr>(blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n)));
-      }
       Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
         fixed = true;
         Value* paa = blockBuilder.CreateAlloca(dyn_cast<PointerType>(getProgramAllocationsType())->getTypeAtIndex(0u),
@@ -961,18 +952,13 @@ namespace WebCL {
         getLocalAllocations();
         getConstantAllocations();
 
-        if (Value* init = getASLimitsInit(constantAddressSpaceNumber, blockBuilder)) {
-          blockBuilder.CreateStore(init, getConstantLimitsField(blockBuilder, paa));
-        }
-        if (Value* init = getASLimitsInit(globalAddressSpaceNumber, blockBuilder)) {
-          blockBuilder.CreateStore(init, getGlobalLimitsField(blockBuilder, paa));
-        }
-        if (Value* init = getASLimitsInit(localAddressSpaceNumber, blockBuilder)) {
-          blockBuilder.CreateStore(init, getLocalLimitsField(blockBuilder, paa));
-        }
-        if (Value* init = getPrivateAllocationsInit(blockBuilder)) {
-          blockBuilder.CreateStore(init, getPrivateAllocationsField(blockBuilder, paa));
-        }
+        generateASLimitsInit(constantAddressSpaceNumber, blockBuilder, getConstantLimitsField(blockBuilder));
+        generateASLimitsInit(globalAddressSpaceNumber, blockBuilder, getGlobalLimitsField(blockBuilder));
+        generateASLimitsInit(localAddressSpaceNumber, blockBuilder, getLocalLimitsField(blockBuilder));
+        //generatePrivateAllocationsInit(blockBuilder, getPrivateAllocationsField(blockBuilder));
+
+        //Function* kernel = blockBuilder.GetInsertPoint()->getParent()->getParent();
+
         return paa;
       }
       PointerType* getProgramAllocationsType() {
@@ -1000,9 +986,8 @@ namespace WebCL {
           Value* const value = it->first;
           const ValueASIndex& index = it->second;
           if (Instruction* inst = dyn_cast<Instruction>(value)) {
-            Function* F = inst->getParent()->getParent();
             IRBuilder<> blockBuilder(inst);
-            Value* replacement = getValueReplacement(*F, blockBuilder, value);
+            Value* replacement = getValueReplacement(blockBuilder, value);
             assert(replacement != value);
             value->replaceAllUsesWith(replacement);
           } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
@@ -1011,18 +996,16 @@ namespace WebCL {
                  ++it) {
               User* user = *it;
               if (Instruction* inst = dyn_cast<Instruction>(user)) {
-                Function* F = inst->getParent()->getParent();
                 IRBuilder<> blockBuilder(inst);
-                Value* replacement = getValueReplacement(*F, blockBuilder, value);
+                Value* replacement = getValueReplacement(blockBuilder, value);
                 if (replacement != value) {
                   user->replaceUsesOfWith(value, replacement);
                 }
               } else if (ConstantExpr* constant = dyn_cast<ConstantExpr>(user)) {
                 Instruction* inst = getAsInstruction(constant);
                 constant->replaceAllUsesWith(inst);
-                Function* F = inst->getParent()->getParent();
                 IRBuilder<> blockBuilder(inst);
-                Value* replacement = getValueReplacement(*F, blockBuilder, value);
+                Value* replacement = getValueReplacement(blockBuilder, value);
                 if (replacement != value) {
                   user->replaceUsesOfWith(value, replacement);
                 }
@@ -1036,14 +1019,13 @@ namespace WebCL {
           }
         }
       }
-      Value* getValueReplacement(Function &F, IRBuilder<> &blockBuilder, Value *value) {
+      Value* getValueReplacement(IRBuilder<> &blockBuilder, Value *value) {
         if (!valueASMapping.count(value)) {
           return value;
         }
         const ValueASIndex& index = valueASMapping.find(value)->second;
-        Argument* paa = getProgramAllocations(F);
         if (index.asNumber == privateAddressSpaceNumber) {
-          return getPrivateAllocationsField(blockBuilder, paa, index.index);
+          return getPrivateAllocationsField(blockBuilder, index.index);
         } else if (index.asNumber == constantAddressSpaceNumber) {
           return getConstantAllocationsField(blockBuilder, index.index);
         } else if (index.asNumber == localAddressSpaceNumber) {
@@ -1087,6 +1069,71 @@ namespace WebCL {
       ValueVectorByAddressSpaceMap asValues;
       ConstantValueVectorByAddressSpaceMap asInits;
 
+      GetElementPtrInst* getConstantLimitsField(IRBuilder<> &blockBuilder) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
+      }
+      void getConstantLimits(IRBuilder<> &blockBuilder, int n, GetElementPtrInst*& min, GetElementPtrInst*& max) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 0)));
+        max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 1)));
+      }
+      GetElementPtrInst* getGlobalLimitsField(IRBuilder<> &blockBuilder) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
+      }
+      void getGlobalLimits(IRBuilder<> &blockBuilder, int n, GetElementPtrInst*& min, GetElementPtrInst*& max) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 0)));
+        max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 1)));
+      }
+      GetElementPtrInst* getLocalLimitsField(IRBuilder<> &blockBuilder) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
+      }
+      void getLocalLimits(IRBuilder<> &blockBuilder, int n, GetElementPtrInst*& min, GetElementPtrInst*& max) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 0)));
+        max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 1)));
+      }
+      GetElementPtrInst* getPrivateAllocationsField(IRBuilder<> &blockBuilder) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+      }
+      GetElementPtrInst* getPrivateAllocationsField(IRBuilder<> &blockBuilder, int n) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3, n)));
+      }
+      void getPrivateLimits(IRBuilder<> &blockBuilder, int n, GetElementPtrInst*& min, GetElementPtrInst*& max) const {
+        LLVMContext& c = M.getContext();
+        Value* paa = getProgramAllocations(blockBuilder);
+        min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4)));
+        // TODO: return proper maximum
+        max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4)));
+      }
+      ConstantExpr* getConstantAllocationsField(IRBuilder<> &blockBuilder, int n) {
+        LLVMContext& c = M.getContext();
+        GlobalVariable* root = getConstantAllocations();
+        Value* v = blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n));
+        DUMP(*v);
+        DUMP(v->getValueID());
+        return cast<ConstantExpr>(v);
+      }
+      ConstantExpr* getLocalAllocationsField(IRBuilder<> &blockBuilder, int n) {
+        LLVMContext& c = M.getContext();
+        GlobalVariable* root = getLocalAllocations();
+        return cast<ConstantExpr>(blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n)));
+      }
+
+
       Value* getConstantAllocationsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
@@ -1116,7 +1163,7 @@ namespace WebCL {
         return allocationsTypes[asNumber];
       }
 
-      Value* getPrivateAllocationsInit(IRBuilder<> &blockBuilder) {
+      Value* generatePrivateAllocationsInit(IRBuilder<> &blockBuilder) {
         // LLVMContext& c = M.getContext();
         // ValueVector values = asValues[privateAddressSpaceNumber];
         // std::vector<Constant*> initValues;
@@ -1157,16 +1204,20 @@ namespace WebCL {
         return asLimitsTypes[asNumber];
       }
 
-      Value* getASLimitsInit(unsigned asNumber, IRBuilder<> &blockBuilder) {
+      void generateASLimitsInit(unsigned asNumber, IRBuilder<> &blockBuilder, Value* results) {
         // TODO
-        StructType* t = getASLimitsType(asNumber);
-        std::vector<Constant*> init;
-        for (StructType::element_iterator it = t->element_begin();
-             it != t->element_end();
-             ++it) {
-          init.push_back(Constant::getNullValue(*it));
+        if (asNumber == globalAddressSpaceNumber) {
+          
+        } else {
+          StructType* t = getASLimitsType(asNumber);
+          std::vector<Constant*> init;
+          for (StructType::element_iterator it = t->element_begin();
+               it != t->element_end();
+               ++it) {
+            init.push_back(Constant::getNullValue(*it));
+          }
+          blockBuilder.CreateStore(ConstantStruct::get(getASLimitsType(asNumber), init), results);
         }
-        return ConstantStruct::get(getASLimitsType(asNumber), init);
       }
     };
     
