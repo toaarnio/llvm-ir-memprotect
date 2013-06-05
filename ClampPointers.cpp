@@ -909,19 +909,36 @@ namespace WebCL {
       }
       GetElementPtrInst* getConstantLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
         LLVMContext& c = M.getContext();
-        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
       }
       GetElementPtrInst* getGlobalLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
         LLVMContext& c = M.getContext();
-        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
       }
       GetElementPtrInst* getLocalLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
         LLVMContext& c = M.getContext();
-        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
       }
       GetElementPtrInst* getPrivateAllocationsField(IRBuilder<> &blockBuilder, Value* paa) const {
         LLVMContext& c = M.getContext();
-        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+      }
+      GetElementPtrInst* getPrivateAllocationsField(IRBuilder<> &blockBuilder, Value* paa, int n) const {
+        LLVMContext& c = M.getContext();
+        return cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3, n)));
+      }
+      ConstantExpr* getConstantAllocationsField(IRBuilder<> &blockBuilder, int n) {
+        LLVMContext& c = M.getContext();
+        GlobalVariable* root = getConstantAllocations();
+        Value* v = blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n));
+        DUMP(*v);
+        DUMP(v->getValueID());
+        return cast<ConstantExpr>(v);
+      }
+      ConstantExpr* getLocalAllocationsField(IRBuilder<> &blockBuilder, int n) {
+        LLVMContext& c = M.getContext();
+        GlobalVariable* root = getLocalAllocations();
+        return cast<ConstantExpr>(blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n)));
       }
       Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
         fixed = true;
