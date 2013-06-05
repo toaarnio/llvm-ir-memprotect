@@ -906,16 +906,16 @@ namespace WebCL {
         getLocalAllocations();
         getConstantAllocations();
 
-        if (Value* init = getConstantLimits(blockBuilder)) {
+        if (Value* init = getConstantLimitsInit(blockBuilder)) {
           blockBuilder.CreateStore(init, constantLimitsField);
         }
-        if (Value* init = getGlobalLimits(blockBuilder)) {
+        if (Value* init = getGlobalLimitsInit(blockBuilder)) {
           blockBuilder.CreateStore(init, globalLimitsField);
         }
-        if (Value* init = getLocalLimits(blockBuilder)) {
+        if (Value* init = getLocalLimitsInit(blockBuilder)) {
           blockBuilder.CreateStore(init, localLimitsField);
         }
-        if (Value* init = getPrivateAllocations(blockBuilder)) {
+        if (Value* init = getPrivateAllocationsInit(blockBuilder)) {
           blockBuilder.CreateStore(init, privateAllocationsField);
         }
         return paa;
@@ -951,13 +951,13 @@ namespace WebCL {
 
       ValueVectorByAddressSpaceMap asValues;
 
-      Value* getConstantAllocations(IRBuilder<> &blockBuilder) {
+      Value* getConstantAllocationsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
         return ConstantStruct::get(getASAllocationsType(constantAddressSpaceNumber), genIntVector<Constant*>(c, 0));
       }
 
-      Value* getLocalAllocations(IRBuilder<> &blockBuilder) {
+      Value* getLocalAllocationsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
         return ConstantStruct::get(getASAllocationsType(localAddressSpaceNumber), genIntVector<Constant*>(c, 0));
@@ -980,7 +980,7 @@ namespace WebCL {
         return allocationsTypes[asNumber];
       }
 
-      Value* getPrivateAllocations(IRBuilder<> &blockBuilder) {
+      Value* getPrivateAllocationsInit(IRBuilder<> &blockBuilder) {
         // LLVMContext& c = M.getContext();
         // ValueVector values = asValues[privateAddressSpaceNumber];
         // std::vector<Constant*> initValues;
@@ -1006,7 +1006,7 @@ namespace WebCL {
         return constantLimitsType;
       }
 
-      Value* getConstantLimits(IRBuilder<> &blockBuilder) {
+      Value* getConstantLimitsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
         return ConstantStruct::get(getConstantLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
@@ -1026,7 +1026,7 @@ namespace WebCL {
         return globalLimitsType;
       }
 
-      Value* getGlobalLimits(IRBuilder<> &blockBuilder) {
+      Value* getGlobalLimitsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
         return ConstantStruct::get(getGlobalLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
@@ -1046,7 +1046,7 @@ namespace WebCL {
         return localLimitsType;
       }
 
-      Value* getLocalLimits(IRBuilder<> &blockBuilder) {
+      Value* getLocalLimitsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
         return ConstantStruct::get(getLocalLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
