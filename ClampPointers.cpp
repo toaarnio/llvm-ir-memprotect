@@ -862,7 +862,8 @@ namespace WebCL {
         constantLimitsType(0),
         globalLimitsType(0),
         localLimitsType(0),
-        localAllocations(0) {
+        localAllocations(0),
+        constantAllocations(0) {
         // nothing
       }
       void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, const std::vector<Value*> &values) {
@@ -882,6 +883,15 @@ namespace WebCL {
         }
         return localAllocations;
       }
+      GlobalVariable* getConstantAllocations() {
+        if (!constantAllocations) {
+          constantAllocations = new GlobalVariable
+            (M, getASAllocationsType(constantAddressSpaceNumber), true, GlobalValue::InternalLinkage, 
+             ConstantAggregateZero::get(getASAllocationsType(constantAddressSpaceNumber)), 
+             "constantAllocations", NULL, GlobalVariable::NotThreadLocal, constantAddressSpaceNumber);
+        }
+        return constantAllocations;
+      }
       Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         Value* paa = blockBuilder.CreateAlloca(dyn_cast<PointerType>(getProgramAllocationsType())->getTypeAtIndex(0u),
@@ -894,6 +904,7 @@ namespace WebCL {
         GetElementPtrInst* privateAllocationsField = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
 
         getLocalAllocations();
+        getConstantAllocations();
 
         if (Value* init = getConstantLimits(blockBuilder)) {
           blockBuilder.CreateStore(init, constantLimitsField);
@@ -936,6 +947,7 @@ namespace WebCL {
       StructType* globalLimitsType;
       StructType* localLimitsType;
       GlobalVariable* localAllocations;
+      GlobalVariable* constantAllocations;
 
       ValueVectorByAddressSpaceMap asValues;
 
