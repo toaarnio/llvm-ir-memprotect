@@ -1207,6 +1207,7 @@ namespace WebCL {
     
     };
 
+#if 0
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       // check lib/Analysis/MemDepPrinter.cpp how to use memdap anaylsis
       AU.addRequiredTransitive<AliasAnalysis>();
@@ -1214,6 +1215,7 @@ namespace WebCL {
       AU.setPreservesAll();
       dbgs() << "Analysis usage was actually called.\n";
     }
+#endif
       
     // ## <a id="runOnModule"></a> Run On Module
     //
