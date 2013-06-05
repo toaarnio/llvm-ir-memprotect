@@ -866,10 +866,11 @@ namespace WebCL {
         constantAllocations(0) {
         // nothing
       }
-      void addAddressSpace(unsigned asNumber, bool isGlobalScope, StructType *asType, Constant *dataInit, const std::vector<Value*> &values) {
+      void addAddressSpace(unsigned asNumber, bool isGlobalScope, const ArrayRef<Value*> &values, const ArrayRef<Constant*> &dataInit) {
         // TODO: make copy of values and all other data..
         // TODO: implement!
         std::copy(values.begin(), values.end(), std::back_inserter(asValues[asNumber]));
+        std::copy(dataInit.begin(), dataInit.end(), std::back_inserter(asInits[asNumber]));
       }
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
         // TODO: disregard kernel for now
@@ -889,7 +890,7 @@ namespace WebCL {
         if (!constantAllocations) {
           constantAllocations = new GlobalVariable
             (M, getASAllocationsType(constantAddressSpaceNumber), true, GlobalValue::InternalLinkage, 
-             ConstantAggregateZero::get(getASAllocationsType(constantAddressSpaceNumber)), 
+             ConstantStruct::get(getASAllocationsType(constantAddressSpaceNumber), asInits[constantAddressSpaceNumber]),
              "constantAllocations", NULL, GlobalVariable::NotThreadLocal, constantAddressSpaceNumber);
         }
         return constantAllocations;
@@ -946,6 +947,8 @@ namespace WebCL {
       typedef std::map<unsigned, StructType*> AddressSpaceStructTypeMap;
       typedef std::vector<PointerType*> PointerTypeVector;
       typedef std::map<unsigned, PointerTypeVector> AddressSpacePointerTypeVectorMap;
+      typedef std::vector<Constant*> ConstantValueVector; // not to be confused with llvm's ConstantVector..
+      typedef std::map<unsigned, ConstantValueVector> ConstantValueVectorByAddressSpaceMap;
       AddressSpaceStructTypeMap allocationsTypes;
       AddressSpacePointerTypeVectorMap dynamicRanges;
       AddressSpaceStructTypeMap asLimitsTypes;
@@ -956,6 +959,7 @@ namespace WebCL {
       GlobalVariable* constantAllocations;
 
       ValueVectorByAddressSpaceMap asValues;
+      ConstantValueVectorByAddressSpaceMap asInits;
 
       Value* getConstantAllocationsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
@@ -1932,19 +1936,8 @@ namespace WebCL {
           }
         }
 
-        ArrayRef< Type* > structElementTypesArrayRef( structElementTypes );
-        ArrayRef<Constant*> structElementData( structInitData );
-        
-        std::stringstream structName;
-        structName << "AddressSpace" << addressSpace << "StaticData";
-        StructType* addressSpaceStructType = StructType::create(c, structElementTypesArrayRef, structName.str() + "Type");
-
-        // create struct of generated type and add to module
-        // by opencl specs the only struct with initializers is constant address space
-        Constant* addressSpaceDataInitializer = ConstantStruct::get( addressSpaceStructType, structElementData );
-
         // just add collected data to our info manager, which can later on create necessary requi
-        infoManager.addAddressSpace(addressSpace, globalScopeAdressSpaces.count(addressSpace) > 0, addressSpaceStructType, addressSpaceDataInitializer, values);
+        infoManager.addAddressSpace(addressSpace, globalScopeAdressSpaces.count(addressSpace) > 0, values, structInitData);
       }
     }
         /*
