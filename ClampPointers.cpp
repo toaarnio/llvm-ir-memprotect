@@ -153,18 +153,18 @@ namespace WebCL {
   //   return "Unknown";
   // }
 
-  // Numbers of NVPTX backend
+  // Numbers of NVPTX backend: http://llvm.org/docs/NVPTXUsage.html
   const unsigned privateAddressSpaceNumber  = 0;
   const unsigned globalAddressSpaceNumber   = 1;
   const unsigned constantAddressSpaceNumber = 4;
-  const unsigned localAddressSpaceNumber    = 5;
+  const unsigned localAddressSpaceNumber    = 3; // Shared address space
 
   std::string addressSpaceLabel(unsigned as) {
     switch (as) {
     case 0: return "Private";
     case 1: return "Global";
     case 4: return "Constant";
-    case 5: return "Local";
+    case 3: return "Local";
     }
     return "Unknown";
   }
