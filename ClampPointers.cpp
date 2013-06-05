@@ -967,11 +967,14 @@ namespace WebCL {
         if (!allocationsTypes[asNumber]) {
           LLVMContext& c = M.getContext();
           std::vector<Type*> fields;
-          ValueVector values = asValues[asNumber];
+          const ValueVector& values = asValues[asNumber];
+          // TODO: should the types be resolved earlier? This dereference conversion is done because global
+          // variables are pointers
           for (ValueVector::const_iterator it = values.begin(); it != values.end(); ++it) {
-            fields.push_back((*it)->getType());
+            Type* type = (*it)->getType();
+            assert(isa<PointerType>(type));
+            fields.push_back(dyn_cast<PointerType>(type)->getTypeAtIndex(0u));
           }
-          // TODO
           allocationsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "AllocationsType");
         }
         return allocationsTypes[asNumber];
