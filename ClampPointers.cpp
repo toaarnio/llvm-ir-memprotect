@@ -873,7 +873,12 @@ namespace WebCL {
         // TODO: make copy of values and all other data..
         // TODO: implement!
         assert(!fixed);
-        std::copy(values.begin(), values.end(), std::back_inserter(asValues[asNumber]));
+        for (ArrayRef<Value*>::const_iterator it = values.begin();
+             it != values.end();
+             ++it) {
+          valueASMapping.insert(std::make_pair(*it, ValueASIndex(asNumber, asValues[asNumber].size())));
+          asValues[asNumber].push_back(*it);
+        }
         std::copy(dataInit.begin(), dataInit.end(), std::back_inserter(asInits[asNumber]));
       }
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
@@ -978,6 +983,16 @@ namespace WebCL {
       GlobalVariable* localAllocations;
       GlobalVariable* constantAllocations;
       bool fixed;               // once fixed cannot become unfixed.
+      struct ValueASIndex {
+        unsigned asNumber;
+        int      index; // index of the value in the address space struct
+        ValueASIndex(unsigned asNumber, int index) :
+          asNumber(asNumber), index(index) {
+          // nothing
+        }
+      };
+      typedef std::map<Value*, ValueASIndex> ValueASIndexMap;
+      ValueASIndexMap valueASMapping;
 
       ValueVectorByAddressSpaceMap asValues;
       ConstantValueVectorByAddressSpaceMap asInits;
