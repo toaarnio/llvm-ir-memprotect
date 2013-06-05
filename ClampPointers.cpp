@@ -1056,8 +1056,13 @@ namespace WebCL {
         return needChecks;
       }
 
+      void addCheck(Instruction *inst) {
+        needChecks.insert(inst);
+      }
+      
       void addDependency(Instruction* applyLocation, Value* newVal, Value *whoseLimitsToRespect) {
         // TODO: just put new value to map
+        dbgs() << "\nVAL: "; newVal->print(dbgs()); dbgs() << "\nDEP: "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
         dependencies[newVal] = whoseLimitsToRespect;
       }
       
@@ -1066,6 +1071,16 @@ namespace WebCL {
         // TODO: if multiple limits were found try to exploit location info to select correct one
         return dependencies[value];
       }
+      
+      AreaLimitSet& getLimits(Value *value) {
+        // TODO: after adding all information about address space, class can first
+        //       check if we can check against single limits of address space or to
+        //       use dependency data and find out which values limits to respect
+        return limitsOfValue[value];
+      }
+
+      // TODO: ADD METHOD TO PRINT ALL ANALYSIS DATA
+    
     };
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
@@ -1125,8 +1140,8 @@ namespace WebCL {
       // Do the rest of the analysis to be able to resolve all places where we have to do limit
       // checks and where to find limits for it
       // if can be traced to some argument or to some alloca or if we can trace it to single address space
-      DEBUG( dbgs() << "\n --------------- ANALYZE WHICH OPERANDS NEEDS TO BE CHECKED --------------\n" );
-      collectOperandsWhichRequireChecking( M, limitAnalyser, functionManager );
+      DEBUG( dbgs() << "\n ---- ANALYZE AND COLLECT INFORMATION ABOUT DEPENDENCIES ------\n" );
+      collectDependencyInfo( M, limitAnalyser, functionManager );
       
 /* PROBABLY SHOULD BE DONE INTERNALLY IN MAYBE ANALYSER
       // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
@@ -1301,7 +1316,7 @@ namespace WebCL {
       return true;
     }
       
-    void collectOperandsWhichRequireChecking( Module &M, LimitAnalyser &limitAnalyser, FunctionManager &functionManager ) {
+    void collectDependencyInfo( Module &M, LimitAnalyser &limitAnalyser, FunctionManager &functionManager ) {
       ValueSet resolveLimitsOperands;
 
       for ( Module::iterator F = M.begin(); F != M.end(); ++F) {
@@ -1315,8 +1330,6 @@ namespace WebCL {
 
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
         sortInstructions( F,  functionManager );
-        // , functionManager.accessExternalCalls(), 
-        //                   allocas, stores, loads );
         
         const LoadInstrSet& loads = functionManager.getLoads();
         for (LoadInstrSet::iterator i = loads.begin(); i!= loads.end(); i++) {
@@ -1346,16 +1359,66 @@ namespace WebCL {
         // information for each instruction which argument limits they ultimately respects
         for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
           Argument &arg = *a;
+          
+          // arg does respect its own limits
+          limitAnalyser.addDependency(NULL, &arg, &arg);
           // if pointer argument, trace uses
           if ( arg.getType()->isPointerTy() ) {
             resolveUses(&arg, limitAnalyser);
           }
         }
-      
+
+        DEBUG( dbgs() << "----- Tracing call/load/store operands: \n"; );
         for (ValueSet::iterator limitOperand = resolveLimitsOperands.begin();
              limitOperand != resolveLimitsOperands.end() ; limitOperand++) {
-          // TODO: use resolveAncestors...
+
+          Value* val = *limitOperand;
+          DEBUG( dbgs() << "Tracing dependency for: "; val->print(dbgs()); dbgs() << "\n"; );
+
+          if ( resolveAncestors(val, limitAnalyser) ) {
+            DEBUG( dbgs() << "Traced limits successful!\n"; );
+            fast_assert( limitAnalyser.getDependency(val) != NULL,
+                         "Got true from resolve. Obviously limits should have been added to set.");
+          } else {
+            DEBUG( dbgs() << "Could not trace the dependency!\n"; );
+          }
         }
+        
+        DEBUG( dbgs() << "\n --------------- Collect list of instructions to check --------------\n" );
+        ValueSet safeExceptions;
+        for (ValueSet::iterator limitOperand = resolveLimitsOperands.begin();
+             limitOperand != resolveLimitsOperands.end() ; limitOperand++) {
+          Value *operand = *limitOperand;
+          if (isSafeAddressToLoad(operand)) {
+            safeExceptions.insert(operand);
+          }
+        }
+        
+        if (RunUnsafeMode) {
+          if (F->getName() == "main") {
+            for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
+              Argument* arg = a;
+              if (arg->getName() == "argv") {
+                resolveArgvUses(arg, safeExceptions);
+              }
+            }
+          }
+        }
+
+        // finally create set of required checks
+        for (LoadInstrSet::iterator i = loads.begin(); i!= loads.end(); i++) {
+          LoadInst *load = *i;
+          if ( safeExceptions.count(load->getPointerOperand()) == 0) {
+            limitAnalyser.addCheck(load);
+          }
+        }
+        for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
+          StoreInst *store = *i;
+          if ( safeExceptions.count(store->getPointerOperand()) == 0) {
+            limitAnalyser.addCheck(store);
+          }
+        }
+                
       }
     }
 
@@ -1592,9 +1655,9 @@ namespace WebCL {
 
       
     /**
-     * Traces from leafs to root if limit is found and then adds limits to each step.
+     * Traces from leafs to root if dependency if found then adds dependency to each step.
      */
-    bool resolveAncestors(Value *val, AreaLimitByValueMap &valLimits, int recursion_level = 0) {
+    bool resolveAncestors(Value *val, LimitAnalyser &limitAnalyser, int recursion_level = 0) {
       Value *next = NULL;
       DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
       
@@ -1630,12 +1693,12 @@ namespace WebCL {
       }
       
       if (next) {
-        if (valLimits.count(next) > 0) {
-          valLimits[val] = valLimits[next];
+        if (limitAnalyser.getDependency(next) != NULL) {
+          limitAnalyser.addDependency(NULL, val, limitAnalyser.getDependency(next));
           return true;
         } else {
-          if (resolveAncestors(next, valLimits, recursion_level + 1)) {
-            valLimits[val] = valLimits[next];
+          if (resolveAncestors(next, limitAnalyser, recursion_level + 1)) {
+            limitAnalyser.addDependency(NULL, val, limitAnalyser.getDependency(next));
             return true;
           }
         }
@@ -1643,86 +1706,6 @@ namespace WebCL {
       return false;
     }
   
-    /**
-     * Goes through all relevant parts in program and traces limits for those values.
-     *
-     * Call operands are not a problem anymore, since they has been converted to pass structs, not direct pointers.
-     */
-    void findLimits(const FunctionMap &replacedFunctions,
-                    const ValueSet &checkOperands,
-                    AreaLimitByValueMap &valLimits,
-                    const AreaLimitSetByAddressSpaceMap &asLimits,
-                    const FunctionSet& safeBuiltinFunctions) {
-    
-      // first trace all uses of function arguments to find their limits
-      DEBUG( dbgs() << "----- Tracing function pointer argument uses \n"; );
-      for ( FunctionMap::const_iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
-        Function *originalFunc = i->first;
-        Function *safePointerFunction = i->second;
-
-        if ( safeBuiltinFunctions.count(safePointerFunction) ) {
-          continue;
-        }
-
-        // TODO: remove all this... 
-        Function::arg_iterator originalArgIter = originalFunc->arg_begin();
-
-        for( Function::arg_iterator a = skipPaa(safePointerFunction->arg_begin());
-             a != safePointerFunction->arg_end();
-             ++a ) {
-          Argument &originalArg = *originalArgIter;
-          Argument &replaceArg = *a;
-          
-          // if safe pointer argument, trace uses
-          if (originalArg.getType() != replaceArg.getType()) {
-
-            fast_assert(replaceArg.getNumUses() == 1, "Safe pointer argument should have only one extractval use as far as expected currently... (the original use of arg)");
-            ExtractValueInst *cur = dyn_cast<ExtractValueInst>(*replaceArg.use_begin());
-            fast_assert(cur, "Found invalid type of use. Maybe passed directly to other function.");
-            
-            // Adding extract value instructions to entry block to have direct limits stored.
-            BasicBlock &entry = safePointerFunction->getEntryBlock();
-            ExtractValueInst *minLimit = ExtractValueInst::Create( &replaceArg, genVector<unsigned int>(1), replaceArg.getName() + ".min", &(*entry.begin()) );
-            ExtractValueInst *maxLimit = ExtractValueInst::Create( &replaceArg, genVector<unsigned int>(2), replaceArg.getName() + ".max", &(*entry.begin()) );
-            
-            // Init direct limits for current and do some analysis to resolve derived limits
-            valLimits[cur] = AreaLimit::Create(minLimit, maxLimit, false);
-            // resolveUses(cur, valLimits);
-          }
-          
-          originalArgIter++;
-        }
-      }
-      
-      // optimize single area address space limits
-      DEBUG( dbgs() << "----- Tracing call/load/store operands: \n"; );
-      for (ValueSet::const_iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
-        Value* val = *i;
-        DEBUG( dbgs() << "Tracing limits for: "; val->print(dbgs()); dbgs() << "\n"; );
-        PointerType *t = dyn_cast<PointerType>(val->getType());
-        // allow no limit values in unsafe mode (e.g. externals)
-        AreaLimitSetByAddressSpaceMap::const_iterator limitSetIt = asLimits.find(t->getAddressSpace());
-        const AreaLimitSet &limitSet = limitSetIt == asLimits.end() ? AreaLimitSet() : limitSetIt->second;
-        if (limitSet.size() == 0 && RunUnsafeMode) {
-          DEBUG( dbgs() << "unrestricted mode and no limits found... skipping\n"; );
-          continue;
-        }
-
-        fast_assert(limitSet.size() > 0, "Pointer to address space without allocations.");
-        if ( limitSet.size() == 1 ) {
-          DEBUG( dbgs() << "Found single limits for AS: " << t->getAddressSpace() << "\n"; );
-          valLimits[val] = *(limitSet.begin());
-          continue;
-        }
-        
-        if ( resolveAncestors(val, valLimits) ) {
-          DEBUG( dbgs() << "Traced limits successful!\n"; );
-          fast_assert( valLimits.count(val) > 0, "Obviously limits should have been added to set.");
-        } else {
-          DEBUG( dbgs() << "Could not trace the limits!\n"; );
-        }
-      }
-    }
       
     /**
      * Goes through global variables and adds limits to bookkeepping
