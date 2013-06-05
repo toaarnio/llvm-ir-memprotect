@@ -891,11 +891,13 @@ namespace WebCL {
         }
         std::copy(dataInit.begin(), dataInit.end(), std::back_inserter(asInits[asNumber]));
       }
-      void addDynamicLimitRange(Function* kernel, PointerType *type) {
-        // TODO: disregard kernel for now
+      void addDynamicLimitRange(Argument* arg) {
+        // TODO: kernel is disregarded for now
         // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
         assert(!fixed);
-        dynamicRanges[type->getAddressSpace()].push_back(type);
+        PointerType* type = cast<PointerType>(arg->getType());
+        dynamicRanges[type->getAddressSpace()].push_back(arg);
+      }
       }
       GlobalVariable* getLocalAllocations() {
         fixed = true;
@@ -1058,11 +1060,12 @@ namespace WebCL {
       PointerType* programAllocationsType;
       typedef std::map<unsigned, StructType*> AddressSpaceStructTypeMap;
       typedef std::vector<PointerType*> PointerTypeVector;
-      typedef std::map<unsigned, PointerTypeVector> AddressSpacePointerTypeVectorMap;
+      typedef std::vector<Argument*> ArgumentVector;
+      typedef std::map<unsigned, ArgumentVector> AddressSpaceArgumentVectorMap;
       typedef std::vector<Constant*> ConstantValueVector; // not to be confused with llvm's ConstantVector..
       typedef std::map<unsigned, ConstantValueVector> ConstantValueVectorByAddressSpaceMap;
       AddressSpaceStructTypeMap allocationsTypes;
-      AddressSpacePointerTypeVectorMap dynamicRanges;
+      AddressSpaceArgumentVectorMap dynamicRanges;
       AddressSpaceStructTypeMap asLimitsTypes;
       StructType* constantLimitsType;
       StructType* globalLimitsType;
@@ -1141,14 +1144,14 @@ namespace WebCL {
             fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_min
             fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_max
           }
-          const PointerTypeVector& dynamic = dynamicRanges[asNumber];
-          for (PointerTypeVector::const_iterator it = dynamic.begin();
+          const ArgumentVector& dynamic = dynamicRanges[asNumber];
+          for (ArgumentVector::const_iterator it = dynamic.begin();
                it != dynamic.end();
                ++it) {
-            fields.push_back(*it); // min
-            fields.push_back(*it); // max
+            PointerType* type = cast<PointerType>((*it)->getType());
+            fields.push_back(type); // min
+            fields.push_back(type); // max
           }
-          // TODO
           asLimitsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "LimitsType");
         }
         return asLimitsTypes[asNumber];
@@ -1942,7 +1945,7 @@ namespace WebCL {
             Argument* arg = a;
             Type* t = arg->getType();
             if ( t->isPointerTy() ) {
-              infoManager.addDynamicLimitRange(kernel, dyn_cast<PointerType>(t));
+              infoManager.addDynamicLimitRange(arg);
             }
           }
         }
