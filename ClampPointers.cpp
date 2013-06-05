@@ -996,8 +996,9 @@ namespace WebCL {
         if (!constantLimitsType) {
           LLVMContext& c = M.getContext();
           std::vector<Type*> fields;
-          fields.push_back(Type::getInt32Ty(c)); // constantAllocations_min
-          fields.push_back(Type::getInt32Ty(c)); // constantAllocations_max
+          Type* allocationsType = getASAllocationsType(constantAddressSpaceNumber);
+          fields.push_back(PointerType::get(allocationsType, constantAddressSpaceNumber)); // constantAllocations_min
+          fields.push_back(PointerType::get(allocationsType, constantAddressSpaceNumber)); // constantAllocations_max
           fields.push_back(Type::getInt32Ty(c)); // factors_min
           fields.push_back(Type::getInt32Ty(c)); // factors_max
           // TODO
@@ -1009,7 +1010,13 @@ namespace WebCL {
       Value* getConstantLimitsInit(IRBuilder<> &blockBuilder) {
         LLVMContext& c = M.getContext();
         // TODO
-        return ConstantStruct::get(getConstantLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
+        StructType* t = getConstantLimitsType();
+        return ConstantStruct::get(getConstantLimitsType(),
+                                   genVector<Constant*>(Constant::getNullValue(t->getTypeAtIndex(0u)), 
+                                                        Constant::getNullValue(t->getTypeAtIndex(1u)), 
+                                                        getConstInt(c, 3),
+                                                        getConstInt(c, 4))
+                                   );
       }
 
       StructType* getGlobalLimitsType() {
