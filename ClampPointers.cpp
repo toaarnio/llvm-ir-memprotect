@@ -852,6 +852,13 @@ namespace WebCL {
     
     class FunctionScopeAddressSpace : public AddressSpaceInfo {
     };
+
+    /** Given a function, retrieve the value for the program allocations value passed as the function's first
+        parameter. */
+    static Argument* getProgramAllocations(Function& F) {
+      Argument& arg = *F.arg_begin();
+      return &arg;
+    }
     
     // handles creating and bookkeeping address space info objects operations that require creating types must
     // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
@@ -982,6 +989,66 @@ namespace WebCL {
       void replaceUsesOfOriginalVariables() {
         fixed = true;
         // TODO: go through value mappings of every address space that we have created and replace all uses with.
+        for (ValueASIndexMap::const_iterator it = valueASMapping.begin();
+             it != valueASMapping.end();
+             ++it) {
+          Value* const value = it->first;
+          const ValueASIndex& index = it->second;
+          if (Instruction* inst = dyn_cast<Instruction>(value)) {
+            Function* F = inst->getParent()->getParent();
+            IRBuilder<> blockBuilder(inst);
+            Value* replacement = getValueReplacement(*F, blockBuilder, value);
+            assert(replacement != value);
+            value->replaceAllUsesWith(replacement);
+          } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
+            for (Value::use_iterator it = global->use_begin();
+                 it != global->use_end();
+                 ++it) {
+              User* user = *it;
+              if (Instruction* inst = dyn_cast<Instruction>(user)) {
+                Function* F = inst->getParent()->getParent();
+                IRBuilder<> blockBuilder(inst);
+                Value* replacement = getValueReplacement(*F, blockBuilder, value);
+                if (replacement != value) {
+                  user->replaceUsesOfWith(value, replacement);
+                }
+              } else if (ConstantExpr* constant = dyn_cast<ConstantExpr>(user)) {
+                Instruction* inst = getAsInstruction(constant);
+                constant->replaceAllUsesWith(inst);
+                Function* F = inst->getParent()->getParent();
+                IRBuilder<> blockBuilder(inst);
+                Value* replacement = getValueReplacement(*F, blockBuilder, value);
+                if (replacement != value) {
+                  user->replaceUsesOfWith(value, replacement);
+                }
+              } else {
+                assert(0);
+              }
+            }
+            global->eraseFromParent();
+          } else {
+            assert(0);
+          }
+        }
+      }
+      Value* getValueReplacement(Function &F, IRBuilder<> &blockBuilder, Value *value) {
+        if (!valueASMapping.count(value)) {
+          return value;
+        }
+        const ValueASIndex& index = valueASMapping.find(value)->second;
+        Argument* paa = getProgramAllocations(F);
+        if (index.asNumber == privateAddressSpaceNumber) {
+          return getPrivateAllocationsField(blockBuilder, paa, index.index);
+        } else if (index.asNumber == constantAddressSpaceNumber) {
+          return getConstantAllocationsField(blockBuilder, index.index);
+        } else if (index.asNumber == localAddressSpaceNumber) {
+          return getLocalAllocationsField(blockBuilder, index.index);
+        } else if (index.asNumber == globalAddressSpaceNumber) {
+          return value;
+        } else {
+          assert(false);
+          return 0;
+        }
       }
     private:
       Module& M;
@@ -1539,13 +1606,6 @@ namespace WebCL {
           continue;          
         }
       }
-    }
-
-    /** Given a function, retrieve the value for the program allocations value passed as the function's first
-        parameter. */
-    Argument* getProgramAllocations(Function& F) {
-      Argument& arg = *F.arg_begin();
-      return &arg;
     }
 
     /** Given a manually written safeptr C function returns a function
