@@ -859,6 +859,9 @@ namespace WebCL {
       Argument& arg = *F.arg_begin();
       return &arg;
     }
+    static Argument* getProgramAllocations(IRBuilder<>& blockBuilder) {
+      return getProgramAllocations(*blockBuilder.GetInsertPoint()->getParent()->getParent());
+    }
     
     // handles creating and bookkeeping address space info objects operations that require creating types must
     // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
