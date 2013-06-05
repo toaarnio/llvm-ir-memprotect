@@ -1169,6 +1169,7 @@ namespace WebCL {
           }
         }
 
+        /* DISABLED MemoryDependenceAnalysis tests since couldn't get any useful info from it
         if (!F->isIntrinsic()) {
           DEBUG( dbgs() << "\n --------------- PRINTING OUT SOME DEBUG FROM MEMDEP ANALYSIS --------------\n" );
           // this should be wrapped inside limitanalyser
@@ -1194,6 +1195,7 @@ namespace WebCL {
             }
           }
         }
+        */
         
         // Creates new signatures for internal functions in the program and adds mapping between
         // old and new functions. Also creates mapping between old and new function arguments.
