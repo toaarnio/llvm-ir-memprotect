@@ -872,7 +872,9 @@ namespace WebCL {
         std::copy(values.begin(), values.end(), std::back_inserter(asValues[asNumber]));
       }
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
+        // TODO: disregard kernel for now
         // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
+        dynamicRanges[type->getAddressSpace()].push_back(type);
       }
       GlobalVariable* getLocalAllocations() {
         if (!localAllocations) {
@@ -906,13 +908,13 @@ namespace WebCL {
         getLocalAllocations();
         getConstantAllocations();
 
-        if (Value* init = getConstantLimitsInit(blockBuilder)) {
+        if (Value* init = getASLimitsInit(constantAddressSpaceNumber, blockBuilder)) {
           blockBuilder.CreateStore(init, constantLimitsField);
         }
-        if (Value* init = getGlobalLimitsInit(blockBuilder)) {
+        if (Value* init = getASLimitsInit(globalAddressSpaceNumber, blockBuilder)) {
           blockBuilder.CreateStore(init, globalLimitsField);
         }
-        if (Value* init = getLocalLimitsInit(blockBuilder)) {
+        if (Value* init = getASLimitsInit(localAddressSpaceNumber, blockBuilder)) {
           blockBuilder.CreateStore(init, localLimitsField);
         }
         if (Value* init = getPrivateAllocationsInit(blockBuilder)) {
@@ -926,9 +928,9 @@ namespace WebCL {
 
           programAllocationsType =
             PointerType::get(StructType::create(c,
-                                                genVector<Type*>(getConstantLimitsType(),
-                                                                 getGlobalLimitsType(),
-                                                                 getLocalLimitsType(),
+                                                genVector<Type*>(getASLimitsType(constantAddressSpaceNumber),
+                                                                 getASLimitsType(globalAddressSpaceNumber),
+                                                                 getASLimitsType(localAddressSpaceNumber),
                                                                  getASAllocationsType(privateAddressSpaceNumber)),
                                                 "ProgramAllocationsType"),
                              privateAddressSpaceNumber);
@@ -942,7 +944,11 @@ namespace WebCL {
       Module& M;
       PointerType* programAllocationsType;
       typedef std::map<unsigned, StructType*> AddressSpaceStructTypeMap;
+      typedef std::vector<PointerType*> PointerTypeVector;
+      typedef std::map<unsigned, PointerTypeVector> AddressSpacePointerTypeVectorMap;
       AddressSpaceStructTypeMap allocationsTypes;
+      AddressSpacePointerTypeVectorMap dynamicRanges;
+      AddressSpaceStructTypeMap asLimitsTypes;
       StructType* constantLimitsType;
       StructType* globalLimitsType;
       StructType* localLimitsType;
@@ -994,71 +1000,44 @@ namespace WebCL {
 
       StructType* getConstantLimitsType() {
         if (!constantLimitsType) {
-          LLVMContext& c = M.getContext();
-          std::vector<Type*> fields;
-          Type* allocationsType = getASAllocationsType(constantAddressSpaceNumber);
-          fields.push_back(PointerType::get(allocationsType, constantAddressSpaceNumber)); // constantAllocations_min
-          fields.push_back(PointerType::get(allocationsType, constantAddressSpaceNumber)); // constantAllocations_max
-          fields.push_back(Type::getInt32Ty(c)); // factors_min
-          fields.push_back(Type::getInt32Ty(c)); // factors_max
-          // TODO
-          constantLimitsType = StructType::create(c, fields, "ConstantLimitsType");
+          constantLimitsType = getASLimitsType(constantAddressSpaceNumber);
         }
         return constantLimitsType;
       }
 
-      Value* getConstantLimitsInit(IRBuilder<> &blockBuilder) {
-        LLVMContext& c = M.getContext();
-        // TODO
-        StructType* t = getConstantLimitsType();
-        return ConstantStruct::get(getConstantLimitsType(),
-                                   genVector<Constant*>(Constant::getNullValue(t->getTypeAtIndex(0u)), 
-                                                        Constant::getNullValue(t->getTypeAtIndex(1u)), 
-                                                        getConstInt(c, 3),
-                                                        getConstInt(c, 4))
-                                   );
-      }
-
-      StructType* getGlobalLimitsType() {
-        if (!globalLimitsType) {
+      StructType* getASLimitsType(unsigned asNumber) {
+        if (!asLimitsTypes.count(asNumber)) {
           LLVMContext& c = M.getContext();
           std::vector<Type*> fields;
-          fields.push_back(Type::getInt32Ty(c)); // input_min
-          fields.push_back(Type::getInt32Ty(c)); // input_max
-          fields.push_back(Type::getInt32Ty(c)); // output_min
-          fields.push_back(Type::getInt32Ty(c)); // output_max
+          Type* allocationsType = getASAllocationsType(asNumber);
+          if (asNumber != globalAddressSpaceNumber) {
+            fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_min
+            fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_max
+          }
+          const PointerTypeVector& dynamic = dynamicRanges[asNumber];
+          for (PointerTypeVector::const_iterator it = dynamic.begin();
+               it != dynamic.end();
+               ++it) {
+            fields.push_back(*it); // min
+            fields.push_back(*it); // max
+          }
           // TODO
-          globalLimitsType = StructType::create(c, fields, "GlobalLimitsType");
+          asLimitsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "LimitsType");
         }
-        return globalLimitsType;
+        return asLimitsTypes[asNumber];
       }
 
-      Value* getGlobalLimitsInit(IRBuilder<> &blockBuilder) {
-        LLVMContext& c = M.getContext();
+      Value* getASLimitsInit(unsigned asNumber, IRBuilder<> &blockBuilder) {
         // TODO
-        return ConstantStruct::get(getGlobalLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
-      }
-
-      StructType* getLocalLimitsType() {
-        if (!localLimitsType) {
-          LLVMContext& c = M.getContext();
-          std::vector<Type*> fields;
-          fields.push_back(Type::getInt32Ty(c)); // localAllocations_min
-          fields.push_back(Type::getInt32Ty(c)); // localAllocations_max
-          fields.push_back(Type::getInt32Ty(c)); // scratch_min
-          fields.push_back(Type::getInt32Ty(c)); // scratch_max
-          // TODO
-          localLimitsType = StructType::create(c, fields, "LocalLimitsType");
+        StructType* t = getASLimitsType(asNumber);
+        std::vector<Constant*> init;
+        for (StructType::element_iterator it = t->element_begin();
+             it != t->element_end();
+             ++it) {
+          init.push_back(Constant::getNullValue(*it));
         }
-        return localLimitsType;
+        return ConstantStruct::get(getASLimitsType(asNumber), init);
       }
-
-      Value* getLocalLimitsInit(IRBuilder<> &blockBuilder) {
-        LLVMContext& c = M.getContext();
-        // TODO
-        return ConstantStruct::get(getLocalLimitsType(), genIntVector<Constant*>(c, 1, 2, 3, 4));
-      }
-
     };
     
     class LimitAnalyser {
