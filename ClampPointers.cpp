@@ -853,7 +853,9 @@ namespace WebCL {
     class FunctionScopeAddressSpace : public AddressSpaceInfo {
     };
     
-    // handles creating and bookkeeping address space info objects
+    // handles creating and bookkeeping address space info objects operations that require creating types must
+    // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
+    // operations, and if the flag is set, the object cannot be mutated.
     class AddressSpaceInfoManager {
     public:
       AddressSpaceInfoManager(Module& M) : 
@@ -863,21 +865,25 @@ namespace WebCL {
         globalLimitsType(0),
         localLimitsType(0),
         localAllocations(0),
-        constantAllocations(0) {
+        constantAllocations(0),
+        fixed(false) {
         // nothing
       }
       void addAddressSpace(unsigned asNumber, bool isGlobalScope, const ArrayRef<Value*> &values, const ArrayRef<Constant*> &dataInit) {
         // TODO: make copy of values and all other data..
         // TODO: implement!
+        assert(!fixed);
         std::copy(values.begin(), values.end(), std::back_inserter(asValues[asNumber]));
         std::copy(dataInit.begin(), dataInit.end(), std::back_inserter(asInits[asNumber]));
       }
       void addDynamicLimitRange(Function* kernel, PointerType *type) {
         // TODO: disregard kernel for now
         // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
+        assert(!fixed);
         dynamicRanges[type->getAddressSpace()].push_back(type);
       }
       GlobalVariable* getLocalAllocations() {
+        fixed = true;
         if (!localAllocations) {
           localAllocations = new GlobalVariable
             (M, getASAllocationsType(localAddressSpaceNumber), false, GlobalValue::InternalLinkage, 
@@ -887,6 +893,7 @@ namespace WebCL {
         return localAllocations;
       }
       GlobalVariable* getConstantAllocations() {
+        fixed = true;
         if (!constantAllocations) {
           constantAllocations = new GlobalVariable
             (M, getASAllocationsType(constantAddressSpaceNumber), true, GlobalValue::InternalLinkage, 
@@ -912,6 +919,7 @@ namespace WebCL {
         return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
       }
       Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
+        fixed = true;
         Value* paa = blockBuilder.CreateAlloca(dyn_cast<PointerType>(getProgramAllocationsType())->getTypeAtIndex(0u),
                                                0,
                                                "ProgramAllocations");
@@ -934,6 +942,7 @@ namespace WebCL {
         return paa;
       }
       PointerType* getProgramAllocationsType() {
+        fixed = true;
         if (!programAllocationsType) {
           LLVMContext& c = M.getContext();
 
@@ -949,6 +958,7 @@ namespace WebCL {
         return programAllocationsType;
       }
       void replaceUsesOfOriginalVariables() {
+        fixed = true;
         // TODO: go through value mappings of every address space that we have created and replace all uses with.
       }
     private:
@@ -967,6 +977,7 @@ namespace WebCL {
       StructType* localLimitsType;
       GlobalVariable* localAllocations;
       GlobalVariable* constantAllocations;
+      bool fixed;               // once fixed cannot become unfixed.
 
       ValueVectorByAddressSpaceMap asValues;
       ConstantValueVectorByAddressSpaceMap asInits;
