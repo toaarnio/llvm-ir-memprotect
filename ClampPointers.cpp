@@ -1044,6 +1044,9 @@ namespace WebCL {
     private:
       std::map< Value*, AreaLimitSet> limitsOfValue;
       InstrSet needChecks;
+      // TODO: fix this map to be able to contain also location
+      std::map< Value*, Value* > dependencies;
+      
     public:
       AreaLimitSet& getAreaLimitSet(Value *val) {
         return limitsOfValue[val];
@@ -1051,6 +1054,17 @@ namespace WebCL {
       
       InstrSet& needCheck() {
         return needChecks;
+      }
+
+      void addDependency(Instruction* applyLocation, Value* newVal, Value *whoseLimitsToRespect) {
+        // TODO: just put new value to map
+        dependencies[newVal] = whoseLimitsToRespect;
+      }
+      
+      Value* getDependency(Value *value) {
+        // TODO: check if limit is found
+        // TODO: if multiple limits were found try to exploit location info to select correct one
+        return dependencies[value];
       }
     };
 
@@ -1108,7 +1122,8 @@ namespace WebCL {
       DEBUG( dbgs() << "\n --------------- COLLECT LIMITS FROM KERNEL ARGUMENTS --------------\n" );
       scanKernelArguments( M, addressSpaceInfoManager );
 
-      // Do the rest of the analysis to be able to resolve all places where we have to do limit checks and where to find limits for it
+      // Do the rest of the analysis to be able to resolve all places where we have to do limit
+      // checks and where to find limits for it
       // if can be traced to some argument or to some alloca or if we can trace it to single address space
       DEBUG( dbgs() << "\n --------------- ANALYZE WHICH OPERANDS NEEDS TO BE CHECKED --------------\n" );
       collectOperandsWhichRequireChecking( M, limitAnalyser, functionManager );
@@ -1162,7 +1177,9 @@ namespace WebCL {
           for ( Function::iterator bb = F->begin(); bb != F->end(); bb++) {
             for( BasicBlock::iterator i = bb->begin(); i != bb->end(); ++i ) {
               Instruction &inst = *i;
+              
               if (inst.mayReadFromMemory() || inst.mayWriteToMemory()) {
+              
                 const MemDepResult &result = MD->getDependency(&inst);
                 dbgs() << "DEP FOR: "; i->print(dbgs()); dbgs() << "\n";
                 
@@ -1172,7 +1189,7 @@ namespace WebCL {
                 << " isNonFuncLocal: " << result.isNonFuncLocal()
                 << " isUnknown: " << result.isUnknown();
                 
-                dbgs() << "\nRESULT getInst()->print(): "; result.getInst()->print(dbgs()); dbgs() << "\n";                
+                dbgs() << " getInst(): "; result.getInst()->print(dbgs()); dbgs() << "\n";
               }
             }
           }
@@ -1285,9 +1302,9 @@ namespace WebCL {
     void collectOperandsWhichRequireChecking( Module &M, LimitAnalyser &limitAnalyser, FunctionManager &functionManager ) {
       ValueSet resolveLimitsOperands;
 
-      for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
+      for ( Module::iterator F = M.begin(); F != M.end(); ++F) {
 
-        if ( i->isIntrinsic() || i->isDeclaration() ) {
+        if ( F->isIntrinsic() || F->isDeclaration() ) {
             continue;
         }
         
@@ -1295,12 +1312,12 @@ namespace WebCL {
         // [sortInstructions( Function *F, ... ) ](#sortInstructions).
 
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
-        sortInstructions( i,  functionManager );
+        sortInstructions( F,  functionManager );
         // , functionManager.accessExternalCalls(), 
         //                   allocas, stores, loads );
         
         const LoadInstrSet& loads = functionManager.getLoads();
-        for (LoadInstrSet::iterator i = loads.begin(); i != loads.end(); i++) {
+        for (LoadInstrSet::iterator i = loads.begin(); i!= loads.end(); i++) {
           LoadInst *load = *i;
           resolveLimitsOperands.insert(load->getPointerOperand());
         }
@@ -1323,9 +1340,19 @@ namespace WebCL {
           }
         }
         
-        for (ValueSet::iterator limitOperand = resolveLimitsOperands.begin(); limitOperand != resolveLimitsOperands.end() ; limitOperand++) {
-          // TODO: add all limits to analyzer... still figure out what exaclty is needed
-          // limitAnalyzer.addOperandWhichRequireChecks(*limitOperand);
+        // go through function arguments and trace all uses of them and add
+        // information for each instruction which argument limits they ultimately respects
+        for( Function::arg_iterator a = F->arg_begin(); a != F->arg_end(); ++a ) {
+          Argument &arg = *a;
+          // if pointer argument, trace uses
+          if ( arg.getType()->isPointerTy() ) {
+            resolveUses(&arg, limitAnalyser);
+          }
+        }
+      
+        for (ValueSet::iterator limitOperand = resolveLimitsOperands.begin();
+             limitOperand != resolveLimitsOperands.end() ; limitOperand++) {
+          // TODO: use resolveAncestors...
         }
       }
     }
@@ -1423,85 +1450,85 @@ namespace WebCL {
       llvm::AttrListPtr newAttributes;
 
       // Construct new attributes and new types. There may be fewer
-      // arguments than in the original as three pointer arguments are
-      // folded into one three-struct.
-      {
-        int newArgIdx = 1;
-        int origArgIdx = 1;
-        for ( Function::arg_iterator 
-                origArgIt = F.arg_begin(),
-                E = F.arg_end();
-              origArgIt != E;
-              ++origArgIt, ++newArgIdx, ++origArgIdx ) {
-          llvm::Attributes attribs = origAttributes.getParamAttributes(origArgIdx);
-          newAttributes = newAttributes.addAttr(c, newArgIdx, attribs);
-          bool byval = attribs.hasAttribute(llvm::Attributes::ByVal);
+    // arguments than in the original as three pointer arguments are
+    // folded into one three-struct.
+    {
+      int newArgIdx = 1;
+      int origArgIdx = 1;
+      for ( Function::arg_iterator 
+              origArgIt = F.arg_begin(),
+              E = F.arg_end();
+            origArgIt != E;
+            ++origArgIt, ++newArgIdx, ++origArgIdx ) {
+        llvm::Attributes attribs = origAttributes.getParamAttributes(origArgIdx);
+        newAttributes = newAttributes.addAttr(c, newArgIdx, attribs);
+        bool byval = attribs.hasAttribute(llvm::Attributes::ByVal);
 
-          if ( !byval && isa<PointerType>(origArgIt->getType()) ) {
-            PointerType* pt0 = dyn_cast<PointerType>(origArgIt->getType());
-            ++origArgIt;
-            fast_assert( origArgIt != E, "Insufficient arguments for a safe pointer, 3 required" );
-            PointerType* pt1 = dyn_cast<PointerType>( origArgIt->getType() );
-            ++origArgIt;
-            fast_assert( origArgIt != E, "Insufficient arguments for a safe pointer, 3 required" );
-            PointerType* pt2 = dyn_cast<PointerType>( origArgIt->getType() );
-            fast_assert( pt0 == pt1, "Types 0 and 1 are not the same" );
-            fast_assert( pt1 == pt2, "Types 1 and 2 are not the same" );
-            newTypes.push_back( getSmartStructType( c, pt0 ) );
-            origArgIdx += 2;
-          } else {
-            newTypes.push_back( origArgIt->getType() );
-          }
-        }
-      }
-
-      FunctionType *newFunctionType = FunctionType::get( functionType->getReturnType(), 
-                                                         newTypes, 
-                                                         false );
-
-      Function *newFunction = Function::Create( newFunctionType, F.getLinkage() );
-      newFunction->setCallingConv( F.getCallingConv() );
-      newFunction->setAttributes( newAttributes );
-      if ( F.hasGC() ) {
-        newFunction->setGC( F.getGC() );
-      }
-      
-      F.getParent()->getFunctionList().insert( &F, newFunction );
-      newFunction->setName( F.getName() );
-
-      for( Function::arg_iterator 
-             origArgIt  = F.arg_begin(), 
-             E          = F.arg_end(), 
-             newArgIt   = newFunction->arg_begin();
-           origArgIt != E;
-           ++origArgIt, ++newArgIt ) {
-        bool byval = origAttributes.getParamAttributes(origArgIt->getArgNo() + 1).hasAttribute(llvm::Attributes::ByVal);
-        // remove attribute which does not make sense for non-pointer argument
-        // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
-        int argIdx = newArgIt->getArgNo()+1;
-        newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)) );
-        newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)) );
-
-        // it is a smart pointer: we can skip three of the original arguments
-        if (!byval && isa<PointerType>(origArgIt->getType())) {
-          newArgIt->setName( origArgIt->getName() + ".SmartArg" );
-          ++origArgIt; assert(origArgIt != E);
-          ++origArgIt; assert(origArgIt != E);
+        if ( !byval && isa<PointerType>(origArgIt->getType()) ) {
+          PointerType* pt0 = dyn_cast<PointerType>(origArgIt->getType());
+          ++origArgIt;
+          fast_assert( origArgIt != E, "Insufficient arguments for a safe pointer, 3 required" );
+          PointerType* pt1 = dyn_cast<PointerType>( origArgIt->getType() );
+          ++origArgIt;
+          fast_assert( origArgIt != E, "Insufficient arguments for a safe pointer, 3 required" );
+          PointerType* pt2 = dyn_cast<PointerType>( origArgIt->getType() );
+          fast_assert( pt0 == pt1, "Types 0 and 1 are not the same" );
+          fast_assert( pt1 == pt2, "Types 1 and 2 are not the same" );
+          newTypes.push_back( getSmartStructType( c, pt0 ) );
+          origArgIdx += 2;
         } else {
-          newArgIt->setName( origArgIt->getName() );
+          newTypes.push_back( origArgIt->getType() );
         }
-        
-        argumentMapping.insert( std::pair< Argument*, Argument* >( origArgIt, newArgIt ) ); 
       }
+    }
 
-      return newFunction;
+    FunctionType *newFunctionType = FunctionType::get( functionType->getReturnType(), 
+                                                       newTypes, 
+                                                       false );
+
+    Function *newFunction = Function::Create( newFunctionType, F.getLinkage() );
+    newFunction->setCallingConv( F.getCallingConv() );
+    newFunction->setAttributes( newAttributes );
+    if ( F.hasGC() ) {
+      newFunction->setGC( F.getGC() );
     }
     
+    F.getParent()->getFunctionList().insert( &F, newFunction );
+    newFunction->setName( F.getName() );
+
+    for( Function::arg_iterator 
+           origArgIt  = F.arg_begin(), 
+           E          = F.arg_end(), 
+           newArgIt   = newFunction->arg_begin();
+         origArgIt != E;
+         ++origArgIt, ++newArgIt ) {
+      bool byval = origAttributes.getParamAttributes(origArgIt->getArgNo() + 1).hasAttribute(llvm::Attributes::ByVal);
+      // remove attribute which does not make sense for non-pointer argument
+      // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
+      int argIdx = newArgIt->getArgNo()+1;
+      newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)) );
+      newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)) );
+
+      // it is a smart pointer: we can skip three of the original arguments
+      if (!byval && isa<PointerType>(origArgIt->getType())) {
+        newArgIt->setName( origArgIt->getName() + ".SmartArg" );
+        ++origArgIt; assert(origArgIt != E);
+        ++origArgIt; assert(origArgIt != E);
+      } else {
+        newArgIt->setName( origArgIt->getName() );
+      }
+      
+      argumentMapping.insert( std::pair< Argument*, Argument* >( origArgIt, newArgIt ) ); 
+    }
+
+    return newFunction;
+  }
+
     /**
      * Resolves uses of value and limits that it should respect
      *
-     * Does also simple data dependency analysis to be able to 
-     * resolve limits which values should respect in case of same 
+     * Does also simple data dependency analysis to be able to
+     * resolve limits which values should respect in case of same
      * address space has more than allocated 1 areas.
      *
      * Follows uses of val and in case of storing to memory, keep track if
@@ -1509,12 +1536,12 @@ namespace WebCL {
      *
      * TODO: needs more clear implementation
      */
-    void resolveUses(Value *val, AreaLimitByValueMap &valLimits, int recursion_level = 0) {
+    void resolveUses(Value *val, LimitAnalyser &limitAnalyser, int recursion_level = 0) {
       
       // check all uses of value until cannot trace anymore
       for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
         Value *use = *i;
-       
+        
         // ----- continue to next use if cannot be sure about the limits
         if ( dyn_cast<GetElementPtrInst>(use) ) {
           DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
@@ -1529,15 +1556,14 @@ namespace WebCL {
           
           // first check if use is actually in value operand and in that case set limits for destination pointer
           if (store->getValueOperand() == val) {
-            if (valLimits.count(store->getPointerOperand()) != 0) {
-              fast_assert(valLimits[store->getPointerOperand()] == valLimits[val],
-                          "Dependency analysis cannot resolve single limits for a memory address. This is a bit nasty problem to resolve, since we cannot pass multiple possible limits to functions safe pointer argument. SPIR + removing all safe pointer argument hassling could help this some day. For now avoid assigning pointers from different ranges to the same variable.");
-            }
-            valLimits[store->getPointerOperand()] = valLimits[val];
-            resolveUses(store->getPointerOperand(), valLimits, recursion_level + 1);
+            // adds also place where limit was set to be able to trace, which limit
+            // is valid in which place
+            limitAnalyser.addDependency(store, store->getPointerOperand(),
+                                        limitAnalyser.getDependency(val));
+            resolveUses(store->getPointerOperand(), limitAnalyser, recursion_level + 1);
           }
           continue;
-        
+          
         } else if ( CastInst* cast = dyn_cast<CastInst>(use) ) {
           // if cast is not from pointer to pointer in same address space, cannot resolve
           if (!cast->getType()->isPointerTy() ||
@@ -1548,7 +1574,7 @@ namespace WebCL {
           }
           DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
           DEBUG( dbgs() << "  ## Found valid pointer cast, keep on tracking.\n" );
-                  
+          
         } else {
           // notify about unexpected cannot be resolved cases for debug
           DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
@@ -1557,11 +1583,12 @@ namespace WebCL {
         }
         
         // limits of use are directly derived from value
-        valLimits[use] = valLimits[val];
-        resolveUses(use, valLimits, recursion_level + 1);
+        limitAnalyser.addDependency(NULL, use, limitAnalyser.getDependency(val));
+        resolveUses(use, limitAnalyser, recursion_level + 1);
       }
     }
-    
+
+      
     /**
      * Traces from leafs to root if limit is found and then adds limits to each step.
      */
@@ -1635,6 +1662,7 @@ namespace WebCL {
           continue;
         }
 
+        // TODO: remove all this... 
         Function::arg_iterator originalArgIter = originalFunc->arg_begin();
 
         for( Function::arg_iterator a = skipPaa(safePointerFunction->arg_begin());
@@ -1657,7 +1685,7 @@ namespace WebCL {
             
             // Init direct limits for current and do some analysis to resolve derived limits
             valLimits[cur] = AreaLimit::Create(minLimit, maxLimit, false);
-            resolveUses(cur, valLimits);
+            // resolveUses(cur, valLimits);
           }
           
           originalArgIter++;

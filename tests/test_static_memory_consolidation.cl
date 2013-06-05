@@ -40,7 +40,7 @@ __kernel void test(
 
   __global float *test = in;
   test_local[i] = test[i];
-  // test = out; // uncomment this to fail simple data dependency check 
+  test = out; // uncomment this to fail simple data dependency check 
   test_local[i] = test[i];
 
   test_local[i] = in[i];
