@@ -895,31 +895,41 @@ namespace WebCL {
         }
         return constantAllocations;
       }
-      Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
+      GetElementPtrInst* getConstantLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
         LLVMContext& c = M.getContext();
+        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
+      }
+      GetElementPtrInst* getGlobalLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
+        LLVMContext& c = M.getContext();
+        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
+      }
+      GetElementPtrInst* getLocalLimitsField(IRBuilder<> &blockBuilder, Value* paa) const {
+        LLVMContext& c = M.getContext();
+        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
+      }
+      GetElementPtrInst* getPrivateAllocationsField(IRBuilder<> &blockBuilder, Value* paa) const {
+        LLVMContext& c = M.getContext();
+        return dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+      }
+      Value* generateProgramAllocationCode(IRBuilder<> &blockBuilder) {
         Value* paa = blockBuilder.CreateAlloca(dyn_cast<PointerType>(getProgramAllocationsType())->getTypeAtIndex(0u),
                                                0,
                                                "ProgramAllocations");
         
-        GetElementPtrInst* constantLimitsField = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
-        GetElementPtrInst* globalLimitsField   = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
-        GetElementPtrInst* localLimitsField    = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
-        GetElementPtrInst* privateAllocationsField = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
-
         getLocalAllocations();
         getConstantAllocations();
 
         if (Value* init = getASLimitsInit(constantAddressSpaceNumber, blockBuilder)) {
-          blockBuilder.CreateStore(init, constantLimitsField);
+          blockBuilder.CreateStore(init, getConstantLimitsField(blockBuilder, paa));
         }
         if (Value* init = getASLimitsInit(globalAddressSpaceNumber, blockBuilder)) {
-          blockBuilder.CreateStore(init, globalLimitsField);
+          blockBuilder.CreateStore(init, getGlobalLimitsField(blockBuilder, paa));
         }
         if (Value* init = getASLimitsInit(localAddressSpaceNumber, blockBuilder)) {
-          blockBuilder.CreateStore(init, localLimitsField);
+          blockBuilder.CreateStore(init, getLocalLimitsField(blockBuilder, paa));
         }
         if (Value* init = getPrivateAllocationsInit(blockBuilder)) {
-          blockBuilder.CreateStore(init, privateAllocationsField);
+          blockBuilder.CreateStore(init, getPrivateAllocationsField(blockBuilder, paa));
         }
         return paa;
       }
