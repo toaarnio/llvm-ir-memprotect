@@ -1354,10 +1354,23 @@ namespace WebCL {
     ~AreaLimitManager() {}
 
     AreaLimitSet getAreaLimits(Value* ptrOperand) {
-      assert(isa<PointerType>(ptrOperand->getType()));
-      PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
-      int asNumber = pointerType->getAddressSpace();
-      return infoManager.getASLimits(asNumber);
+      Value* current = ptrOperand;
+      AreaLimitSet limits;
+      // find if we can find the limits of the value (or iteratively its dependency, is this required?) from
+      // infoManager, assuming it is a dependency of a kernel argument
+      while (current && isa<Argument>(current) && !limits.size()) {
+        AreaLimitSet limit = infoManager.getArgumentLimits(cast<Argument>(current));
+        limits = limit;
+        current = dependenceAnalyser.getDependency(current);
+      }
+      // if no limit there, get the address space limits
+      if (!limits.size()) {
+        assert(isa<PointerType>(ptrOperand->getType()));
+        PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
+        int asNumber = pointerType->getAddressSpace();
+        limits = infoManager.getASLimits(asNumber);
+      }
+      return limits;
     }
       
   private:
