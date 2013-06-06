@@ -753,12 +753,27 @@ namespace WebCL {
       }
     };
 
+    class AreaLimitBase {
+    public:
+      AreaLimitBase() {}
+      virtual ~AreaLimitBase() {}
+
+      virtual void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) = 0;
+      virtual Value* getMin() const = 0;
+      virtual Value* getMax() const = 0;
+      virtual bool getIndirect() const = 0;
+    };
+
     // **AreaLimit** class holds information of single memory area allocation. Limits of the area
     // can be stored directly as constant expressions for *min* and *max* or they can be indirect
     // references to the limits. In case of indirect memory area, the *min* and *max* contains memory
     // addresses where limit addresses are stored.
-    struct AreaLimit {
+    struct AreaLimit: public AreaLimitBase {
     private:
+      Value* min; // Contains first valid address
+      Value* max; // Contains last valid address
+      bool indirect; // true if min and max are indirect pointers (requires load for getting address)
+
       AreaLimit( Value* _min, Value* _max, bool _indirect ) :
       min( _min ),
       max( _max ),
@@ -778,8 +793,8 @@ namespace WebCL {
       // `Type type` Type which kind of pointer we are going to access.
       // `Instruction *checkStart` Position where necessary loads and pointer arithmetics will be added.
       Value* getValidAddressFor(Value *val, bool isIndirect, int offset, Type *type, Instruction *checkStart) {
-        
-        LLVMContext &c = checkStart->getParent()->getParent()->getContext();
+        Function *F = checkStart->getParent()->getParent();
+        LLVMContext &c = F->getContext();
         
         Value *limit = val;
         if (isIndirect) {
@@ -808,9 +823,6 @@ namespace WebCL {
       }
 
     public:
-      Value* min; // Contains first valid address
-      Value* max; // Contains last valid address
-      bool indirect; // true if min and max are indirect pointers (requires load for getting address)
 
       // **AreaLimit::Create** AreaLimit factory. TODO: add bookkeeping and cleanup for freeing allocated memory.
       static AreaLimit* Create( Value* _min, Value* _max, bool _indirect) {
@@ -829,17 +841,26 @@ namespace WebCL {
       //
       // `Type *type` Type of memory access which is going to be done inside these limits.
       // `Instruction *checkStart` We add new instructions before this if necessary.
-      Value* firstValidAddressFor(Type *type, Instruction *checkStart) {
-        return getValidAddressFor(min, indirect, 0, type, checkStart);
+      
+      void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) {
+        first = getValidAddressFor(max, indirect, -1, type, checkStart);
+        last = getValidAddressFor(max, indirect, -1, type, checkStart);
       }
 
-      Value* lastValidAddressFor(Type *type, Instruction *checkStart) {
-        return getValidAddressFor(max, indirect, -1, type, checkStart);
+      Value* getMin() const {
+        return min;
       }
 
+      Value* getMax() const {
+        return max;
+      }
+
+      bool getIndirect() const {
+        return indirect;
+      }
     };
       
-    typedef std::set< AreaLimit* > AreaLimitSet;
+    typedef std::set< AreaLimitBase* > AreaLimitSet;
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
     
@@ -1939,7 +1960,7 @@ namespace WebCL {
           std::stringstream aliasName;
           aliasName << "AS" << g->getType()->getAddressSpace();
           // pointercast all limits to float* to make result more readable
-          AreaLimit *gvLimits = 0;
+          AreaLimitBase *gvLimits = 0;
           if (addressSpaceEndPtrs.count(g)) {
             Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
             Constant *firstInvalid = ConstantExpr::getGetElementPtr(addressSpaceEndPtrs[g], getConstInt(c,0));
@@ -2603,12 +2624,13 @@ namespace WebCL {
       std::string postfix = postfix_buf;
       
       DEBUG( dbgs() << " Possible limits to check: \n" );
-      for (AreaLimitSet::iterator i = limits.begin(); i != limits.end(); i++) {
-        DEBUG( dbgs() << "### min: "; (*i)->min->print(dbgs()); dbgs() << "\n"; );
-        DEBUG( dbgs() << "### max: "; (*i)->max->print(dbgs()); dbgs() << "\n"; );
+      for (AreaLimitSet::const_iterator i = limits.begin(); i != limits.end(); i++) {
+        DEBUG( dbgs() << "### min: "; (*i)->getMin()->print(dbgs()); dbgs() << "\n"; );
+        DEBUG( dbgs() << "### max: "; (*i)->getMax()->print(dbgs()); dbgs() << "\n"; );
       }
+      DUMP(limits.size());
       fast_assert(limits.size() == 1, "Current boundary check generation does not support multiple limits checking.");
-      AreaLimit *limit = *(limits.begin());
+      AreaLimitBase *limit = *(limits.begin());
       
       BasicBlock *BB = meminst->getParent();
       Function *F = BB->getParent();
@@ -2625,9 +2647,10 @@ namespace WebCL {
       // ------ get limits if require loading indirect address
 
       // *   %1 = instruction or value returning last valid value
-      Value *last_value_for_type = limit->lastValidAddressFor(ptr->getType(), meminst);
+      Value *last_value_for_type;
       // *   %2 = value to compare to get first valid address
-      Value *first_valid_pointer = limit->firstValidAddressFor(ptr->getType(), meminst);
+      Value *first_valid_pointer;
+      limit->validAddressBoundsFor(ptr->getType(), meminst, first_valid_pointer, last_value_for_type);
 
       // ------ add max boundary check code
 
@@ -2798,7 +2821,7 @@ namespace WebCL {
           // TODO: to make this secure we have to check that operand argument is listed in replaced argument map and is really generated by us (types in replaced arguments must been changed)
           retArg = aggregateOp;
         } else {
-          AreaLimit *limit = NULL;
+          AreaLimitBase *limit = NULL;
           // TODO: Temporarily disabled mechanism to allow running the app through for development purposes.
           // if (valLimits.count(operand) > 0) {
           //   limit = valLimits[operand];
