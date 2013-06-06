@@ -550,6 +550,165 @@ namespace WebCL {
   typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
   typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
 
+  class FunctionManager;
+  FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, const FunctionManager& functionManager );
+
+  // keeps track of function replacements and builtin functions
+  class FunctionManager {
+  public:
+    FunctionManager(Module& M) :
+      M(M) {
+      // nothing
+    }
+    ~FunctionManager() {
+      // nothing
+    }
+
+    void replaceFunction(Function *orig, Function *replacement) {
+      replacedFunctions[orig] = replacement;
+    }
+    std::insert_iterator<FunctionMap> replaceFunctionInserter() {
+      return std::inserter(replacedFunctions, replacedFunctions.begin());
+    }
+    const FunctionMap &getReplacedFunctions() const {
+      return replacedFunctions;
+    }
+
+    void replaceArguments(Argument *orig, Argument *replacement) {
+      replacedArguments.insert(std::make_pair(orig, replacement));
+    }
+    std::insert_iterator<ArgumentMap> replaceArgumentInserter() {
+      return std::inserter(replacedArguments, replacedArguments.begin());
+    }
+    const ArgumentMap &getReplacedArguments() const {
+      return replacedArguments;
+    }
+
+    void replaceArguments(const ArgumentMap& replacements) {
+      replacedArguments.insert(replacements.begin(), replacements.end());
+    }
+
+    const CallInstrSet& getInternalCalls() const {
+      return internalCalls;
+    }
+    void addInternalCall(CallInst* call) {
+      internalCalls.insert(call);
+      allCalls.insert(call);
+    }
+
+    const CallInstrSet& getExternalCalls() const {
+      return externalCalls;
+    }
+    void addExternalCall(CallInst* call) {
+      externalCalls.insert(call);
+      allCalls.insert(call);
+    }
+    const CallInstrSet& getAllCalls() const {
+      return allCalls;
+    }
+
+    void addAlloca(AllocaInst* call) {
+      allocas.insert(call);
+    }
+
+    void addStore(StoreInst* call) {
+      stores.insert(call);
+    }
+
+    void addLoad(LoadInst* call) {
+      loads.insert(call);
+    }
+
+    const AllocaInstrSet &getAllocas() const {
+      return allocas;
+    }
+
+    const StoreInstrSet &getStores() const {
+      return stores;
+    }
+
+    const LoadInstrSet &getLoads() const {
+      return loads;
+    }
+
+    void addSafeBuiltinFunction(Function* function) {
+      safeBuiltinFunctions.insert(function);
+    }
+
+    void addUnsafeBuiltinFunction(Function* function) {
+      unsafeBuiltinFunctions.insert(function);
+    }
+
+    const FunctionSet& getSafeBuiltinFunctions() const {
+      return safeBuiltinFunctions;
+    }
+
+    const FunctionSet& getUnsafeBuiltinFunctions() const {
+      return unsafeBuiltinFunctions;
+    }
+
+    const FunctionMap getUnsafeToSafeBuiltin() const {
+      return makeUnsafeToSafeMapping(M.getContext(), *this);
+    }
+
+  private:
+    // doesn't exist: the class is not copyable
+    void operator=(FunctionManager& other);
+
+    Module&         M;
+
+    // Functions which has been replaced with new ones when signatures are modified.
+    FunctionMap    replacedFunctions;
+    // Function arguments mapping to find replacement arguments for old function arguments.
+    ArgumentMap    replacedArguments;
+
+    CallInstrSet   internalCalls;
+    CallInstrSet   externalCalls;
+    CallInstrSet   allCalls;
+    AllocaInstrSet allocas;
+    StoreInstrSet  stores;
+    LoadInstrSet   loads;
+
+    FunctionSet    unsafeBuiltinFunctions;
+    FunctionSet    safeBuiltinFunctions;
+  };
+
+  /** Given a list of unsafe builtin functions and safe builtin
+   * functions returns an association from the unsafe functions to
+   * matching safe functions. Matching is implemented by generating
+   * a safe version of the unsafe signature and checking if a
+   * matching signature can be found from the list of safe builtin
+   * functions.
+   */
+  FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, 
+                                       const FunctionManager& functionManager ) {
+    FunctionMap mapping;
+    std::map<Signature, Function*> safeSignatureMap;
+      
+    const FunctionSet& safeBuiltinFunctions = functionManager.getSafeBuiltinFunctions();
+    for ( FunctionSet::const_iterator safeIt = safeBuiltinFunctions.begin();
+          safeIt != safeBuiltinFunctions.end();
+          ++safeIt ) {
+      safeSignatureMap[Signature(*safeIt)] = *safeIt;
+    }
+
+    const FunctionSet& unsafeBuiltinFunctions = functionManager.getUnsafeBuiltinFunctions();
+    for ( FunctionSet::const_iterator unsafeIt = unsafeBuiltinFunctions.begin();
+          unsafeIt != unsafeBuiltinFunctions.end();
+          ++unsafeIt ) {
+      Signature origSig = Signature(*unsafeIt);
+      Signature safeSig = origSig.safe(c, 0);
+      std::map<Signature, Function*>::const_iterator safeSigIt = 
+        safeSignatureMap.find(safeSig);
+      if ( safeSigIt != safeSignatureMap.end() ) {
+        mapping[*unsafeIt] = safeSigIt->second;
+        DEBUG( dbgs() << "Mapped " << origSig << " => " << safeSig << "\n"; );
+      }
+    }
+      
+    return mapping;
+  }
+
   // ## LLVM Module pass
   struct ClampPointers :
     public ModulePass {
@@ -559,126 +718,6 @@ namespace WebCL {
       ModulePass( ID ) {
     }
       
-    // keeps track of function replacements and builtin functions
-    class FunctionManager {
-    public:
-      FunctionManager(Module& M) :
-        M(M) {
-        // nothing
-      }
-      ~FunctionManager() {
-        // nothing
-      }
-
-      void replaceFunction(Function *orig, Function *replacement) {
-        replacedFunctions[orig] = replacement;
-      }
-      std::insert_iterator<FunctionMap> replaceFunctionInserter() {
-        return std::inserter(replacedFunctions, replacedFunctions.begin());
-      }
-      const FunctionMap &getReplacedFunctions() const {
-        return replacedFunctions;
-      }
-
-      void replaceArguments(Argument *orig, Argument *replacement) {
-        replacedArguments.insert(std::make_pair(orig, replacement));
-      }
-      std::insert_iterator<ArgumentMap> replaceArgumentInserter() {
-        return std::inserter(replacedArguments, replacedArguments.begin());
-      }
-      const ArgumentMap &getReplacedArguments() const {
-        return replacedArguments;
-      }
-
-      void replaceArguments(const ArgumentMap& replacements) {
-        replacedArguments.insert(replacements.begin(), replacements.end());
-      }
-
-      const CallInstrSet& getInternalCalls() const {
-        return internalCalls;
-      }
-      void addInternalCall(CallInst* call) {
-        internalCalls.insert(call);
-        allCalls.insert(call);
-      }
-
-      const CallInstrSet& getExternalCalls() const {
-        return externalCalls;
-      }
-      void addExternalCall(CallInst* call) {
-        externalCalls.insert(call);
-        allCalls.insert(call);
-      }
-      const CallInstrSet& getAllCalls() const {
-        return allCalls;
-      }
-
-      void addAlloca(AllocaInst* call) {
-        allocas.insert(call);
-      }
-
-      void addStore(StoreInst* call) {
-        stores.insert(call);
-      }
-
-      void addLoad(LoadInst* call) {
-        loads.insert(call);
-      }
-
-      const AllocaInstrSet &getAllocas() const {
-        return allocas;
-      }
-
-      const StoreInstrSet &getStores() const {
-        return stores;
-      }
-
-      const LoadInstrSet &getLoads() const {
-        return loads;
-      }
-
-      void addSafeBuiltinFunction(Function* function) {
-        safeBuiltinFunctions.insert(function);
-      }
-
-      void addUnsafeBuiltinFunction(Function* function) {
-        unsafeBuiltinFunctions.insert(function);
-      }
-
-      const FunctionSet& getSafeBuiltinFunctions() const {
-        return safeBuiltinFunctions;
-      }
-
-      const FunctionSet& getUnsafeBuiltinFunctions() const {
-        return unsafeBuiltinFunctions;
-      }
-
-      const FunctionMap getUnsafeToSafeBuiltin() const {
-        return makeUnsafeToSafeMapping(M.getContext(), *this);
-      }
-
-    private:
-      // doesn't exist: the class is not copyable
-      void operator=(FunctionManager& other);
-
-      Module&         M;
-
-      // Functions which has been replaced with new ones when signatures are modified.
-      FunctionMap    replacedFunctions;
-      // Function arguments mapping to find replacement arguments for old function arguments.
-      ArgumentMap    replacedArguments;
-
-      CallInstrSet   internalCalls;
-      CallInstrSet   externalCalls;
-      CallInstrSet   allCalls;
-      AllocaInstrSet allocas;
-      StoreInstrSet  stores;
-      LoadInstrSet   loads;
-
-      FunctionSet    unsafeBuiltinFunctions;
-      FunctionSet    safeBuiltinFunctions;
-    };
-
     class AreaLimitBase {
     public:
       AreaLimitBase() {}
@@ -1668,42 +1707,6 @@ namespace WebCL {
         }
                 
       }
-    }
-
-    /** Given a list of unsafe builtin functions and safe builtin
-     * functions returns an association from the unsafe functions to
-     * matching safe functions. Matching is implemented by generating
-     * a safe version of the unsafe signature and checking if a
-     * matching signature can be found from the list of safe builtin
-     * functions.
-     */
-    static FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, 
-                                                const FunctionManager& functionManager ) {
-      FunctionMap mapping;
-      std::map<Signature, Function*> safeSignatureMap;
-      
-      const FunctionSet& safeBuiltinFunctions = functionManager.getSafeBuiltinFunctions();
-      for ( FunctionSet::const_iterator safeIt = safeBuiltinFunctions.begin();
-            safeIt != safeBuiltinFunctions.end();
-            ++safeIt ) {
-        safeSignatureMap[Signature(*safeIt)] = *safeIt;
-      }
-
-      const FunctionSet& unsafeBuiltinFunctions = functionManager.getUnsafeBuiltinFunctions();
-      for ( FunctionSet::const_iterator unsafeIt = unsafeBuiltinFunctions.begin();
-            unsafeIt != unsafeBuiltinFunctions.end();
-            ++unsafeIt ) {
-        Signature origSig = Signature(*unsafeIt);
-        Signature safeSig = origSig.safe(c, 0);
-        std::map<Signature, Function*>::const_iterator safeSigIt = 
-          safeSignatureMap.find(safeSig);
-        if ( safeSigIt != safeSignatureMap.end() ) {
-          mapping[*unsafeIt] = safeSigIt->second;
-          DEBUG( dbgs() << "Mapped " << origSig << " => " << safeSig << "\n"; );
-        }
-      }
-      
-      return mapping;
     }
 
     void collectBuiltinFunctions(Module& M, 
