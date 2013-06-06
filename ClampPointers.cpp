@@ -876,30 +876,29 @@ namespace WebCL {
       PointerType* type = cast<PointerType>(arg->getType());
       dynamicRanges[type->getAddressSpace()].push_back(arg);
     }
-    // for a given kernel argument and current function and place where to insert code, return the pointers where we store its minimum and maximum limit
-    void getArgumentLimits(Argument* arg, Function* F, IRBuilder<> &blockBuilder, Value*& min, Value*& max) {
-      PointerType* type = cast<PointerType>(arg->getType());
-      unsigned as = type->getAddressSpace();
-      int idx = 0;
-      const ArgumentVector args = dynamicRanges[as];
-      ArgumentVector::const_iterator it;
-      for (it = args.begin();
-           it != args.end() && *it != arg;
-           ++it, ++idx) {
-        // iterate
+    // for an argument, return its area limits if it is a known argument, otherwise return an empty set
+    AreaLimitSet getArgumentLimits(Argument* arg) {
+      AreaLimitSet limits;
+      if (isa<PointerType>(arg->getType())) {
+        PointerType* type = cast<PointerType>(arg->getType());
+        unsigned asNumber = type->getAddressSpace();
+        int idx = 0;
+        const ArgumentVector args = dynamicRanges[asNumber];
+        ArgumentVector::const_iterator it;
+        for (it = args.begin();
+             it != args.end() && *it != arg;
+             ++it, ++idx) {
+          // iterate
+        }
+        // these two address spaces have a special limit for all allocations as the first argument, skip that
+        if (asNumber == constantAddressSpaceNumber || asNumber == localAddressSpaceNumber) {
+          ++idx;
+        }
+        if (it != args.end()) {
+          limits.insert(new ASAreaLimit(*this, getASLimitsFunc(asNumber), asNumber, idx));
+        }
       }
-      assert(it != args.end());
-      if (as == globalAddressSpaceNumber) {
-        getGlobalLimits(F, blockBuilder, idx, min, max);
-      } else if (as == localAddressSpaceNumber) {
-        getLocalLimits(F, blockBuilder, idx, min, max);
-      } else if (as == constantAddressSpaceNumber) {
-        getConstantLimits(F, blockBuilder, idx, min, max);
-      } else if (as == privateAddressSpaceNumber) {
-        getPrivateLimits(F, blockBuilder, idx, min, max);
-      } else {
-        assert(0);
-      }
+      return limits;
     }
     AreaLimitSet getASLimits(unsigned asNumber) {
       AreaLimitSet limits;
