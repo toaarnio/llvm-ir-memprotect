@@ -746,7 +746,8 @@ namespace WebCL {
              it != initData.end();
              ++it, ++idx) {
           if (GlobalVariable* global = dyn_cast<GlobalVariable>(*it)) {
-            global->eraseFromParent();
+            // TODO: make sure this is freed after pass terminates
+            // global->removeFromParent();
           }
         }
       }
@@ -837,22 +838,23 @@ namespace WebCL {
       }
 
     };
-
+      
     typedef std::set< AreaLimit* > AreaLimitSet;
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
     typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
-
-    // contains all requred information to be able to allocate area for an
-    // address space structure and to fix references of values to struct fields
-    class AddressSpaceInfo {
-    };
     
-    class GlobalScopeAddressSpace : public AddressSpaceInfo {
+    // handles creating limits according to information found from address space info manager and dependency analyser
+    class AreaLimitManager {
+    public:
+      
+      AreaLimitSet& getAreaLimits(Value* ptrOperand) {
+        return dummy;
+      }
+      
+    private:
+      AreaLimitSet dummy;
     };
-    
-    class FunctionScopeAddressSpace : public AddressSpaceInfo {
-    };
-    
+      
     // handles creating and bookkeeping address space info objects operations that require creating types must
     // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
     // operations, and if the flag is set, the object cannot be mutated.
@@ -1015,7 +1017,8 @@ namespace WebCL {
                 assert(0);
               }
             }
-            global->eraseFromParent();
+            // TODO: make sure pbject is freed after pass terminates
+            global->removeFromParent();
           } else {
             assert(0);
           }
@@ -1272,15 +1275,11 @@ namespace WebCL {
     
     class LimitAnalyser {
     private:
-      std::map< Value*, AreaLimitSet> limitsOfValue;
       InstrSet needChecks;
       // TODO: fix this map to be able to contain also location
       std::map< Value*, Value* > dependencies;
       
     public:
-      AreaLimitSet& getAreaLimitSet(Value *val) {
-        return limitsOfValue[val];
-      }
       
       InstrSet& needCheck() {
         return needChecks;
@@ -1309,13 +1308,6 @@ namespace WebCL {
         return dependencies[value];
       }
       
-      AreaLimitSet& getLimits(Value *value) {
-        // TODO: after adding all information about address space, class can first
-        //       check if we can check against single limits of address space or to
-        //       use dependency data and find out which values limits to respect
-        return limitsOfValue[value];
-      }
-
       // TODO: ADD METHOD TO PRINT ALL ANALYSIS DATA
     
     };
@@ -1368,6 +1360,7 @@ namespace WebCL {
       // of the new kernels.
       AddressSpaceInfoManager addressSpaceInfoManager(M);
       LimitAnalyser limitAnalyser;
+      AreaLimitManager areaLimitManager;
       
       DEBUG( dbgs() << "\n --------------- COLLECT INFORMATION OF STATIC MEMORY ALLOCATIONS --------------\n" );
       scanStaticMemory( M, addressSpaceInfoManager );
@@ -1479,14 +1472,6 @@ namespace WebCL {
         createMainEntryPoint(M, functionManager.getReplacedFunctions(), addressSpaceInitializers, safeExceptions);
       }
 
-      /** TODO: THIS SHOULD HAVE BEEN ALREADY DONE IN ANALYZE PHASE FOR THE ORIGINAL PROGRAM OR INTERNALLY IN LIMIT ANALYSER
-      // Traces limits for all instructions and values in the module and adds them to `valueLimits`. After this we should be able
-      // to get min and max addresses for all instructions / globals that we are interested in. [findLimits(FunctionMap &replacedFunctions,
-      // ValueSet &checkOperands, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits)](#findLimits).
-      // Limit finding is not performed for manually written safe builtin functions.
-      DEBUG( dbgs() << "\n --------------- FIND LIMITS OF EVERY REQUIRED OPERAND --------------\n" );
-      findLimits(replacedFunctions, resolveLimitsOperands, valueLimits, addressSpaceLimits, safeBuiltinFunctions);
-      */
       
       // fix all old alloca and globals uses to point new variables (required to be able to get limits correctly for call replacement ?)
       DEBUG( dbgs() << "\n --------------- FIX REFRENCES OF OLD ALLOCAS AND GLOBALS TO POINT ADDRESS SPACE STRUCT FIELDS --------------\n" );
@@ -1516,7 +1501,7 @@ namespace WebCL {
           fast_assert(false, "Can add check only for load or store");
         }
         // TODO: enable this soon....
-        // createLimitCheck(ptrOperand, limitAnalyser.getAreaLimitSet(ptrOperand), *inst);
+        createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(ptrOperand), *inst);
       }
 
       // Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
@@ -1528,11 +1513,9 @@ namespace WebCL {
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
-      /*
       dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
       M.print(dbgs(), NULL);
       dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
-      */
       return true;
     }
       
@@ -2152,154 +2135,7 @@ namespace WebCL {
         infoManager.addAddressSpace(addressSpace, globalScopeAdressSpaces.count(addressSpace) > 0, values, structInitData);
       }
     }
-        /*
-        // if global address space struct, create global variable
-        if (globalScopeAdressSpaces.count(addressSpace)) {
-          
-          
-          GlobalVariable *aSpaceStruct = new GlobalVariable
-            (M, addressSpaceStructType, false, GlobalValue::InternalLinkage, addressSpaceDataInitializer,
-             structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
-          asStructs[addressSpace] = aSpaceStruct;
-        } else {
-          // TODO: not global so just add this to map, which tells that we need to allocate this in kernel initialization code
-          // TODO: how to store mapping, which field refers to which value? index, Value map?
-        }
-
-
-        bool dereferenceSpaceStruct;
-        GlobalVariable *aSpaceStruct;
-        PrivateAddressSpaceInitializer* init = 0;
-
-        if (addressSpace == privateAddressSpaceNumber) {
-          // using global address space intead of private as the
-          // existing 'private' address space values are put in the
-          // global address space
-          PointerType* aSpacePointer = llvm::PointerType::get(addressSpaceStructType, addressSpace);
-          dereferenceSpaceStruct = true;
-          // should this use localAddressSpaceNumber? but that cannot be put into a global
-          aSpaceStruct = new GlobalVariable
-            (M, aSpacePointer, false, GlobalValue::InternalLinkage, Constant::getNullValue(aSpacePointer), 
-             structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
-          GlobalValue* aSpaceEndStruct = new GlobalVariable
-            (M, aSpacePointer, false, GlobalValue::InternalLinkage, Constant::getNullValue(aSpacePointer), 
-             structName.str() + "End", NULL, GlobalVariable::NotThreadLocal, addressSpace);
-          addressSpaceEndPtrs[aSpaceStruct] = aSpaceEndStruct;
-          asInits[addressSpace] = (init = new PrivateAddressSpaceInitializer(aSpaceStruct, aSpaceEndStruct, structElementData));
-        } else {
-          dereferenceSpaceStruct = false;
-          aSpaceStruct = new GlobalVariable
-            (M, addressSpaceStructType, false, GlobalValue::InternalLinkage, addressSpaceDataInitializer, 
-             structName.str(), NULL, GlobalVariable::NotThreadLocal, addressSpace);
-        }
-
-        asStructs[addressSpace] = aSpaceStruct;
-
-        // keep track of first load instructions for the private memory structure, so we get to do only one
-        // per function
-        std::map<Function*, LoadInst*> privateMemoryLoads;
-
-        ValueIndexMap valueReplacements;
-
-        for (size_t valIndex = 0; valIndex < values.size(); valIndex++) {
-          Value* origVal = values[valIndex];
-
-          // TODO: when this might happen?
-          if (!origVal) continue;
-          
-          // should we also do the
-          structVal = ConstantExpr::getInBoundsGetElementPtr
-            (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex));
-          structVal->setName(origVal->getName());
-
-          // get field of struct
-          Value *structVal;
-          if (dereferenceSpaceStruct) {
-            FunctionSet parentFuncs;
-
-            for ( Value::use_iterator useIt = origVal->use_begin();
-                  useIt != origVal->use_end();
-                  ++useIt ) {
-              Value* value = *useIt;
-              fast_assert(!isa<ConstantExpr>(value), "Constant expressions based on consolidated values not supported");
-              if (isa<Instruction>(value)) {
-                assert(isa<Instruction>(value));
-                Instruction* instruction = cast<Instruction>(value);
-                parentFuncs.insert(instruction->getParent()->getParent());
-              }
-            }
-            fast_assert(parentFuncs.size() <= 1, "Users of a single local variable should be within at most one function");
-
-            if (parentFuncs.size() == 1) {
-              Function* parentFunction = *parentFuncs.begin();
-              if ( !privateMemoryLoads.count(parentFunction) ) {
-                LoadInst* load = new LoadInst( aSpaceStruct, "privateMemory", 
-                                               parentFunction->getEntryBlock().getFirstNonPHI() );
-                privateMemoryLoads[parentFunction] = load;
-                safeExceptions.insert(load);
-              }
-              LoadInst* load = privateMemoryLoads[parentFunction];
-              Instruction* v = llvm::GetElementPtrInst::CreateInBounds( load, genIntVector<Value*>( c, 0, valIndex ),
-                                                                        origVal->getName() );
-              v->insertAfter(load);
-              safeExceptions.insert(v);
-              structVal = v;
-            } else {
-              structVal = 0;
-            }
-            valueReplacements[origVal] = valIndex;
-          } else {
-            structVal = ConstantExpr::getInBoundsGetElementPtr
-              (dyn_cast<Constant>(aSpaceStruct), genIntVector<Constant*>( c, 0, valIndex));
-            structVal->setName(origVal->getName());
-          }
-
-          // Currently LLVM IR does not support GEP in alias. If support is added, uncommenting this will greatly improve readability of produced code
-          // for alias: GlobalAlias *fieldAlias = new GlobalAlias(structVal->getType(), GlobalValue::InternalLinkage, "", structVal, &M);
-
-          if (structVal) {
-            DEBUG( dbgs() << "Orig val type: "; origVal->getType()->print(dbgs()); dbgs() << "\n";
-                   dbgs() << " new val type: "; structVal->getType()->print(dbgs()); dbgs() << "\n"; );
-            DEBUG( dbgs() << "Orig val: "; origVal->print(dbgs()); dbgs() << "\n";
-                   dbgs() << " new val: "; structVal->print(dbgs()); dbgs() << "\n"; );
-            origVal->replaceAllUsesWith(structVal);
-          
-            // use alias everywhere
-            // for alias: origVal->replaceAllUsesWith(fieldAlias);
-          
-            // set name according to original value type and remove original
-            if ( AllocaInst* alloca = dyn_cast<AllocaInst>(origVal) ) {
-              // for alias: fieldAlias->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
-              structVal->setName(alloca->getParent()->getParent()->getName() + "." + origVal->getName());
-              alloca->eraseFromParent();
-            } else if ( GlobalVariable* global = dyn_cast<GlobalVariable>(origVal) ) {
-
- // for alias: fieldAlias->setName(aSpaceStruct->getName() + "." + origVal->getName());
-              structVal->setName(aSpaceStruct->getName() + "." + origVal->getName());
-              global->eraseFromParent();
-            }
-          } else {
-            if (Instruction* ins = dyn_cast<Instruction>(origVal)) {
-              fast_assert(ins->getNumUses() == 0, "An instruction was to be erased but it was still used?");
-              ins->eraseFromParent();
-            } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(origVal)) {
-              fast_assert(global->getNumUses() == 0, "A global was to be erased but it was still used?");
-              global->eraseFromParent();
-            } else {
-              assert(false);
-            }
-          }
-          
-          //DEBUG( dbgs() << "Alias: "; fieldAlias->print(dbgs()); dbgs() << "\n"; );
-        }
-        if (init) {
-          init->setValueReplacements(valueReplacements);
-        }
-      }
-    }
-         */
-
-         
+       
     /**
      * Checks if given function declaration is one of webcl builtins
      * 
