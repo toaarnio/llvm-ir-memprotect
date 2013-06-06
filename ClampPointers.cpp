@@ -1026,18 +1026,19 @@ namespace WebCL {
           return value;
         }
         const ValueASIndex& index = valueASMapping.find(value)->second;
+        Value* replacement;
         if (index.asNumber == privateAddressSpaceNumber) {
-          return getPrivateAllocationsField(F, blockBuilder, index.index);
+          replacement = getPrivateAllocationsField(F, blockBuilder, index.index);
         } else if (index.asNumber == constantAddressSpaceNumber) {
-          return getConstantAllocationsField(F, blockBuilder, index.index);
+          replacement = getConstantAllocationsField(F, blockBuilder, index.index);
         } else if (index.asNumber == localAddressSpaceNumber) {
-          return getLocalAllocationsField(F, blockBuilder, index.index);
+          replacement = getLocalAllocationsField(F, blockBuilder, index.index);
         } else if (index.asNumber == globalAddressSpaceNumber) {
-          return value;
-        } else {
-          assert(false);
-          return 0;
+          replacement = value;
         }
+        assert(replacement);
+        replacement->setName(replacement->getName() + "." + value->getName());
+        return replacement;
       }
 
       /** Given a function, retrieve the value for the program allocations value passed as the function's first
