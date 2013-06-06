@@ -719,9 +719,7 @@ namespace WebCL {
     virtual ~AreaLimitBase() {}
 
     virtual void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) = 0;
-    virtual Value* getMin() const = 0;
-    virtual Value* getMax() const = 0;
-    virtual bool getIndirect() const = 0;
+    virtual void print(llvm::raw_ostream& stream) const = 0;
   };
 
   // **AreaLimit** class holds information of single memory area allocation. Limits of the area
@@ -739,8 +737,7 @@ namespace WebCL {
       max( _max ),
       indirect( _indirect ) {
     }
-      
-      
+    
     // **AreaLimit::getValidAddressFor** Returns valid address relative to val and offset for given type of memory access access.
     //
     // If val is indirect, first add load instruction to get indirect address value and then
@@ -801,24 +798,22 @@ namespace WebCL {
     //
     // `Type *type` Type of memory access which is going to be done inside these limits.
     // `Instruction *checkStart` We add new instructions before this if necessary.
+
+    void print(llvm::raw_ostream& stream) const {
+      stream << "### min: " << *min << "\n";
+      stream << "### max: " << *max << "\n";
+    }
       
     void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) {
       first = getValidAddressFor(max, indirect, -1, type, checkStart);
       last = getValidAddressFor(max, indirect, -1, type, checkStart);
     }
-
-    Value* getMin() const {
-      return min;
-    }
-
-    Value* getMax() const {
-      return max;
-    }
-
-    bool getIndirect() const {
-      return indirect;
-    }
   };
+
+  llvm::raw_ostream& operator<<(llvm::raw_ostream& stream, const AreaLimit& areaLimit) {
+    areaLimit.print(stream);
+    return stream;
+  }
 
   // handles creating and bookkeeping address space info objects operations that require creating types must
   // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
@@ -829,8 +824,8 @@ namespace WebCL {
 
     class ASAreaLimit: public AreaLimitBase {
     public:
-      ASAreaLimit(AddressSpaceInfoManager& infoManager, GetLimitsFunc limitsFunc, int asIndex) :
-        infoManager(infoManager), limitsFunc(limitsFunc), asIndex(asIndex) {
+      ASAreaLimit(AddressSpaceInfoManager& infoManager, GetLimitsFunc limitsFunc, int asNumber, int asIndex) :
+        infoManager(infoManager), limitsFunc(limitsFunc), asNumber(asNumber), asIndex(asIndex) {
         // nothing
       }
       ~ASAreaLimit() {}
@@ -841,24 +836,13 @@ namespace WebCL {
         (infoManager.*limitsFunc)(F, blockBuidler, asIndex, first, last);
       }
 
-      Value* getMin() const {
-        DEBUG( dbgs() << "ASAreaLimit.getMin not implemented\n"; );
-        return getConstInt(infoManager.M.getContext(), 0);
+      void print(llvm::raw_ostream& stream) const {
+        stream << "### ASAreaLimit(asNumber " << asNumber << ", asIndex "  << asIndex << ")\n";
       }
-
-      Value* getMax() const {
-        DEBUG( dbgs() << "ASAreaLimit.getMax not implemented\n"; );
-        return getConstInt(infoManager.M.getContext(), 0);
-      }
-
-      bool getIndirect() const {
-        DEBUG( dbgs() << "ASAreaLimit.getIndirect not implemented\n"; );
-        return false;
-      }
-
     private:
       AddressSpaceInfoManager& infoManager;
       GetLimitsFunc            limitsFunc;
+      unsigned                 asNumber;
       int                      asIndex;
     };
 
@@ -921,7 +905,7 @@ namespace WebCL {
       AreaLimitSet limits;
       GetLimitsFunc limitsFunc = getASLimitsFunc(asNumber);
       for (size_t idx = 0; idx < getNumASLimits(asNumber); ++idx) {
-        limits.insert(new ASAreaLimit(*this, limitsFunc, idx));
+        limits.insert(new ASAreaLimit(*this, limitsFunc, asNumber, idx));
       }
       return limits;
     }
@@ -2336,8 +2320,7 @@ namespace WebCL {
       
     DEBUG( dbgs() << " Possible limits to check: \n" );
     for (AreaLimitSet::const_iterator i = limits.begin(); i != limits.end(); i++) {
-      DEBUG( dbgs() << "### min: "; (*i)->getMin()->print(dbgs()); dbgs() << "\n"; );
-      DEBUG( dbgs() << "### max: "; (*i)->getMax()->print(dbgs()); dbgs() << "\n"; );
+      DEBUG( dbgs() << *i );
     }
     DUMP(limits.size());
     fast_assert(limits.size() == 1, "Current boundary check generation does not support multiple limits checking.");
