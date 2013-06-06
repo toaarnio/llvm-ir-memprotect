@@ -1273,7 +1273,7 @@ namespace WebCL {
       }
     };
     
-    class LimitAnalyser {
+    class DependenceAnalyser {
     private:
       InstrSet needChecks;
       // TODO: fix this map to be able to contain also location
@@ -1359,7 +1359,7 @@ namespace WebCL {
       // is used by createWebClKernel to put the required allocations of the local memory regions to the front
       // of the new kernels.
       AddressSpaceInfoManager addressSpaceInfoManager(M);
-      LimitAnalyser limitAnalyser;
+      DependenceAnalyser dependenceAnalyser;
       AreaLimitManager areaLimitManager;
       
       DEBUG( dbgs() << "\n --------------- COLLECT INFORMATION OF STATIC MEMORY ALLOCATIONS --------------\n" );
@@ -1373,7 +1373,7 @@ namespace WebCL {
       // checks and where to find limits for it
       // if can be traced to some argument or to some alloca or if we can trace it to single address space
       DEBUG( dbgs() << "\n ---- ANALYZE AND COLLECT INFORMATION ABOUT DEPENDENCIES ------\n" );
-      collectDependencyInfo( M, limitAnalyser, functionManager );
+      collectDependencyInfo( M, dependenceAnalyser, functionManager );
       
       collectBuiltinFunctions(M, functionManager);
 
@@ -1409,7 +1409,7 @@ namespace WebCL {
         /* DISABLED MemoryDependenceAnalysis tests since couldn't get any useful info from it
         if (!F->isIntrinsic()) {
           DEBUG( dbgs() << "\n --------------- PRINTING OUT SOME DEBUG FROM MEMDEP ANALYSIS --------------\n" );
-          // this should be wrapped inside limitanalyser
+          // this should be wrapped inside DependenceAnalyser
           AliasAnalysis *AA = &getAnalysis<AliasAnalysis>(*F);
           MemoryDependenceAnalysis *MD = &getAnalysis<MemoryDependenceAnalysis>(*F);
           for ( Function::iterator bb = F->begin(); bb != F->end(); bb++) {
@@ -1491,7 +1491,7 @@ namespace WebCL {
       // [addBoundaryChecks( ... )](#addBoundaryChecks)
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
       // TODO: wrap to addBoundaryChecks function....
-      for (InstrSet::iterator inst = limitAnalyser.needCheck().begin(); inst != limitAnalyser.needCheck().end(); inst++) {
+      for (InstrSet::iterator inst = dependenceAnalyser.needCheck().begin(); inst != dependenceAnalyser.needCheck().end(); inst++) {
         Value *ptrOperand = NULL;
         if (LoadInst *load = dyn_cast<LoadInst>(*inst)) {
           ptrOperand = load->getPointerOperand();
@@ -1519,7 +1519,7 @@ namespace WebCL {
       return true;
     }
       
-    void collectDependencyInfo( Module &M, LimitAnalyser &limitAnalyser, FunctionManager &functionManager ) {
+    void collectDependencyInfo( Module &M, DependenceAnalyser &dependenceAnalyser, FunctionManager &functionManager ) {
       ValueSet resolveLimitsOperands;
 
       for ( Module::iterator F = M.begin(); F != M.end(); ++F) {
@@ -1564,10 +1564,10 @@ namespace WebCL {
           Argument &arg = *a;
           
           // arg does respect its own limits
-          limitAnalyser.addDependency(NULL, &arg, &arg);
+          dependenceAnalyser.addDependency(NULL, &arg, &arg);
           // if pointer argument, trace uses
           if ( arg.getType()->isPointerTy() ) {
-            resolveUses(&arg, limitAnalyser);
+            resolveUses(&arg, dependenceAnalyser);
           }
         }
 
@@ -1578,9 +1578,9 @@ namespace WebCL {
           Value* val = *limitOperand;
           DEBUG( dbgs() << "Tracing dependency for: "; val->print(dbgs()); dbgs() << "\n"; );
 
-          if ( resolveAncestors(val, limitAnalyser) ) {
+          if ( resolveAncestors(val, dependenceAnalyser) ) {
             DEBUG( dbgs() << "Traced limits successful!\n"; );
-            fast_assert( limitAnalyser.getDependency(val) != NULL,
+            fast_assert( dependenceAnalyser.getDependency(val) != NULL,
                          "Got true from resolve. Obviously limits should have been added to set.");
           } else {
             DEBUG( dbgs() << "Could not trace the dependency!\n"; );
@@ -1612,13 +1612,13 @@ namespace WebCL {
         for (LoadInstrSet::iterator i = loads.begin(); i!= loads.end(); i++) {
           LoadInst *load = *i;
           if ( safeExceptions.count(load->getPointerOperand()) == 0) {
-            limitAnalyser.addCheck(load);
+            dependenceAnalyser.addCheck(load);
           }
         }
         for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
           StoreInst *store = *i;
           if ( safeExceptions.count(store->getPointerOperand()) == 0) {
-            limitAnalyser.addCheck(store);
+            dependenceAnalyser.addCheck(store);
           }
         }
                 
@@ -1797,7 +1797,7 @@ namespace WebCL {
      *
      * TODO: needs more clear implementation
      */
-    void resolveUses(Value *val, LimitAnalyser &limitAnalyser, int recursion_level = 0) {
+    void resolveUses(Value *val, DependenceAnalyser &dependenceAnalyser, int recursion_level = 0) {
       
       // check all uses of value until cannot trace anymore
       for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
@@ -1821,9 +1821,9 @@ namespace WebCL {
             if (val->getType()->isPointerTy()) {
               // adds also place where limit was set to be able to trace, which limit
               // is valid in which place
-              limitAnalyser.addDependency(store, store->getPointerOperand(),
-                                          limitAnalyser.getDependency(val));
-              resolveUses(store->getPointerOperand(), limitAnalyser, recursion_level + 1);
+              dependenceAnalyser.addDependency(store, store->getPointerOperand(),
+                                          dependenceAnalyser.getDependency(val));
+              resolveUses(store->getPointerOperand(), dependenceAnalyser, recursion_level + 1);
             }
           }
           continue;
@@ -1847,8 +1847,8 @@ namespace WebCL {
         }
         
         // limits of use are directly derived from value
-        limitAnalyser.addDependency(NULL, use, limitAnalyser.getDependency(val));
-        resolveUses(use, limitAnalyser, recursion_level + 1);
+        dependenceAnalyser.addDependency(NULL, use, dependenceAnalyser.getDependency(val));
+        resolveUses(use, dependenceAnalyser, recursion_level + 1);
       }
     }
 
@@ -1856,7 +1856,7 @@ namespace WebCL {
     /**
      * Traces from leafs to root if dependency if found then adds dependency to each step.
      */
-    bool resolveAncestors(Value *val, LimitAnalyser &limitAnalyser, int recursion_level = 0) {
+    bool resolveAncestors(Value *val, DependenceAnalyser &dependenceAnalyser, int recursion_level = 0) {
       Value *next = NULL;
       DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
       
@@ -1892,12 +1892,12 @@ namespace WebCL {
       }
       
       if (next) {
-        if (limitAnalyser.getDependency(next) != NULL) {
-          limitAnalyser.addDependency(NULL, val, limitAnalyser.getDependency(next));
+        if (dependenceAnalyser.getDependency(next) != NULL) {
+          dependenceAnalyser.addDependency(NULL, val, dependenceAnalyser.getDependency(next));
           return true;
         } else {
-          if (resolveAncestors(next, limitAnalyser, recursion_level + 1)) {
-            limitAnalyser.addDependency(NULL, val, limitAnalyser.getDependency(next));
+          if (resolveAncestors(next, dependenceAnalyser, recursion_level + 1)) {
+            dependenceAnalyser.addDependency(NULL, val, dependenceAnalyser.getDependency(next));
             return true;
           }
         }
