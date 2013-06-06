@@ -1242,8 +1242,15 @@ namespace WebCL {
       }
       
       void addDependency(Instruction* applyLocation, Value* newVal, Value *whoseLimitsToRespect) {
-        // TODO: just put new value to map
-        dbgs() << "\nVAL: "; newVal->print(dbgs()); dbgs() << "\nDEP: "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
+        // TODO: just put new value to map..
+        dbgs() << "\nAdding dependency VAL: "; newVal->print(dbgs()); dbgs() << " DEP: "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
+        
+        if (dependencies.count(newVal) > 0) {
+          DEBUG( dbgs() << "Old dep: "; dependencies[newVal]->print(dbgs());
+                 dbgs() << "\nNew dep: ";  whoseLimitsToRespect->print(dbgs()); );
+          fast_assert(dependencies[newVal] == whoseLimitsToRespect,
+                      "If this assert gets into way to be able to compile stuff, fix class to handle multiple stores to same memory address by using information about where store happened and where dependency is needed.");
+        }
         dependencies[newVal] = whoseLimitsToRespect;
       }
       
@@ -1326,16 +1333,6 @@ namespace WebCL {
       DEBUG( dbgs() << "\n ---- ANALYZE AND COLLECT INFORMATION ABOUT DEPENDENCIES ------\n" );
       collectDependencyInfo( M, limitAnalyser, functionManager );
       
-/* PROBABLY SHOULD BE DONE INTERNALLY IN MAYBE ANALYSER
-      // Find out static limits of each address space structure and adds limits to `addressSpaceLimits`
-      // map sorted by address space number. Also adds the address space struct to value limits so that
-      // if lookups traces limits all the way up to address space allocation struct, then limits are
-      // found from limit map as normally `valueLimits[pointerOperand]`. [findAddressSpaceLimits( Module &M,
-      // AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits )](#findAddressSpaceLimits).
-      DEBUG( dbgs() << "\n --------------- FIND LIMITS FOR EACH ADDRESS SPACE --------------\n" );
-      findAddressSpaceLimits( M, valueLimits, addressSpaceLimits, addressSpaceStructs, addressSpaceEndPtrs );
-*/
-
       collectBuiltinFunctions(M, functionManager);
 
       Type* programAllocationsType = addressSpaceInfoManager.getProgramAllocationsType();
@@ -1452,24 +1449,12 @@ namespace WebCL {
       fixCallsToUseChangedSignatures(functionManager.getReplacedFunctions(),
                                      functionManager.getReplacedArguments(), 
                                      functionManager.getInternalCalls(), valueLimits);
-      
-      // Analyze code and find out the cases where we can be sure that memory access is safe in compile time and check can be omitted.
-      // NOTE: better place for this could be already before any changes has been made to original code.
-      // [collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions)](#collectSafeExceptions)
-      
-      /*
-      DEBUG( dbgs() << "\n --------------- ANALYZING CODE TO FIND SPECIAL CASES WHERE CHECKS ARE NOT NEEDED --------------\n" );
-      collectSafeExceptions(resolveLimitsOperands, functionManager.getReplacedFunctions(), safeExceptions);
-      collectSafeExceptions(resolveLimitsOperands, replacedFunctions, safeExceptions);
-       */
-      
 
+      
       // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
       // creates some memory intrinsics we might need to take care of checking their operands as well.
       // [addBoundaryChecks( ... )](#addBoundaryChecks)
       DEBUG( dbgs() << "\n --------------- ADDING BOUNDARY CHECKS --------------\n" );
-      // addBoundaryChecks(functionManager.getStores(), functionManager.getLoads(), valueLimits, addressSpaceLimits, safeExceptions);
-
       // TODO: wrap to addBoundaryChecks function....
       for (InstrSet::iterator inst = limitAnalyser.needCheck().begin(); inst != limitAnalyser.needCheck().end(); inst++) {
         Value *ptrOperand = NULL;
@@ -1480,7 +1465,8 @@ namespace WebCL {
         } else {
           fast_assert(false, "Can add check only for load or store");
         }
-        createLimitCheck(ptrOperand, limitAnalyser.getAreaLimitSet(ptrOperand), *inst);
+        // TODO: enable this soon....
+        // createLimitCheck(ptrOperand, limitAnalyser.getAreaLimitSet(ptrOperand), *inst);
       }
 
       // Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
@@ -1772,8 +1758,8 @@ namespace WebCL {
      * resolve limits which values should respect in case of same
      * address space has more than allocated 1 areas.
      *
-     * Follows uses of val and in case of storing to memory, keep track if
-     * there is always only single limits for that location.
+     * Follows uses of val recursively. Also if val is stored and val is pointer type, 
+     * follows uses of pointer operand of the store.
      *
      * TODO: needs more clear implementation
      */
@@ -1797,11 +1783,14 @@ namespace WebCL {
           
           // first check if use is actually in value operand and in that case set limits for destination pointer
           if (store->getValueOperand() == val) {
-            // adds also place where limit was set to be able to trace, which limit
-            // is valid in which place
-            limitAnalyser.addDependency(store, store->getPointerOperand(),
-                                        limitAnalyser.getDependency(val));
-            resolveUses(store->getPointerOperand(), limitAnalyser, recursion_level + 1);
+            // we don't really care if value is stored... only pointer stores are interesting
+            if (val->getType()->isPointerTy()) {
+              // adds also place where limit was set to be able to trace, which limit
+              // is valid in which place
+              limitAnalyser.addDependency(store, store->getPointerOperand(),
+                                          limitAnalyser.getDependency(val));
+              resolveUses(store->getPointerOperand(), limitAnalyser, recursion_level + 1);
+            }
           }
           continue;
           
