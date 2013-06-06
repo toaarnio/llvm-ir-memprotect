@@ -549,6 +549,10 @@ namespace WebCL {
   typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
   typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
   typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
+  class AreaLimitBase;
+  typedef std::set< AreaLimitBase* > AreaLimitSet;
+  typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
+  typedef std::map< Value*, AreaLimitBase* > AreaLimitByValueMap;
 
   class FunctionManager;
   FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, const FunctionManager& functionManager );
@@ -709,6 +713,113 @@ namespace WebCL {
     return mapping;
   }
 
+  class AreaLimitBase {
+  public:
+    AreaLimitBase() {}
+    virtual ~AreaLimitBase() {}
+
+    virtual void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) = 0;
+    virtual Value* getMin() const = 0;
+    virtual Value* getMax() const = 0;
+    virtual bool getIndirect() const = 0;
+  };
+
+  // **AreaLimit** class holds information of single memory area allocation. Limits of the area
+  // can be stored directly as constant expressions for *min* and *max* or they can be indirect
+  // references to the limits. In case of indirect memory area, the *min* and *max* contains memory
+  // addresses where limit addresses are stored.
+  struct AreaLimit: public AreaLimitBase {
+  private:
+    Value* min; // Contains first valid address
+    Value* max; // Contains last valid address
+    bool indirect; // true if min and max are indirect pointers (requires load for getting address)
+
+    AreaLimit( Value* _min, Value* _max, bool _indirect ) :
+      min( _min ),
+      max( _max ),
+      indirect( _indirect ) {
+    }
+      
+      
+    // **AreaLimit::getValidAddressFor** Returns valid address relative to val and offset for given type of memory access access.
+    //
+    // If val is indirect, first add load instruction to get indirect address value and then
+    // do the pointer cast / address arithmetic to get the correct address for given type.
+    // basically does following: `return ((type)(isIndirect ? *val : val) + offset);`
+    //
+    // `Value *val` Direct or indirect base address which from `offset` is computed.
+    // `bool isIndirect` True if we require adding a load instruction before doing address computing.
+    // `int offset` Positive or negative offset how many addresses we roll from val.
+    // `Type type` Type which kind of pointer we are going to access.
+    // `Instruction *checkStart` Position where necessary loads and pointer arithmetics will be added.
+    Value* getValidAddressFor(Value *val, bool isIndirect, int offset, Type *type, Instruction *checkStart) {
+      Function *F = checkStart->getParent()->getParent();
+      LLVMContext &c = F->getContext();
+        
+      Value *limit = val;
+      if (isIndirect) {
+        limit = new LoadInst(val, "", checkStart);
+      }
+                
+      Value *ret_limit = NULL;
+        
+      if ( Instruction *inst = dyn_cast<Instruction>(limit) ) {
+        /* bitcast can be removed by later optimizations if not necessary */
+        CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(inst, type, "", checkStart);
+        ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntVector<Value*>(c, offset), "", checkStart);
+          
+      } else if ( Constant *constant = dyn_cast<Constant>(limit) ) {
+        Constant *type_fixed_limit = ConstantExpr::getBitCast(constant, type);
+        ret_limit = ConstantExpr::getGetElementPtr( type_fixed_limit, getConstInt(c, offset) );
+          
+      } else {
+        fast_assert(false, "Couldnt resolve type of the limit value.");
+      }
+
+      std::stringstream ss; ss << offset;
+      ret_limit->setName(val->getName() + "." + ss.str());
+        
+      return ret_limit;
+    }
+
+  public:
+
+    // **AreaLimit::Create** AreaLimit factory. TODO: add bookkeeping and cleanup for freeing allocated memory.
+    static AreaLimit* Create( Value* _min, Value* _max, bool _indirect) {
+      DEBUG( dbgs() << "Creating limits:\nmin: "; _min->print(dbgs());
+             dbgs() << "\nmax: "; _max->print(dbgs()); dbgs() << "\nindirect: " << _indirect << "\n"; );
+      return new AreaLimit(_min, _max, _indirect);
+    }
+
+    // **AreaLimit::firstValidAddressFor and lastValidAddressFor** Returns first and last valid address
+    // inside of AreaLimit for given type of memory access.
+    //
+    // Min and max are first loaded (in case of indirect limits) and then casted to given type
+    // for being able to get the exact correct address. Actually it is possible that
+    // `lastValidAddressFor < firstValidAddressFor` which means that requested type actually cannot
+    // be accessed because it is too big. Limits are inclusive.
+    //
+    // `Type *type` Type of memory access which is going to be done inside these limits.
+    // `Instruction *checkStart` We add new instructions before this if necessary.
+      
+    void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) {
+      first = getValidAddressFor(max, indirect, -1, type, checkStart);
+      last = getValidAddressFor(max, indirect, -1, type, checkStart);
+    }
+
+    Value* getMin() const {
+      return min;
+    }
+
+    Value* getMax() const {
+      return max;
+    }
+
+    bool getIndirect() const {
+      return indirect;
+    }
+  };
+
   // ## LLVM Module pass
   struct ClampPointers :
     public ModulePass {
@@ -717,117 +828,6 @@ namespace WebCL {
     ClampPointers() :
       ModulePass( ID ) {
     }
-      
-    class AreaLimitBase {
-    public:
-      AreaLimitBase() {}
-      virtual ~AreaLimitBase() {}
-
-      virtual void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) = 0;
-      virtual Value* getMin() const = 0;
-      virtual Value* getMax() const = 0;
-      virtual bool getIndirect() const = 0;
-    };
-
-    // **AreaLimit** class holds information of single memory area allocation. Limits of the area
-    // can be stored directly as constant expressions for *min* and *max* or they can be indirect
-    // references to the limits. In case of indirect memory area, the *min* and *max* contains memory
-    // addresses where limit addresses are stored.
-    struct AreaLimit: public AreaLimitBase {
-    private:
-      Value* min; // Contains first valid address
-      Value* max; // Contains last valid address
-      bool indirect; // true if min and max are indirect pointers (requires load for getting address)
-
-      AreaLimit( Value* _min, Value* _max, bool _indirect ) :
-      min( _min ),
-      max( _max ),
-      indirect( _indirect ) {
-      }
-      
-      
-      // **AreaLimit::getValidAddressFor** Returns valid address relative to val and offset for given type of memory access access.
-      //
-      // If val is indirect, first add load instruction to get indirect address value and then
-      // do the pointer cast / address arithmetic to get the correct address for given type.
-      // basically does following: `return ((type)(isIndirect ? *val : val) + offset);`
-      //
-      // `Value *val` Direct or indirect base address which from `offset` is computed.
-      // `bool isIndirect` True if we require adding a load instruction before doing address computing.
-      // `int offset` Positive or negative offset how many addresses we roll from val.
-      // `Type type` Type which kind of pointer we are going to access.
-      // `Instruction *checkStart` Position where necessary loads and pointer arithmetics will be added.
-      Value* getValidAddressFor(Value *val, bool isIndirect, int offset, Type *type, Instruction *checkStart) {
-        Function *F = checkStart->getParent()->getParent();
-        LLVMContext &c = F->getContext();
-        
-        Value *limit = val;
-        if (isIndirect) {
-          limit = new LoadInst(val, "", checkStart);
-        }
-                
-        Value *ret_limit = NULL;
-        
-        if ( Instruction *inst = dyn_cast<Instruction>(limit) ) {
-          /* bitcast can be removed by later optimizations if not necessary */
-          CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(inst, type, "", checkStart);
-          ret_limit = GetElementPtrInst::Create(type_fixed_limit, genIntVector<Value*>(c, offset), "", checkStart);
-          
-        } else if ( Constant *constant = dyn_cast<Constant>(limit) ) {
-          Constant *type_fixed_limit = ConstantExpr::getBitCast(constant, type);
-          ret_limit = ConstantExpr::getGetElementPtr( type_fixed_limit, getConstInt(c, offset) );
-          
-        } else {
-          fast_assert(false, "Couldnt resolve type of the limit value.");
-        }
-
-        std::stringstream ss; ss << offset;
-        ret_limit->setName(val->getName() + "." + ss.str());
-        
-        return ret_limit;
-      }
-
-    public:
-
-      // **AreaLimit::Create** AreaLimit factory. TODO: add bookkeeping and cleanup for freeing allocated memory.
-      static AreaLimit* Create( Value* _min, Value* _max, bool _indirect) {
-        DEBUG( dbgs() << "Creating limits:\nmin: "; _min->print(dbgs());
-               dbgs() << "\nmax: "; _max->print(dbgs()); dbgs() << "\nindirect: " << _indirect << "\n"; );
-        return new AreaLimit(_min, _max, _indirect);
-      }
-
-      // **AreaLimit::firstValidAddressFor and lastValidAddressFor** Returns first and last valid address
-      // inside of AreaLimit for given type of memory access.
-      //
-      // Min and max are first loaded (in case of indirect limits) and then casted to given type
-      // for being able to get the exact correct address. Actually it is possible that
-      // `lastValidAddressFor < firstValidAddressFor` which means that requested type actually cannot
-      // be accessed because it is too big. Limits are inclusive.
-      //
-      // `Type *type` Type of memory access which is going to be done inside these limits.
-      // `Instruction *checkStart` We add new instructions before this if necessary.
-      
-      void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) {
-        first = getValidAddressFor(max, indirect, -1, type, checkStart);
-        last = getValidAddressFor(max, indirect, -1, type, checkStart);
-      }
-
-      Value* getMin() const {
-        return min;
-      }
-
-      Value* getMax() const {
-        return max;
-      }
-
-      bool getIndirect() const {
-        return indirect;
-      }
-    };
-      
-    typedef std::set< AreaLimitBase* > AreaLimitSet;
-    typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
-    typedef std::map< Value*, AreaLimitBase* > AreaLimitByValueMap;
       
     // handles creating and bookkeeping address space info objects operations that require creating types must
     // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
