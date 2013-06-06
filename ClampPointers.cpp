@@ -1316,6 +1316,45 @@ namespace WebCL {
       }
     }
   };
+
+  class DependenceAnalyser {
+  private:
+    InstrSet needChecks;
+    // TODO: fix this map to be able to contain also location
+    std::map< Value*, Value* > dependencies;
+      
+  public:
+      
+    InstrSet& needCheck() {
+      return needChecks;
+    }
+
+    void addCheck(Instruction *inst) {
+      needChecks.insert(inst);
+    }
+      
+    void addDependency(Instruction* applyLocation, Value* newVal, Value *whoseLimitsToRespect) {
+      // TODO: just put new value to map..
+      dbgs() << "\nAdding dependency VAL: "; newVal->print(dbgs()); dbgs() << " DEP: "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
+        
+      if (dependencies.count(newVal) > 0) {
+        DEBUG( dbgs() << "Old dep: "; dependencies[newVal]->print(dbgs());
+               dbgs() << "\nNew dep: ";  whoseLimitsToRespect->print(dbgs()); );
+        fast_assert(dependencies[newVal] == whoseLimitsToRespect,
+                    "If this assert gets into way to be able to compile stuff, fix class to handle multiple stores to same memory address by using information about where store happened and where dependency is needed.");
+      }
+      dependencies[newVal] = whoseLimitsToRespect;
+    }
+      
+    Value* getDependency(Value *value) {
+      // TODO: check if limit is found
+      // TODO: if multiple limits were found try to exploit location info to select correct one
+      return dependencies[value];
+    }
+      
+    // TODO: ADD METHOD TO PRINT ALL ANALYSIS DATA
+    
+  };
     
   // ## LLVM Module pass
   struct ClampPointers :
@@ -1326,45 +1365,6 @@ namespace WebCL {
       ModulePass( ID ) {
     }
       
-    class DependenceAnalyser {
-    private:
-      InstrSet needChecks;
-      // TODO: fix this map to be able to contain also location
-      std::map< Value*, Value* > dependencies;
-      
-    public:
-      
-      InstrSet& needCheck() {
-        return needChecks;
-      }
-
-      void addCheck(Instruction *inst) {
-        needChecks.insert(inst);
-      }
-      
-      void addDependency(Instruction* applyLocation, Value* newVal, Value *whoseLimitsToRespect) {
-        // TODO: just put new value to map..
-        dbgs() << "\nAdding dependency VAL: "; newVal->print(dbgs()); dbgs() << " DEP: "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
-        
-        if (dependencies.count(newVal) > 0) {
-          DEBUG( dbgs() << "Old dep: "; dependencies[newVal]->print(dbgs());
-                 dbgs() << "\nNew dep: ";  whoseLimitsToRespect->print(dbgs()); );
-          fast_assert(dependencies[newVal] == whoseLimitsToRespect,
-                      "If this assert gets into way to be able to compile stuff, fix class to handle multiple stores to same memory address by using information about where store happened and where dependency is needed.");
-        }
-        dependencies[newVal] = whoseLimitsToRespect;
-      }
-      
-      Value* getDependency(Value *value) {
-        // TODO: check if limit is found
-        // TODO: if multiple limits were found try to exploit location info to select correct one
-        return dependencies[value];
-      }
-      
-      // TODO: ADD METHOD TO PRINT ALL ANALYSIS DATA
-    
-    };
-    
     // handles creating limits according to information found from address space info manager and dependency analyser
     class AreaLimitManager {
     public:
