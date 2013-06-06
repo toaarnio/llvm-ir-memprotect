@@ -541,24 +541,6 @@ namespace WebCL {
 
     typedef std::map< Value*, int > ValueIndexMap;
     typedef std::set< Value* > ValueSet;
-
-    struct AddressSpaceInitializer {
-    protected:
-      ValueIndexMap replacements;
-
-    public:
-      AddressSpaceInitializer() {}
-      virtual ~AddressSpaceInitializer() {}
-
-      virtual void initialize(LLVMContext& c, IRBuilder<>& at, ValueSet& safeExceptions) const = 0;
-
-      virtual void dump() const {}
-
-      virtual void setValueReplacements(const ValueIndexMap& replacements_) {
-        replacements = replacements_;
-      }
-    };
-
     typedef std::map< Function*, Function* > FunctionMap;
     typedef std::list< Function* > FunctionList;
     typedef std::map< Argument*, Argument* > ArgumentMap;
@@ -575,7 +557,6 @@ namespace WebCL {
     typedef std::vector< Value* > ValueVector;
     typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
     typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
-    typedef std::map< unsigned, AddressSpaceInitializer* > AddressSpaceInitializerByAddressSpaceMap;
     typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
       
     // keeps track of function replacements and builtin functions
@@ -696,61 +677,6 @@ namespace WebCL {
 
       FunctionSet    unsafeBuiltinFunctions;
       FunctionSet    safeBuiltinFunctions;
-    };
-
-
-    class PrivateAddressSpaceInitializer: public AddressSpaceInitializer {
-    private:
-      GlobalValue*             asStruct;
-      GlobalValue*             asEndStruct;
-      std::vector< Constant* > initData;
-    public:
-      PrivateAddressSpaceInitializer(GlobalValue* asStruct, GlobalValue* asEndStruct, std::vector< Constant* > initData) :
-        asStruct(asStruct), asEndStruct(asEndStruct), initData(initData) {
-        // nothing
-      }
-      ~PrivateAddressSpaceInitializer() {}
-
-      void dump() const {
-        for (std::vector< Constant* >::const_iterator it = initData.begin();
-             it != initData.end();
-             ++it) {
-          DUMP(**it);
-          DUMP(*(*it)->getType());
-        }
-      }
-      
-      void initialize(LLVMContext& c, IRBuilder<>& blockBuilder, ValueSet& safeExceptions ) const {
-        AllocaInst *asAlloca = blockBuilder.CreateAlloca(asStruct->getType()->getPointerElementType()->getPointerElementType(),
-                                                         0, 
-                                                         "privateAddressSpace");
-        blockBuilder.CreateStore(asAlloca, asStruct);
-        Value* endLimit = blockBuilder.CreateGEP(asAlloca, genIntVector<Value*>(c, 1));
-        blockBuilder.CreateStore(endLimit, asEndStruct);
-        int idx = 0;
-        for (std::vector< Constant* >::const_iterator it = initData.begin();
-             it != initData.end();
-             ++it, ++idx) {
-          Value* storeAt = blockBuilder.CreateGEP(asAlloca, genIntVector<Value*>(c, 0, idx));
-          if (!isa<GlobalValue>(*it)) {
-            blockBuilder.CreateStore(*it, storeAt);
-          } else {
-            assert(replacements.count(*it));
-            Value* loadFrom = blockBuilder.CreateGEP(asAlloca, genIntVector<Value*>(c, 0, replacements.find(*it)->second));
-            blockBuilder.CreateStore(loadFrom, storeAt);
-            safeExceptions.insert(loadFrom);
-          }
-          safeExceptions.insert(storeAt);
-        }
-        for (std::vector< Constant* >::const_iterator it = initData.begin();
-             it != initData.end();
-             ++it, ++idx) {
-          if (GlobalVariable* global = dyn_cast<GlobalVariable>(*it)) {
-            // TODO: make sure this is freed after pass terminates
-            // global->removeFromParent();
-          }
-        }
-      }
     };
 
     class AreaLimitBase {
@@ -1463,7 +1389,6 @@ namespace WebCL {
       // Bookkeeping of all available limits of address spaces.
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
       AddressSpaceStructByAddressSpaceMap addressSpaceStructs;
-      AddressSpaceInitializerByAddressSpaceMap addressSpaceInitializers;
       GlobalValueMap addressSpaceEndPtrs;
 
       // Set where is collected all values, which will not require boundary checks to
@@ -1589,7 +1514,7 @@ namespace WebCL {
 
       // The same but for only 'main' functions; currently only handles the allocation of private structs
       if (RunUnsafeMode) {
-        createMainEntryPoint(M, functionManager.getReplacedFunctions(), addressSpaceInitializers, safeExceptions);
+        createMainEntryPoint(M, functionManager.getReplacedFunctions(), safeExceptions);
       }
 
       
@@ -2306,7 +2231,6 @@ namespace WebCL {
 
     void createMainEntryPoint(Module& M,
                               const FunctionMap &replacedFunctions,
-                              AddressSpaceInitializerByAddressSpaceMap& asInits,
                               ValueSet& safeExceptions) {
       Function* main = 0;
       for (FunctionMap::const_iterator funIt = replacedFunctions.begin();
@@ -2319,11 +2243,6 @@ namespace WebCL {
       if (main) {
         LLVMContext& c = M.getContext();
         IRBuilder<> blockBuilder( main->getEntryBlock().begin() );
-        for (AddressSpaceInitializerByAddressSpaceMap::const_iterator it = asInits.begin();
-             it != asInits.end();
-             ++it) {
-          it->second->initialize(c, blockBuilder, safeExceptions);
-        }
       }
     }
 
@@ -2414,12 +2333,6 @@ namespace WebCL {
         }
         origArg++;
       }
-
-      // for (AddressSpaceInitializerByAddressSpaceMap::const_iterator it = asInits.begin();
-      //      it != asInits.end();
-      //      ++it) {
-      //   it->second->initialize(c, blockBuilder, safeExceptions);
-      // }
 
       DEBUG( dbgs() << "\nCreated arguments: "; 
              for ( size_t i = 0; i < args.size(); i++ ) { 
