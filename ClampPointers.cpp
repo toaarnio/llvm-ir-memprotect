@@ -1120,7 +1120,9 @@ namespace WebCL {
         LLVMContext& c = M.getContext();
         Value* paa = getProgramAllocations(*F);
         min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 0)));
+        min->setName("constantLimits.min");
         max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 1)));
+        max->setName("constantLimits.max");
       }
       GetElementPtrInst* getGlobalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
         LLVMContext& c = M.getContext();
@@ -1133,7 +1135,9 @@ namespace WebCL {
         LLVMContext& c = M.getContext();
         Value* paa = getProgramAllocations(*F);
         min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 0)));
+        min->setName("globalLimits.min");
         max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 1)));
+        max->setName("globalLimits.max");
       }
       GetElementPtrInst* getLocalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
         LLVMContext& c = M.getContext();
@@ -1146,7 +1150,9 @@ namespace WebCL {
         LLVMContext& c = M.getContext();
         Value* paa = getProgramAllocations(*F);
         min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 0)));
+        min->setName("localLimits.min");
         max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 1)));
+        max->setName("localLimits.max");
       }
       GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder) const {
         LLVMContext& c = M.getContext();
@@ -1166,8 +1172,10 @@ namespace WebCL {
         LLVMContext& c = M.getContext();
         Value* paa = getProgramAllocations(*F);
         min = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4)));
+        min->setName("privateLimits.min");
         // TODO: return proper maximum
         max = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4)));
+        max->setName("privateLimits.max");
       }
       ConstantExpr* getConstantAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) {
         LLVMContext& c = M.getContext();
