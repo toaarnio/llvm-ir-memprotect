@@ -1355,6 +1355,38 @@ namespace WebCL {
     // TODO: ADD METHOD TO PRINT ALL ANALYSIS DATA
     
   };
+
+  // handles creating limits according to information found from address space info manager and dependency analyser
+  class AreaLimitManager {
+  public:
+    AreaLimitManager(AddressSpaceInfoManager& infoManager, DependenceAnalyser& dependenceAnalyser) :
+      infoManager(infoManager),
+      dependenceAnalyser(dependenceAnalyser) {
+      // nothing
+    }
+
+    // does not exist
+    AreaLimitManager(const AreaLimitManager& other);
+
+    ~AreaLimitManager() {}
+
+    AreaLimitSet getAreaLimits(Value* ptrOperand) {
+      assert(isa<PointerType>(ptrOperand->getType()));
+      PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
+      int asNumber = pointerType->getAddressSpace();
+      return infoManager.getASLimits(asNumber);
+    }
+      
+  private:
+    AddressSpaceInfoManager& infoManager;
+    DependenceAnalyser& dependenceAnalyser;
+
+    AreaLimitSetByAddressSpaceMap asAreaLimits;
+    AreaLimitByValueMap valueAreaLimits;
+
+    // does not exist
+    void operator=(const AreaLimitManager&);
+  };
     
   // ## LLVM Module pass
   struct ClampPointers :
@@ -1365,38 +1397,6 @@ namespace WebCL {
       ModulePass( ID ) {
     }
       
-    // handles creating limits according to information found from address space info manager and dependency analyser
-    class AreaLimitManager {
-    public:
-      AreaLimitManager(AddressSpaceInfoManager& infoManager, DependenceAnalyser& dependenceAnalyser) :
-        infoManager(infoManager),
-        dependenceAnalyser(dependenceAnalyser) {
-        // nothing
-      }
-
-      // does not exist
-      AreaLimitManager(const AreaLimitManager& other);
-
-      ~AreaLimitManager() {}
-
-      AreaLimitSet getAreaLimits(Value* ptrOperand) {
-        assert(isa<PointerType>(ptrOperand->getType()));
-        PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
-        int asNumber = pointerType->getAddressSpace();
-        return infoManager.getASLimits(asNumber);
-      }
-      
-    private:
-      AddressSpaceInfoManager& infoManager;
-      DependenceAnalyser& dependenceAnalyser;
-
-      AreaLimitSetByAddressSpaceMap asAreaLimits;
-      AreaLimitByValueMap valueAreaLimits;
-
-      // does not exist
-      void operator=(const AreaLimitManager&);
-    };
-
 #if 0
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       // check lib/Analysis/MemDepPrinter.cpp how to use memdap anaylsis
