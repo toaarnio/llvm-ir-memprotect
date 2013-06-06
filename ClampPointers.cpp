@@ -987,8 +987,9 @@ namespace WebCL {
             assert(replacement != value);
             value->replaceAllUsesWith(replacement);
           } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
-            for (Value::use_iterator it = global->use_begin();
-                 it != global->use_end();
+            std::vector<User*> uses(global->use_begin(), global->use_end());
+            for (std::vector<User*>::iterator it = uses.begin();
+                 it != uses.end();
                  ++it) {
               User* user = *it;
               if (Instruction* inst = dyn_cast<Instruction>(user)) {
