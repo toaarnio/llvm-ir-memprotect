@@ -530,6 +530,26 @@ namespace WebCL {
     return stream;
   }
 
+  typedef std::map< Value*, int > ValueIndexMap;
+  typedef std::set< Value* > ValueSet;
+  typedef std::map< Function*, Function* > FunctionMap;
+  typedef std::list< Function* > FunctionList;
+  typedef std::map< Argument*, Argument* > ArgumentMap;
+  typedef std::set< Function* > FunctionSet;
+  typedef std::set< Argument* > ArgumentSet;
+  typedef std::set< Instruction* > InstrSet;
+  typedef std::set< CallInst* > CallInstrSet;
+  typedef std::set< AllocaInst* > AllocaInstrSet;
+  typedef std::set< GetElementPtrInst* > GepInstrSet;
+  typedef std::set< LoadInst* > LoadInstrSet;
+  typedef std::set< StoreInst* > StoreInstrSet;
+  typedef std::set< int > IntSet;
+  typedef std::set< unsigned > UIntSet;
+  typedef std::vector< Value* > ValueVector;
+  typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
+  typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
+  typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
+
   // ## LLVM Module pass
   struct ClampPointers :
     public ModulePass {
@@ -538,26 +558,6 @@ namespace WebCL {
     ClampPointers() :
       ModulePass( ID ) {
     }
-
-    typedef std::map< Value*, int > ValueIndexMap;
-    typedef std::set< Value* > ValueSet;
-    typedef std::map< Function*, Function* > FunctionMap;
-    typedef std::list< Function* > FunctionList;
-    typedef std::map< Argument*, Argument* > ArgumentMap;
-    typedef std::set< Function* > FunctionSet;
-    typedef std::set< Argument* > ArgumentSet;
-    typedef std::set< Instruction* > InstrSet;
-    typedef std::set< CallInst* > CallInstrSet;
-    typedef std::set< AllocaInst* > AllocaInstrSet;
-    typedef std::set< GetElementPtrInst* > GepInstrSet;
-    typedef std::set< LoadInst* > LoadInstrSet;
-    typedef std::set< StoreInst* > StoreInstrSet;
-    typedef std::set< int > IntSet;
-    typedef std::set< unsigned > UIntSet;
-    typedef std::vector< Value* > ValueVector;
-    typedef std::map< unsigned, ValueVector > ValueVectorByAddressSpaceMap;
-    typedef std::map< unsigned, GlobalValue* > AddressSpaceStructByAddressSpaceMap;
-    typedef std::map< GlobalValue*, GlobalValue* > GlobalValueMap;
       
     // keeps track of function replacements and builtin functions
     class FunctionManager {
