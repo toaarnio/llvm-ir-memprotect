@@ -862,25 +862,50 @@ namespace WebCL {
       
     typedef std::set< AreaLimitBase* > AreaLimitSet;
     typedef std::map< unsigned, AreaLimitSet > AreaLimitSetByAddressSpaceMap;
-    typedef std::map< Value*, AreaLimit* > AreaLimitByValueMap;
-    
-    // handles creating limits according to information found from address space info manager and dependency analyser
-    class AreaLimitManager {
-    public:
-      
-      AreaLimitSet& getAreaLimits(Value* ptrOperand) {
-        return dummy;
-      }
-      
-    private:
-      AreaLimitSet dummy;
-    };
+    typedef std::map< Value*, AreaLimitBase* > AreaLimitByValueMap;
       
     // handles creating and bookkeeping address space info objects operations that require creating types must
     // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
     // operations, and if the flag is set, the object cannot be mutated.
     class AddressSpaceInfoManager {
     public:
+      typedef void (AddressSpaceInfoManager::*GetLimitsFunc)(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const;
+
+      class ASAreaLimit: public AreaLimitBase {
+      public:
+        ASAreaLimit(AddressSpaceInfoManager& infoManager, GetLimitsFunc limitsFunc, int asIndex) :
+          infoManager(infoManager), limitsFunc(limitsFunc), asIndex(asIndex) {
+          // nothing
+        }
+        ~ASAreaLimit() {}
+
+        void validAddressBoundsFor(Type *Type, Instruction *checkStart, Value *&first, Value *&last) {
+          Function* F = checkStart->getParent()->getParent();
+          IRBuilder<> blockBuidler(checkStart);
+          (infoManager.*limitsFunc)(F, blockBuidler, asIndex, first, last);
+        }
+
+        Value* getMin() const {
+          DEBUG( dbgs() << "ASAreaLimit.getMin not implemented\n"; );
+          return getConstInt(infoManager.M.getContext(), 0);
+        }
+
+        Value* getMax() const {
+          DEBUG( dbgs() << "ASAreaLimit.getMax not implemented\n"; );
+          return getConstInt(infoManager.M.getContext(), 0);
+        }
+
+        bool getIndirect() const {
+          DEBUG( dbgs() << "ASAreaLimit.getIndirect not implemented\n"; );
+          return false;
+        }
+
+      private:
+        AddressSpaceInfoManager& infoManager;
+        GetLimitsFunc            limitsFunc;
+        int                      asIndex;
+      };
+
       AddressSpaceInfoManager(Module& M) : 
         M(M),
         programAllocationsType(0),
@@ -935,6 +960,14 @@ namespace WebCL {
         } else {
           assert(0);
         }
+      }
+      AreaLimitSet getASLimits(unsigned asNumber) {
+        AreaLimitSet limits;
+        GetLimitsFunc limitsFunc = getASLimitsFunc(asNumber);
+        for (size_t idx = 0; idx < getNumASLimits(asNumber); ++idx) {
+          limits.insert(new ASAreaLimit(*this, limitsFunc, idx));
+        }
+        return limits;
       }
       GlobalVariable* getLocalAllocations() {
         fixed = true;
@@ -1130,6 +1163,32 @@ namespace WebCL {
       ValueVectorByAddressSpaceMap asValues;
       ConstantValueVectorByAddressSpaceMap asInits;
 
+      static GetLimitsFunc getASLimitsFunc(unsigned asNumber) {
+        if (asNumber == globalAddressSpaceNumber) {
+          return &AddressSpaceInfoManager::getGlobalLimits;
+        } else if (asNumber == localAddressSpaceNumber) {
+          return &AddressSpaceInfoManager::getLocalLimits;
+        } else if (asNumber == constantAddressSpaceNumber) {
+          return &AddressSpaceInfoManager::getConstantLimits;
+        } else if (asNumber == privateAddressSpaceNumber) {
+          return &AddressSpaceInfoManager::getPrivateLimits;
+        } else {
+          assert(0);
+        }
+      }
+      int getNumASLimits(unsigned asNumber) const {
+        if (asNumber == globalAddressSpaceNumber) {
+          return (dynamicRanges.count(globalAddressSpaceNumber) ? dynamicRanges.find(globalAddressSpaceNumber)->second.size() : 0); // args
+        } else if (asNumber == localAddressSpaceNumber) {
+          return (dynamicRanges.count(globalAddressSpaceNumber) ? dynamicRanges.find(globalAddressSpaceNumber)->second.size() : 0) + 1; // args + local allocations
+        } else if (asNumber == constantAddressSpaceNumber) {
+          return (dynamicRanges.count(constantAddressSpaceNumber) ? dynamicRanges.find(constantAddressSpaceNumber)->second.size() : 0) + 1; // args + constant allocations
+        } else if (asNumber == privateAddressSpaceNumber) {
+          return 1; // only private allocations
+        } else {
+          assert(0);
+        }
+      }
       GetElementPtrInst* getConstantLimitsField(Function* F, IRBuilder<> &blockBuilder) const {
         LLVMContext& c = M.getContext();
         Value* paa = getProgramAllocations(*F);
@@ -1340,6 +1399,38 @@ namespace WebCL {
       // TODO: ADD METHOD TO PRINT ALL ANALYSIS DATA
     
     };
+    
+    // handles creating limits according to information found from address space info manager and dependency analyser
+    class AreaLimitManager {
+    public:
+      AreaLimitManager(AddressSpaceInfoManager& infoManager, DependenceAnalyser& dependenceAnalyser) :
+        infoManager(infoManager),
+        dependenceAnalyser(dependenceAnalyser) {
+        // nothing
+      }
+
+      // does not exist
+      AreaLimitManager(const AreaLimitManager& other);
+
+      ~AreaLimitManager() {}
+
+      AreaLimitSet getAreaLimits(Value* ptrOperand) {
+        assert(isa<PointerType>(ptrOperand->getType()));
+        PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
+        int asNumber = pointerType->getAddressSpace();
+        return infoManager.getASLimits(asNumber);
+      }
+      
+    private:
+      AddressSpaceInfoManager& infoManager;
+      DependenceAnalyser& dependenceAnalyser;
+
+      AreaLimitSetByAddressSpaceMap asAreaLimits;
+      AreaLimitByValueMap valueAreaLimits;
+
+      // does not exist
+      void operator=(const AreaLimitManager&);
+    };
 
 #if 0
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
@@ -1389,7 +1480,7 @@ namespace WebCL {
       // of the new kernels.
       AddressSpaceInfoManager addressSpaceInfoManager(M);
       DependenceAnalyser dependenceAnalyser;
-      AreaLimitManager areaLimitManager;
+      AreaLimitManager areaLimitManager(addressSpaceInfoManager, dependenceAnalyser);
       
       DEBUG( dbgs() << "\n --------------- COLLECT INFORMATION OF STATIC MEMORY ALLOCATIONS --------------\n" );
       scanStaticMemory( M, addressSpaceInfoManager );
@@ -2609,7 +2700,7 @@ namespace WebCL {
      * @param limits Smart pointer, whose limits pointer should respect
      * @param meminst Instruction which for check is injected
      */
-    void createLimitCheck(Value *ptr, AreaLimitSet &limits, Instruction *meminst) {
+    void createLimitCheck(Value *ptr, const AreaLimitSet &limits, Instruction *meminst) {
       
       DEBUG( dbgs() << "Creating limit check for: "; ptr->print(dbgs()); dbgs() << " of type: "; ptr->getType()->print(dbgs()); dbgs() << "\n" );
       static int id = 0;
