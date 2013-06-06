@@ -810,7 +810,7 @@ namespace WebCL {
     }
   };
 
-  llvm::raw_ostream& operator<<(llvm::raw_ostream& stream, const AreaLimit& areaLimit) {
+  llvm::raw_ostream& operator<<(llvm::raw_ostream& stream, const AreaLimitBase& areaLimit) {
     areaLimit.print(stream);
     return stream;
   }
@@ -2320,7 +2320,7 @@ namespace WebCL {
       
     DEBUG( dbgs() << " Possible limits to check: \n" );
     for (AreaLimitSet::const_iterator i = limits.begin(); i != limits.end(); i++) {
-      DEBUG( dbgs() << *i );
+      DEBUG( dbgs() << **i; );
     }
     DUMP(limits.size());
     fast_assert(limits.size() == 1, "Current boundary check generation does not support multiple limits checking.");
