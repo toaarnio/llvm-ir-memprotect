@@ -820,6 +820,503 @@ namespace WebCL {
     }
   };
 
+  // handles creating and bookkeeping address space info objects operations that require creating types must
+  // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
+  // operations, and if the flag is set, the object cannot be mutated.
+  class AddressSpaceInfoManager {
+  public:
+    typedef void (AddressSpaceInfoManager::*GetLimitsFunc)(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const;
+
+    class ASAreaLimit: public AreaLimitBase {
+    public:
+      ASAreaLimit(AddressSpaceInfoManager& infoManager, GetLimitsFunc limitsFunc, int asIndex) :
+        infoManager(infoManager), limitsFunc(limitsFunc), asIndex(asIndex) {
+        // nothing
+      }
+      ~ASAreaLimit() {}
+
+      void validAddressBoundsFor(Type *Type, Instruction *checkStart, Value *&first, Value *&last) {
+        Function* F = checkStart->getParent()->getParent();
+        IRBuilder<> blockBuidler(checkStart);
+        (infoManager.*limitsFunc)(F, blockBuidler, asIndex, first, last);
+      }
+
+      Value* getMin() const {
+        DEBUG( dbgs() << "ASAreaLimit.getMin not implemented\n"; );
+        return getConstInt(infoManager.M.getContext(), 0);
+      }
+
+      Value* getMax() const {
+        DEBUG( dbgs() << "ASAreaLimit.getMax not implemented\n"; );
+        return getConstInt(infoManager.M.getContext(), 0);
+      }
+
+      bool getIndirect() const {
+        DEBUG( dbgs() << "ASAreaLimit.getIndirect not implemented\n"; );
+        return false;
+      }
+
+    private:
+      AddressSpaceInfoManager& infoManager;
+      GetLimitsFunc            limitsFunc;
+      int                      asIndex;
+    };
+
+    AddressSpaceInfoManager(Module& M) : 
+      M(M),
+      programAllocationsType(0),
+      constantLimitsType(0),
+      globalLimitsType(0),
+      localLimitsType(0),
+      localAllocations(0),
+      constantAllocations(0),
+      fixed(false) {
+      // nothing
+    }
+    void addAddressSpace(unsigned asNumber, bool isGlobalScope, const ArrayRef<Value*> &values, const ArrayRef<Constant*> &dataInit) {
+      // TODO: make copy of values and all other data..
+      // TODO: implement!
+      assert(!fixed);
+      for (ArrayRef<Value*>::const_iterator it = values.begin();
+           it != values.end();
+           ++it) {
+        valueASMapping.insert(std::make_pair(*it, ValueASIndex(asNumber, asValues[asNumber].size())));
+        asValues[asNumber].push_back(*it);
+      }
+      std::copy(dataInit.begin(), dataInit.end(), std::back_inserter(asInits[asNumber]));
+    }
+    void addDynamicLimitRange(Argument* arg) {
+      // TODO: kernel is disregarded for now
+      // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
+      assert(!fixed);
+      PointerType* type = cast<PointerType>(arg->getType());
+      dynamicRanges[type->getAddressSpace()].push_back(arg);
+    }
+    // for a given kernel argument and current function and place where to insert code, return the pointers where we store its minimum and maximum limit
+    void getArgumentLimits(Argument* arg, Function* F, IRBuilder<> &blockBuilder, Value*& min, Value*& max) {
+      PointerType* type = cast<PointerType>(arg->getType());
+      unsigned as = type->getAddressSpace();
+      int idx = 0;
+      const ArgumentVector args = dynamicRanges[as];
+      ArgumentVector::const_iterator it;
+      for (it = args.begin();
+           it != args.end() && *it != arg;
+           ++it, ++idx) {
+        // iterate
+      }
+      assert(it != args.end());
+      if (as == globalAddressSpaceNumber) {
+        getGlobalLimits(F, blockBuilder, idx, min, max);
+      } else if (as == localAddressSpaceNumber) {
+        getLocalLimits(F, blockBuilder, idx, min, max);
+      } else if (as == constantAddressSpaceNumber) {
+        getConstantLimits(F, blockBuilder, idx, min, max);
+      } else if (as == privateAddressSpaceNumber) {
+        getPrivateLimits(F, blockBuilder, idx, min, max);
+      } else {
+        assert(0);
+      }
+    }
+    AreaLimitSet getASLimits(unsigned asNumber) {
+      AreaLimitSet limits;
+      GetLimitsFunc limitsFunc = getASLimitsFunc(asNumber);
+      for (size_t idx = 0; idx < getNumASLimits(asNumber); ++idx) {
+        limits.insert(new ASAreaLimit(*this, limitsFunc, idx));
+      }
+      return limits;
+    }
+    GlobalVariable* getLocalAllocations() {
+      fixed = true;
+      if (!localAllocations) {
+        localAllocations = new GlobalVariable
+          (M, getASAllocationsType(localAddressSpaceNumber), false, GlobalValue::InternalLinkage, 
+           ConstantAggregateZero::get(getASAllocationsType(localAddressSpaceNumber)), 
+           "localAllocations", NULL, GlobalVariable::NotThreadLocal, localAddressSpaceNumber);
+      }
+      return localAllocations;
+    }
+    GlobalVariable* getConstantAllocations() {
+      fixed = true;
+      if (!constantAllocations) {
+        constantAllocations = new GlobalVariable
+          (M, getASAllocationsType(constantAddressSpaceNumber), true, GlobalValue::InternalLinkage, 
+           ConstantStruct::get(getASAllocationsType(constantAddressSpaceNumber), asInits[constantAddressSpaceNumber]),
+           "constantAllocations", NULL, GlobalVariable::NotThreadLocal, constantAddressSpaceNumber);
+      }
+      return constantAllocations;
+    }
+    Value* generateProgramAllocationCode(Function* F, IRBuilder<> &blockBuilder) {
+      fixed = true;
+      Value* paa = blockBuilder.CreateAlloca(dyn_cast<PointerType>(getProgramAllocationsType())->getTypeAtIndex(0u),
+                                             0,
+                                             "ProgramAllocationsRoot");
+        
+      getLocalAllocations();
+      getConstantAllocations();
+
+      generateASLimitsInit(constantAddressSpaceNumber, blockBuilder, getConstantLimitsField(F, blockBuilder));
+      generateASLimitsInit(globalAddressSpaceNumber, blockBuilder, getGlobalLimitsField(F, blockBuilder));
+      generateASLimitsInit(localAddressSpaceNumber, blockBuilder, getLocalLimitsField(F, blockBuilder));
+      //generatePrivateAllocationsInit(blockBuilder, getPrivateAllocationsField(F, blockBuilder));
+
+      //Function* kernel = blockBuilder.GetInsertPoint()->getParent()->getParent();
+
+      return paa;
+    }
+    // slightly hazardous; you need to be sure you've called non-const getProgramAllocationsType before using this
+    PointerType* getProgramAllocationsType() const {
+      assert(fixed);
+      return const_cast<AddressSpaceInfoManager&>(*this).getProgramAllocationsType();
+    }
+    PointerType* getProgramAllocationsType() {
+      fixed = true;
+      if (!programAllocationsType) {
+        LLVMContext& c = M.getContext();
+
+        programAllocationsType =
+          PointerType::get(StructType::create(c,
+                                              genVector<Type*>(getASLimitsType(constantAddressSpaceNumber),
+                                                               getASLimitsType(globalAddressSpaceNumber),
+                                                               getASLimitsType(localAddressSpaceNumber),
+                                                               getASAllocationsType(privateAddressSpaceNumber)),
+                                              "ProgramAllocationsType"),
+                           privateAddressSpaceNumber);
+      }
+      return programAllocationsType;
+    }
+    void replaceUsesOfOriginalVariables() {
+      fixed = true;
+      // TODO: go through value mappings of every address space that we have created and replace all uses with.
+      for (ValueASIndexMap::const_iterator it = valueASMapping.begin();
+           it != valueASMapping.end();
+           ++it) {
+        Value* const value = it->first;
+        const ValueASIndex& index = it->second;
+        if (Instruction* inst = dyn_cast<Instruction>(value)) {
+          IRBuilder<> blockBuilder(inst);
+          Function* F = inst->getParent()->getParent();
+          Value* replacement = getValueReplacement(F, blockBuilder, value);
+          assert(replacement != value);
+          value->replaceAllUsesWith(replacement);
+        } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
+          std::vector<User*> uses(global->use_begin(), global->use_end());
+          for (std::vector<User*>::iterator it = uses.begin();
+               it != uses.end();
+               ++it) {
+            User* user = *it;
+            if (Instruction* inst = dyn_cast<Instruction>(user)) {
+              IRBuilder<> blockBuilder(inst);
+              Function* F = inst->getParent()->getParent();
+              Value* replacement = getValueReplacement(F, blockBuilder, value);
+              if (replacement != value) {
+                user->replaceUsesOfWith(value, replacement);
+              }
+            } else if (ConstantExpr* constant = dyn_cast<ConstantExpr>(user)) {
+#if 0
+              Instruction* inst = getAsInstruction(constant);
+              constant->replaceAllUsesWith(inst);
+              IRBuilder<> blockBuilder(inst);
+              Function* F = constant->getParent()->getParent();
+              Value* replacement = getValueReplacement(F, blockBuilder, value);
+              if (replacement != value) {
+                user->replaceUsesOfWith(value, replacement);
+              }
+#endif
+              assert(0);
+            } else {
+              assert(0);
+            }
+          }
+          // TODO: make sure pbject is freed after pass terminates
+          global->removeFromParent();
+        } else {
+          assert(0);
+        }
+      }
+    }
+    Value* getValueReplacement(Function* F, IRBuilder<> &blockBuilder, Value *value) {
+      if (!valueASMapping.count(value)) {
+        return value;
+      }
+      const ValueASIndex& index = valueASMapping.find(value)->second;
+      Value* replacement;
+      if (index.asNumber == privateAddressSpaceNumber) {
+        replacement = getPrivateAllocationsField(F, blockBuilder, index.index);
+      } else if (index.asNumber == constantAddressSpaceNumber) {
+        replacement = getConstantAllocationsField(F, blockBuilder, index.index);
+      } else if (index.asNumber == localAddressSpaceNumber) {
+        replacement = getLocalAllocationsField(F, blockBuilder, index.index);
+      } else if (index.asNumber == globalAddressSpaceNumber) {
+        replacement = value;
+      }
+      assert(replacement);
+      replacement->setName(replacement->getName() + "." + value->getName());
+      return replacement;
+    }
+
+    /** Given a function, retrieve the value for the program allocations value passed as the function's first
+        parameter. */
+    Value* getProgramAllocations(Function& F) const {
+      Value* paa = 0;
+      Type* paaType = getProgramAllocationsType();
+      if (F.arg_begin() != F.arg_end()) {
+        Argument& arg = *F.arg_begin();
+        if (PointerType* pointerType = dyn_cast<PointerType>(arg.getType())) {
+          if (pointerType == paaType) {
+            paa = &arg;
+          }
+        }
+      }
+      if (!paa) {
+        // find an allocation for ProgramAllocationsType from the entry block
+        if (F.begin() != F.end()) {
+          BasicBlock& block = *F.begin();
+          for (BasicBlock::iterator it = block.begin();
+               it != block.end() && !paa;
+               ++it) {
+            if (AllocaInst* alloca = dyn_cast<AllocaInst>(it)) {
+              if (PointerType* pointerType = dyn_cast<PointerType>(alloca->getType())) {
+                if (pointerType == paaType) {
+                  paa = alloca;
+                }
+              }
+            }
+          }
+        }
+      }
+      assert(paa);
+      return paa;
+    }
+  private:
+    Module& M;
+    PointerType* programAllocationsType;
+    typedef std::map<unsigned, StructType*> AddressSpaceStructTypeMap;
+    typedef std::vector<PointerType*> PointerTypeVector;
+    typedef std::vector<Argument*> ArgumentVector;
+    typedef std::map<unsigned, ArgumentVector> AddressSpaceArgumentVectorMap;
+    typedef std::vector<Constant*> ConstantValueVector; // not to be confused with llvm's ConstantVector..
+    typedef std::map<unsigned, ConstantValueVector> ConstantValueVectorByAddressSpaceMap;
+    AddressSpaceStructTypeMap allocationsTypes;
+    AddressSpaceArgumentVectorMap dynamicRanges;
+    AddressSpaceStructTypeMap asLimitsTypes;
+    StructType* constantLimitsType;
+    StructType* globalLimitsType;
+    StructType* localLimitsType;
+    GlobalVariable* localAllocations;
+    GlobalVariable* constantAllocations;
+    bool fixed;               // once fixed cannot become unfixed.
+    struct ValueASIndex {
+      unsigned asNumber;
+      int      index; // index of the value in the address space struct
+      ValueASIndex(unsigned asNumber, int index) :
+        asNumber(asNumber), index(index) {
+        // nothing
+      }
+    };
+    typedef std::map<Value*, ValueASIndex> ValueASIndexMap;
+    ValueASIndexMap valueASMapping;
+
+    ValueVectorByAddressSpaceMap asValues;
+    ConstantValueVectorByAddressSpaceMap asInits;
+
+    static GetLimitsFunc getASLimitsFunc(unsigned asNumber) {
+      if (asNumber == globalAddressSpaceNumber) {
+        return &AddressSpaceInfoManager::getGlobalLimits;
+      } else if (asNumber == localAddressSpaceNumber) {
+        return &AddressSpaceInfoManager::getLocalLimits;
+      } else if (asNumber == constantAddressSpaceNumber) {
+        return &AddressSpaceInfoManager::getConstantLimits;
+      } else if (asNumber == privateAddressSpaceNumber) {
+        return &AddressSpaceInfoManager::getPrivateLimits;
+      } else {
+        assert(0);
+      }
+    }
+    int getNumASLimits(unsigned asNumber) const {
+      if (asNumber == globalAddressSpaceNumber) {
+        return (dynamicRanges.count(globalAddressSpaceNumber) ? dynamicRanges.find(globalAddressSpaceNumber)->second.size() : 0); // args
+      } else if (asNumber == localAddressSpaceNumber) {
+        return (dynamicRanges.count(globalAddressSpaceNumber) ? dynamicRanges.find(globalAddressSpaceNumber)->second.size() : 0) + 1; // args + local allocations
+      } else if (asNumber == constantAddressSpaceNumber) {
+        return (dynamicRanges.count(constantAddressSpaceNumber) ? dynamicRanges.find(constantAddressSpaceNumber)->second.size() : 0) + 1; // args + constant allocations
+      } else if (asNumber == privateAddressSpaceNumber) {
+        return 1; // only private allocations
+      } else {
+        assert(0);
+      }
+    }
+    GetElementPtrInst* getConstantLimitsField(Function* F, IRBuilder<> &blockBuilder) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
+      value->setName("constantLimits");
+      return value;
+    }
+    void getConstantLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 0));
+      min->setName("constantLimits.min");
+      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 1));
+      max->setName("constantLimits.max");
+    }
+    GetElementPtrInst* getGlobalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
+      value->setName("globalLimits");
+      return value;
+    }
+    void getGlobalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 0));
+      min->setName("globalLimits.min");
+      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 1));
+      max->setName("globalLimits.max");
+    }
+    GetElementPtrInst* getLocalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
+      value->setName("localLimits");
+      return value;
+    }
+    void getLocalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 0));
+      min->setName("localLimits.min");
+      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 1));
+      max->setName("localLimits.max");
+    }
+    GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
+      value->setName("privateAllocs");
+      return value;
+    }
+    GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3, n)));
+      value->setName("privateAllocs");
+      return value;
+    }
+    void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+      LLVMContext& c = M.getContext();
+      Value* paa = getProgramAllocations(*F);
+      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4));
+      min->setName("privateLimits.min");
+      // TODO: return proper maximum
+      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4));
+      max->setName("privateLimits.max");
+    }
+    ConstantExpr* getConstantAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) {
+      LLVMContext& c = M.getContext();
+      GlobalVariable* root = getConstantAllocations();
+      Value* v = blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n));
+      ConstantExpr* value = cast<ConstantExpr>(v);
+      value->setName("constantAllocs");
+      return value;
+    }
+    ConstantExpr* getLocalAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) {
+      LLVMContext& c = M.getContext();
+      GlobalVariable* root = getLocalAllocations();
+      ConstantExpr* value = cast<ConstantExpr>(blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n)));
+      value->setName("localAllocs");
+      return value;
+    }
+
+
+    Value* getConstantAllocationsInit(Function *F, IRBuilder<> &blockBuilder) {
+      LLVMContext& c = M.getContext();
+      // TODO
+      return ConstantStruct::get(getASAllocationsType(constantAddressSpaceNumber), genIntVector<Constant*>(c, 0));
+    }
+
+    Value* getLocalAllocationsInit(Function *F, IRBuilder<> &blockBuilder) {
+      LLVMContext& c = M.getContext();
+      // TODO
+      return ConstantStruct::get(getASAllocationsType(localAddressSpaceNumber), genIntVector<Constant*>(c, 0));
+    }
+
+    StructType* getASAllocationsType(int asNumber) {
+      if (!allocationsTypes[asNumber]) {
+        LLVMContext& c = M.getContext();
+        std::vector<Type*> fields;
+        const ValueVector& values = asValues[asNumber];
+        // TODO: should the types be resolved earlier? This dereference conversion is done because global
+        // variables are pointers
+        for (ValueVector::const_iterator it = values.begin(); it != values.end(); ++it) {
+          Type* type = (*it)->getType();
+          assert(isa<PointerType>(type));
+          fields.push_back(dyn_cast<PointerType>(type)->getTypeAtIndex(0u));
+        }
+        allocationsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "AllocationsType");
+      }
+      return allocationsTypes[asNumber];
+    }
+
+    Value* generatePrivateAllocationsInit(IRBuilder<> &blockBuilder) {
+      // LLVMContext& c = M.getContext();
+      // ValueVector values = asValues[privateAddressSpaceNumber];
+      // std::vector<Constant*> initValues;
+      // for (int c = 0; c < values.length(); ++c) {
+      //   initValues.push_back();
+      // }
+      // // TODO
+      // return ConstantStruct::get(getPrivateAllocationsType(), genIntVector<Constant*>(c, 0));
+      return 0;
+    }
+
+    StructType* getConstantLimitsType() {
+      if (!constantLimitsType) {
+        constantLimitsType = getASLimitsType(constantAddressSpaceNumber);
+      }
+      return constantLimitsType;
+    }
+
+    StructType* getASLimitsType(unsigned asNumber) {
+      if (!asLimitsTypes.count(asNumber)) {
+        LLVMContext& c = M.getContext();
+        std::vector<Type*> fields;
+        Type* allocationsType = getASAllocationsType(asNumber);
+        if (asNumber != globalAddressSpaceNumber) {
+          fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_min
+          fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_max
+        }
+        const ArgumentVector& dynamic = dynamicRanges[asNumber];
+        for (ArgumentVector::const_iterator it = dynamic.begin();
+             it != dynamic.end();
+             ++it) {
+          PointerType* type = cast<PointerType>((*it)->getType());
+          fields.push_back(type); // min
+          fields.push_back(type); // max
+        }
+        asLimitsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "LimitsType");
+      }
+      return asLimitsTypes[asNumber];
+    }
+
+    void generateASLimitsInit(unsigned asNumber, IRBuilder<> &blockBuilder, Value* results) {
+      // TODO
+      if (asNumber == globalAddressSpaceNumber) {
+          
+      } else {
+        StructType* t = getASLimitsType(asNumber);
+        std::vector<Constant*> init;
+        for (StructType::element_iterator it = t->element_begin();
+             it != t->element_end();
+             ++it) {
+          init.push_back(Constant::getNullValue(*it));
+        }
+        blockBuilder.CreateStore(ConstantStruct::get(getASLimitsType(asNumber), init), results);
+      }
+    }
+  };
+    
   // ## LLVM Module pass
   struct ClampPointers :
     public ModulePass {
@@ -829,503 +1326,6 @@ namespace WebCL {
       ModulePass( ID ) {
     }
       
-    // handles creating and bookkeeping address space info objects operations that require creating types must
-    // be called after all information has been inserted. This is enforced by setting a 'fixed' flag upon such
-    // operations, and if the flag is set, the object cannot be mutated.
-    class AddressSpaceInfoManager {
-    public:
-      typedef void (AddressSpaceInfoManager::*GetLimitsFunc)(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const;
-
-      class ASAreaLimit: public AreaLimitBase {
-      public:
-        ASAreaLimit(AddressSpaceInfoManager& infoManager, GetLimitsFunc limitsFunc, int asIndex) :
-          infoManager(infoManager), limitsFunc(limitsFunc), asIndex(asIndex) {
-          // nothing
-        }
-        ~ASAreaLimit() {}
-
-        void validAddressBoundsFor(Type *Type, Instruction *checkStart, Value *&first, Value *&last) {
-          Function* F = checkStart->getParent()->getParent();
-          IRBuilder<> blockBuidler(checkStart);
-          (infoManager.*limitsFunc)(F, blockBuidler, asIndex, first, last);
-        }
-
-        Value* getMin() const {
-          DEBUG( dbgs() << "ASAreaLimit.getMin not implemented\n"; );
-          return getConstInt(infoManager.M.getContext(), 0);
-        }
-
-        Value* getMax() const {
-          DEBUG( dbgs() << "ASAreaLimit.getMax not implemented\n"; );
-          return getConstInt(infoManager.M.getContext(), 0);
-        }
-
-        bool getIndirect() const {
-          DEBUG( dbgs() << "ASAreaLimit.getIndirect not implemented\n"; );
-          return false;
-        }
-
-      private:
-        AddressSpaceInfoManager& infoManager;
-        GetLimitsFunc            limitsFunc;
-        int                      asIndex;
-      };
-
-      AddressSpaceInfoManager(Module& M) : 
-        M(M),
-        programAllocationsType(0),
-        constantLimitsType(0),
-        globalLimitsType(0),
-        localLimitsType(0),
-        localAllocations(0),
-        constantAllocations(0),
-        fixed(false) {
-        // nothing
-      }
-      void addAddressSpace(unsigned asNumber, bool isGlobalScope, const ArrayRef<Value*> &values, const ArrayRef<Constant*> &dataInit) {
-        // TODO: make copy of values and all other data..
-        // TODO: implement!
-        assert(!fixed);
-        for (ArrayRef<Value*>::const_iterator it = values.begin();
-             it != values.end();
-             ++it) {
-          valueASMapping.insert(std::make_pair(*it, ValueASIndex(asNumber, asValues[asNumber].size())));
-          asValues[asNumber].push_back(*it);
-        }
-        std::copy(dataInit.begin(), dataInit.end(), std::back_inserter(asInits[asNumber]));
-      }
-      void addDynamicLimitRange(Argument* arg) {
-        // TODO: kernel is disregarded for now
-        // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
-        assert(!fixed);
-        PointerType* type = cast<PointerType>(arg->getType());
-        dynamicRanges[type->getAddressSpace()].push_back(arg);
-      }
-      // for a given kernel argument and current function and place where to insert code, return the pointers where we store its minimum and maximum limit
-      void getArgumentLimits(Argument* arg, Function* F, IRBuilder<> &blockBuilder, Value*& min, Value*& max) {
-        PointerType* type = cast<PointerType>(arg->getType());
-        unsigned as = type->getAddressSpace();
-        int idx = 0;
-        const ArgumentVector args = dynamicRanges[as];
-        ArgumentVector::const_iterator it;
-        for (it = args.begin();
-             it != args.end() && *it != arg;
-             ++it, ++idx) {
-          // iterate
-        }
-        assert(it != args.end());
-        if (as == globalAddressSpaceNumber) {
-          getGlobalLimits(F, blockBuilder, idx, min, max);
-        } else if (as == localAddressSpaceNumber) {
-          getLocalLimits(F, blockBuilder, idx, min, max);
-        } else if (as == constantAddressSpaceNumber) {
-          getConstantLimits(F, blockBuilder, idx, min, max);
-        } else if (as == privateAddressSpaceNumber) {
-          getPrivateLimits(F, blockBuilder, idx, min, max);
-        } else {
-          assert(0);
-        }
-      }
-      AreaLimitSet getASLimits(unsigned asNumber) {
-        AreaLimitSet limits;
-        GetLimitsFunc limitsFunc = getASLimitsFunc(asNumber);
-        for (size_t idx = 0; idx < getNumASLimits(asNumber); ++idx) {
-          limits.insert(new ASAreaLimit(*this, limitsFunc, idx));
-        }
-        return limits;
-      }
-      GlobalVariable* getLocalAllocations() {
-        fixed = true;
-        if (!localAllocations) {
-          localAllocations = new GlobalVariable
-            (M, getASAllocationsType(localAddressSpaceNumber), false, GlobalValue::InternalLinkage, 
-             ConstantAggregateZero::get(getASAllocationsType(localAddressSpaceNumber)), 
-             "localAllocations", NULL, GlobalVariable::NotThreadLocal, localAddressSpaceNumber);
-        }
-        return localAllocations;
-      }
-      GlobalVariable* getConstantAllocations() {
-        fixed = true;
-        if (!constantAllocations) {
-          constantAllocations = new GlobalVariable
-            (M, getASAllocationsType(constantAddressSpaceNumber), true, GlobalValue::InternalLinkage, 
-             ConstantStruct::get(getASAllocationsType(constantAddressSpaceNumber), asInits[constantAddressSpaceNumber]),
-             "constantAllocations", NULL, GlobalVariable::NotThreadLocal, constantAddressSpaceNumber);
-        }
-        return constantAllocations;
-      }
-      Value* generateProgramAllocationCode(Function* F, IRBuilder<> &blockBuilder) {
-        fixed = true;
-        Value* paa = blockBuilder.CreateAlloca(dyn_cast<PointerType>(getProgramAllocationsType())->getTypeAtIndex(0u),
-                                               0,
-                                               "ProgramAllocationsRoot");
-        
-        getLocalAllocations();
-        getConstantAllocations();
-
-        generateASLimitsInit(constantAddressSpaceNumber, blockBuilder, getConstantLimitsField(F, blockBuilder));
-        generateASLimitsInit(globalAddressSpaceNumber, blockBuilder, getGlobalLimitsField(F, blockBuilder));
-        generateASLimitsInit(localAddressSpaceNumber, blockBuilder, getLocalLimitsField(F, blockBuilder));
-        //generatePrivateAllocationsInit(blockBuilder, getPrivateAllocationsField(F, blockBuilder));
-
-        //Function* kernel = blockBuilder.GetInsertPoint()->getParent()->getParent();
-
-        return paa;
-      }
-      // slightly hazardous; you need to be sure you've called non-const getProgramAllocationsType before using this
-      PointerType* getProgramAllocationsType() const {
-        assert(fixed);
-        return const_cast<AddressSpaceInfoManager&>(*this).getProgramAllocationsType();
-      }
-      PointerType* getProgramAllocationsType() {
-        fixed = true;
-        if (!programAllocationsType) {
-          LLVMContext& c = M.getContext();
-
-          programAllocationsType =
-            PointerType::get(StructType::create(c,
-                                                genVector<Type*>(getASLimitsType(constantAddressSpaceNumber),
-                                                                 getASLimitsType(globalAddressSpaceNumber),
-                                                                 getASLimitsType(localAddressSpaceNumber),
-                                                                 getASAllocationsType(privateAddressSpaceNumber)),
-                                                "ProgramAllocationsType"),
-                             privateAddressSpaceNumber);
-        }
-        return programAllocationsType;
-      }
-      void replaceUsesOfOriginalVariables() {
-        fixed = true;
-        // TODO: go through value mappings of every address space that we have created and replace all uses with.
-        for (ValueASIndexMap::const_iterator it = valueASMapping.begin();
-             it != valueASMapping.end();
-             ++it) {
-          Value* const value = it->first;
-          const ValueASIndex& index = it->second;
-          if (Instruction* inst = dyn_cast<Instruction>(value)) {
-            IRBuilder<> blockBuilder(inst);
-            Function* F = inst->getParent()->getParent();
-            Value* replacement = getValueReplacement(F, blockBuilder, value);
-            assert(replacement != value);
-            value->replaceAllUsesWith(replacement);
-          } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
-            std::vector<User*> uses(global->use_begin(), global->use_end());
-            for (std::vector<User*>::iterator it = uses.begin();
-                 it != uses.end();
-                 ++it) {
-              User* user = *it;
-              if (Instruction* inst = dyn_cast<Instruction>(user)) {
-                IRBuilder<> blockBuilder(inst);
-                Function* F = inst->getParent()->getParent();
-                Value* replacement = getValueReplacement(F, blockBuilder, value);
-                if (replacement != value) {
-                  user->replaceUsesOfWith(value, replacement);
-                }
-              } else if (ConstantExpr* constant = dyn_cast<ConstantExpr>(user)) {
-#if 0
-                Instruction* inst = getAsInstruction(constant);
-                constant->replaceAllUsesWith(inst);
-                IRBuilder<> blockBuilder(inst);
-                Function* F = constant->getParent()->getParent();
-                Value* replacement = getValueReplacement(F, blockBuilder, value);
-                if (replacement != value) {
-                  user->replaceUsesOfWith(value, replacement);
-                }
-#endif
-                assert(0);
-              } else {
-                assert(0);
-              }
-            }
-            // TODO: make sure pbject is freed after pass terminates
-            global->removeFromParent();
-          } else {
-            assert(0);
-          }
-        }
-      }
-      Value* getValueReplacement(Function* F, IRBuilder<> &blockBuilder, Value *value) {
-        if (!valueASMapping.count(value)) {
-          return value;
-        }
-        const ValueASIndex& index = valueASMapping.find(value)->second;
-        Value* replacement;
-        if (index.asNumber == privateAddressSpaceNumber) {
-          replacement = getPrivateAllocationsField(F, blockBuilder, index.index);
-        } else if (index.asNumber == constantAddressSpaceNumber) {
-          replacement = getConstantAllocationsField(F, blockBuilder, index.index);
-        } else if (index.asNumber == localAddressSpaceNumber) {
-          replacement = getLocalAllocationsField(F, blockBuilder, index.index);
-        } else if (index.asNumber == globalAddressSpaceNumber) {
-          replacement = value;
-        }
-        assert(replacement);
-        replacement->setName(replacement->getName() + "." + value->getName());
-        return replacement;
-      }
-
-      /** Given a function, retrieve the value for the program allocations value passed as the function's first
-          parameter. */
-      Value* getProgramAllocations(Function& F) const {
-        Value* paa = 0;
-        Type* paaType = getProgramAllocationsType();
-        if (F.arg_begin() != F.arg_end()) {
-          Argument& arg = *F.arg_begin();
-          if (PointerType* pointerType = dyn_cast<PointerType>(arg.getType())) {
-            if (pointerType == paaType) {
-              paa = &arg;
-            }
-          }
-        }
-        if (!paa) {
-          // find an allocation for ProgramAllocationsType from the entry block
-          if (F.begin() != F.end()) {
-            BasicBlock& block = *F.begin();
-            for (BasicBlock::iterator it = block.begin();
-                 it != block.end() && !paa;
-                 ++it) {
-              if (AllocaInst* alloca = dyn_cast<AllocaInst>(it)) {
-                if (PointerType* pointerType = dyn_cast<PointerType>(alloca->getType())) {
-                  if (pointerType == paaType) {
-                    paa = alloca;
-                  }
-                }
-              }
-            }
-          }
-        }
-        assert(paa);
-        return paa;
-      }
-    private:
-      Module& M;
-      PointerType* programAllocationsType;
-      typedef std::map<unsigned, StructType*> AddressSpaceStructTypeMap;
-      typedef std::vector<PointerType*> PointerTypeVector;
-      typedef std::vector<Argument*> ArgumentVector;
-      typedef std::map<unsigned, ArgumentVector> AddressSpaceArgumentVectorMap;
-      typedef std::vector<Constant*> ConstantValueVector; // not to be confused with llvm's ConstantVector..
-      typedef std::map<unsigned, ConstantValueVector> ConstantValueVectorByAddressSpaceMap;
-      AddressSpaceStructTypeMap allocationsTypes;
-      AddressSpaceArgumentVectorMap dynamicRanges;
-      AddressSpaceStructTypeMap asLimitsTypes;
-      StructType* constantLimitsType;
-      StructType* globalLimitsType;
-      StructType* localLimitsType;
-      GlobalVariable* localAllocations;
-      GlobalVariable* constantAllocations;
-      bool fixed;               // once fixed cannot become unfixed.
-      struct ValueASIndex {
-        unsigned asNumber;
-        int      index; // index of the value in the address space struct
-        ValueASIndex(unsigned asNumber, int index) :
-          asNumber(asNumber), index(index) {
-          // nothing
-        }
-      };
-      typedef std::map<Value*, ValueASIndex> ValueASIndexMap;
-      ValueASIndexMap valueASMapping;
-
-      ValueVectorByAddressSpaceMap asValues;
-      ConstantValueVectorByAddressSpaceMap asInits;
-
-      static GetLimitsFunc getASLimitsFunc(unsigned asNumber) {
-        if (asNumber == globalAddressSpaceNumber) {
-          return &AddressSpaceInfoManager::getGlobalLimits;
-        } else if (asNumber == localAddressSpaceNumber) {
-          return &AddressSpaceInfoManager::getLocalLimits;
-        } else if (asNumber == constantAddressSpaceNumber) {
-          return &AddressSpaceInfoManager::getConstantLimits;
-        } else if (asNumber == privateAddressSpaceNumber) {
-          return &AddressSpaceInfoManager::getPrivateLimits;
-        } else {
-          assert(0);
-        }
-      }
-      int getNumASLimits(unsigned asNumber) const {
-        if (asNumber == globalAddressSpaceNumber) {
-          return (dynamicRanges.count(globalAddressSpaceNumber) ? dynamicRanges.find(globalAddressSpaceNumber)->second.size() : 0); // args
-        } else if (asNumber == localAddressSpaceNumber) {
-          return (dynamicRanges.count(globalAddressSpaceNumber) ? dynamicRanges.find(globalAddressSpaceNumber)->second.size() : 0) + 1; // args + local allocations
-        } else if (asNumber == constantAddressSpaceNumber) {
-          return (dynamicRanges.count(constantAddressSpaceNumber) ? dynamicRanges.find(constantAddressSpaceNumber)->second.size() : 0) + 1; // args + constant allocations
-        } else if (asNumber == privateAddressSpaceNumber) {
-          return 1; // only private allocations
-        } else {
-          assert(0);
-        }
-      }
-      GetElementPtrInst* getConstantLimitsField(Function* F, IRBuilder<> &blockBuilder) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0)));
-        value->setName("constantLimits");
-        return value;
-      }
-      void getConstantLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 0));
-        min->setName("constantLimits.min");
-        max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 1));
-        max->setName("constantLimits.max");
-      }
-      GetElementPtrInst* getGlobalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1)));
-        value->setName("globalLimits");
-        return value;
-      }
-      void getGlobalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 0));
-        min->setName("globalLimits.min");
-        max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 1));
-        max->setName("globalLimits.max");
-      }
-      GetElementPtrInst* getLocalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2)));
-        value->setName("localLimits");
-        return value;
-      }
-      void getLocalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 0));
-        min->setName("localLimits.min");
-        max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 1));
-        max->setName("localLimits.max");
-      }
-      GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3)));
-        value->setName("privateAllocs");
-        return value;
-      }
-      GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        GetElementPtrInst* value = cast<GetElementPtrInst>(blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3, n)));
-        value->setName("privateAllocs");
-        return value;
-      }
-      void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
-        LLVMContext& c = M.getContext();
-        Value* paa = getProgramAllocations(*F);
-        min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4));
-        min->setName("privateLimits.min");
-        // TODO: return proper maximum
-        max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4));
-        max->setName("privateLimits.max");
-      }
-      ConstantExpr* getConstantAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) {
-        LLVMContext& c = M.getContext();
-        GlobalVariable* root = getConstantAllocations();
-        Value* v = blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n));
-        ConstantExpr* value = cast<ConstantExpr>(v);
-        value->setName("constantAllocs");
-        return value;
-      }
-      ConstantExpr* getLocalAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) {
-        LLVMContext& c = M.getContext();
-        GlobalVariable* root = getLocalAllocations();
-        ConstantExpr* value = cast<ConstantExpr>(blockBuilder.CreateGEP(root, genIntVector<Value*>(c, 0, n)));
-        value->setName("localAllocs");
-        return value;
-      }
-
-
-      Value* getConstantAllocationsInit(Function *F, IRBuilder<> &blockBuilder) {
-        LLVMContext& c = M.getContext();
-        // TODO
-        return ConstantStruct::get(getASAllocationsType(constantAddressSpaceNumber), genIntVector<Constant*>(c, 0));
-      }
-
-      Value* getLocalAllocationsInit(Function *F, IRBuilder<> &blockBuilder) {
-        LLVMContext& c = M.getContext();
-        // TODO
-        return ConstantStruct::get(getASAllocationsType(localAddressSpaceNumber), genIntVector<Constant*>(c, 0));
-      }
-
-      StructType* getASAllocationsType(int asNumber) {
-        if (!allocationsTypes[asNumber]) {
-          LLVMContext& c = M.getContext();
-          std::vector<Type*> fields;
-          const ValueVector& values = asValues[asNumber];
-          // TODO: should the types be resolved earlier? This dereference conversion is done because global
-          // variables are pointers
-          for (ValueVector::const_iterator it = values.begin(); it != values.end(); ++it) {
-            Type* type = (*it)->getType();
-            assert(isa<PointerType>(type));
-            fields.push_back(dyn_cast<PointerType>(type)->getTypeAtIndex(0u));
-          }
-          allocationsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "AllocationsType");
-        }
-        return allocationsTypes[asNumber];
-      }
-
-      Value* generatePrivateAllocationsInit(IRBuilder<> &blockBuilder) {
-        // LLVMContext& c = M.getContext();
-        // ValueVector values = asValues[privateAddressSpaceNumber];
-        // std::vector<Constant*> initValues;
-        // for (int c = 0; c < values.length(); ++c) {
-        //   initValues.push_back();
-        // }
-        // // TODO
-        // return ConstantStruct::get(getPrivateAllocationsType(), genIntVector<Constant*>(c, 0));
-        return 0;
-      }
-
-      StructType* getConstantLimitsType() {
-        if (!constantLimitsType) {
-          constantLimitsType = getASLimitsType(constantAddressSpaceNumber);
-        }
-        return constantLimitsType;
-      }
-
-      StructType* getASLimitsType(unsigned asNumber) {
-        if (!asLimitsTypes.count(asNumber)) {
-          LLVMContext& c = M.getContext();
-          std::vector<Type*> fields;
-          Type* allocationsType = getASAllocationsType(asNumber);
-          if (asNumber != globalAddressSpaceNumber) {
-            fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_min
-            fields.push_back(PointerType::get(allocationsType, asNumber)); // xxxAllocations_max
-          }
-          const ArgumentVector& dynamic = dynamicRanges[asNumber];
-          for (ArgumentVector::const_iterator it = dynamic.begin();
-               it != dynamic.end();
-               ++it) {
-            PointerType* type = cast<PointerType>((*it)->getType());
-            fields.push_back(type); // min
-            fields.push_back(type); // max
-          }
-          asLimitsTypes[asNumber] = StructType::create(c, fields, addressSpaceLabel(asNumber) + "LimitsType");
-        }
-        return asLimitsTypes[asNumber];
-      }
-
-      void generateASLimitsInit(unsigned asNumber, IRBuilder<> &blockBuilder, Value* results) {
-        // TODO
-        if (asNumber == globalAddressSpaceNumber) {
-          
-        } else {
-          StructType* t = getASLimitsType(asNumber);
-          std::vector<Constant*> init;
-          for (StructType::element_iterator it = t->element_begin();
-               it != t->element_end();
-               ++it) {
-            init.push_back(Constant::getNullValue(*it));
-          }
-          blockBuilder.CreateStore(ConstantStruct::get(getASLimitsType(asNumber), init), results);
-        }
-      }
-    };
-    
     class DependenceAnalyser {
     private:
       InstrSet needChecks;
