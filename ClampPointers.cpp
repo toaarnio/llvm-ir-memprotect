@@ -2033,27 +2033,21 @@ namespace WebCL {
       Type* t = arg->getType();
         
       if ( t->isPointerTy() ) {
-        // create global unnamed variables for each limits got from kernel arguments
-        GlobalVariable *globalMin = new GlobalVariable( M, t, false, GlobalValue::PrivateLinkage, Constant::getNullValue(t) );
-        GlobalVariable *globalMax = new GlobalVariable( M, t, false, GlobalValue::PrivateLinkage, Constant::getNullValue(t) );
-        globalMin->setUnnamedAddr(true);
-        globalMax->setUnnamedAddr(true);
-        PointerType *pointerType = dyn_cast<PointerType>(t);
-          
-        // add addresses to limit set for the address space
-        DEBUG( dbgs() << "AS: " << pointerType->getAddressSpace() << " Adding indirect limits from kernel parameter: "; arg->print(dbgs()); dbgs() << "\n"; );
-        std::stringstream ss; ss << pointerType->getAddressSpace();
-        globalMin->setName(Twine() + origArg->getName() + ".AS" + ss.str() + ".Min");
-        globalMax->setName(Twine() + origArg->getName() + ".AS" + ss.str() + ".Max");
-        // TODO: disable address space insertion for now (so it compiles)
-        //asLimits[pointerType->getAddressSpace()].insert( AreaLimit::Create(globalMin, globalMax, true) );
-          
+        AreaLimitSet limits = infoManager.getArgumentLimits(origArg);
+        assert(limits.size() == 1);
+        AreaLimitBase& limit = **limits.begin();
+
+        Value* min;
+        Value* max;
+        DUMP(*webClKernel);
+        limit.getBounds(webClKernel, blockBuilder, min, max);
+
         Value* elementCount = (++a);
         a->setName(origArg->getName() + ".size");
         GetElementPtrInst *lastLimit = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(arg, elementCount));
 
-        blockBuilder.CreateStore(arg, globalMin);
-        blockBuilder.CreateStore(lastLimit, globalMax);
+        blockBuilder.CreateStore(arg, min);
+        blockBuilder.CreateStore(lastLimit, max);
           
         // create smart pointer alloca to entry block of function, which is used as a argument to
         // function call
