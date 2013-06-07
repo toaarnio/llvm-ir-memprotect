@@ -830,10 +830,19 @@ namespace WebCL {
       }
       ~ASAreaLimit() {}
 
-      void validAddressBoundsFor(Type *Type, Instruction *checkStart, Value *&first, Value *&last) {
+      void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) {
         Function* F = checkStart->getParent()->getParent();
+        LLVMContext& c = F->getContext();
         IRBuilder<> blockBuidler(checkStart);
-        (infoManager.*limitsFunc)(F, blockBuidler, asIndex, first, last);
+        Value* min;
+        Value* max;
+        (infoManager.*limitsFunc)(F, blockBuidler, asIndex, min, max);
+
+        first = min;
+
+        /* bitcast can be removed by later optimizations if not necessary */
+        CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(max, type, "", checkStart);
+        last = GetElementPtrInst::Create(type_fixed_limit, genIntVector<Value*>(c, -1), "", checkStart);
       }
 
       void print(llvm::raw_ostream& stream) const {
