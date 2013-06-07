@@ -839,7 +839,7 @@ namespace WebCL {
         Value* max;
         (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max);
 
-        first = min;
+        first = BitCastInst::CreatePointerCast(min, type, "", at);
 
         /* bitcast can be removed by later optimizations if not necessary */
         CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(max, type, "", at);
