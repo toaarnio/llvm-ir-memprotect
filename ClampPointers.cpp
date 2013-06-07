@@ -1036,8 +1036,7 @@ namespace WebCL {
               assert(0);
             }
           }
-          // TODO: make sure pbject is freed after pass terminates
-          global->removeFromParent();
+          global->eraseFromParent();
         } else {
           assert(0);
         }
