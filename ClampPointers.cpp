@@ -1790,7 +1790,7 @@ namespace WebCL {
     if (oclKernels != NULL) {
       for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
         MDNode* md = oclKernels->getOperand(op);
-        DEBUG( dbgs() << "Scanning arguments of " << op << ": "; md->print(dbgs()); dbgs() << " --> " );
+        DEBUG( dbgs() << "Scanning arguments of " << op << ": "; md->print(dbgs()); dbgs() << " -->\n" );
         Function* kernel = dyn_cast<Function>(md->getOperand(0));
           
         for( Function::arg_iterator a = kernel->arg_begin(); a != kernel->arg_end(); ++a ) {
@@ -1942,7 +1942,7 @@ namespace WebCL {
     if (oclKernels != NULL) {
       for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
         MDNode* md = oclKernels->getOperand(op);
-        DEBUG( dbgs() << "Fixing entry point " << op << ": "; md->print(dbgs()); dbgs() << " --> " );
+        DEBUG( dbgs() << "Fixing entry point " << op << ": "; md->print(dbgs()); dbgs() << " -->\n" );
         Function* oldFun = dyn_cast<Function>(md->getOperand(0));
         Function *newKernelEntryFunction = NULL;
           
