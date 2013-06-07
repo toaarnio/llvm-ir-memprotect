@@ -70,9 +70,9 @@ namespace {
   }
 }
 
-#define DUMP(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " " << (#contents) << " = " << (contents) << "\n"; )
-#define DUMP_CONTAINER(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " " << (#contents) << " = " << "\n"; dumpContainer(contents); )
-#define DUMP_CONTAINER2(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " " << (#contents) << " = " << "\n"; dumpContainer2(contents); )
+#define DUMP(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " DUMP(" << (#contents) << ") = " << (contents) << "\n"; )
+#define DUMP_CONTAINER(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " DUMP(" << (#contents) << ") = " << "\n"; dumpContainer(contents); )
+#define DUMP_CONTAINER2(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " DUMP(" << (#contents) << ") = " << "\n"; dumpContainer2(contents); )
 
 // LLVM 3.2 didn't support ConstantExpt::getAsInstruction() yet
 // so for now we have copypasted it from trunk. This will be removed in future llvm.
