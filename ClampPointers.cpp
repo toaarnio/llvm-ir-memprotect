@@ -864,13 +864,20 @@ namespace WebCL {
       localAllocations(0),
       constantAllocations(0),
       fixed(false) {
-      // nothing
+      // these address spaces have allocations in the compilation unit
+      asAreaLimits[constantAddressSpaceNumber].insert(new ASAreaLimit(*this, getASLimitsFunc(constantAddressSpaceNumber), constantAddressSpaceNumber, 0));
+      asAreaLimits[privateAddressSpaceNumber].insert(new ASAreaLimit(*this, getASLimitsFunc(privateAddressSpaceNumber), privateAddressSpaceNumber, 0));
+      asAreaLimits[localAddressSpaceNumber].insert(new ASAreaLimit(*this, getASLimitsFunc(localAddressSpaceNumber), localAddressSpaceNumber, 0));
     }
     ~AddressSpaceInfoManager() {
-      for (ArgumentAreaLimitMap::iterator it = argumentAreaLimits.begin();
-           it != argumentAreaLimits.begin();
+      for (AddressSpaceAllocAreaLimitSetMap::iterator it = asAreaLimits.begin();
+           it != asAreaLimits.begin();
            ++it) {
-        delete it->second;
+        for (AreaLimitSet::iterator alIt = it->second.begin();
+             alIt != it->second.end();
+             ++alIt) {
+          delete *alIt;
+        }
       }
     }
 
@@ -901,7 +908,9 @@ namespace WebCL {
       unsigned asNumber = type->getAddressSpace();
       int idx = dynamicRanges[asNumber].size();
       dynamicRanges[asNumber].push_back(arg);
-      argumentAreaLimits[arg] = new ASAreaLimit(*this, getASLimitsFunc(asNumber), asNumber, nthArgAreaLimitIndex(asNumber, idx));
+      ASAreaLimit* areaLimit = new ASAreaLimit(*this, getASLimitsFunc(asNumber), asNumber, nthArgAreaLimitIndex(asNumber, idx));
+      asAreaLimits[asNumber].insert(areaLimit);
+      argumentAreaLimits[arg] = areaLimit;
     }
     // for an argument, return its area limits if it is a known argument, otherwise return an empty set
     AreaLimitSet getArgumentLimits(Argument* arg) {
@@ -910,14 +919,15 @@ namespace WebCL {
         limits.insert(argumentAreaLimits.find(arg)->second);
       }
       return limits;
+
     }
     AreaLimitSet getASLimits(unsigned asNumber) {
-      AreaLimitSet limits;
-      GetLimitsFunc limitsFunc = getASLimitsFunc(asNumber);
-      for (size_t idx = 0; idx < getNumASLimits(asNumber); ++idx) {
-        limits.insert(new ASAreaLimit(*this, limitsFunc, asNumber, idx));
+      AddressSpaceAllocAreaLimitSetMap::const_iterator it = asAreaLimits.find(asNumber);
+      if (it != asAreaLimits.end()) {
+        return it->second;
+      } else {
+        return AreaLimitSet();
       }
-      return limits;
     }
     GlobalVariable* getLocalAllocations() {
       fixed = true;
@@ -1088,12 +1098,14 @@ namespace WebCL {
     typedef std::vector<PointerType*> PointerTypeVector;
     typedef std::vector<Argument*> ArgumentVector;
     typedef std::map<Argument*, AreaLimitBase*> ArgumentAreaLimitMap;
+    typedef std::map<unsigned, AreaLimitSet> AddressSpaceAllocAreaLimitSetMap;
     typedef std::map<unsigned, ArgumentVector> AddressSpaceArgumentVectorMap;
     typedef std::vector<Constant*> ConstantValueVector; // not to be confused with llvm's ConstantVector..
     typedef std::map<unsigned, ConstantValueVector> ConstantValueVectorByAddressSpaceMap;
     AddressSpaceStructTypeMap allocationsTypes;
     AddressSpaceArgumentVectorMap dynamicRanges;
     ArgumentAreaLimitMap argumentAreaLimits;
+    AddressSpaceAllocAreaLimitSetMap asAreaLimits;
     AddressSpaceStructTypeMap asLimitsTypes;
     StructType* constantLimitsType;
     StructType* globalLimitsType;
