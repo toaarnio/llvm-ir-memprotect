@@ -1220,10 +1220,10 @@ namespace WebCL {
     void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
-      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4));
+      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
       min->setName("privateLimits.min");
       // TODO: return proper maximum
-      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 4));
+      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
       max->setName("privateLimits.max");
     }
     ConstantExpr* getConstantAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) {
