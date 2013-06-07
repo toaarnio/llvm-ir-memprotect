@@ -866,6 +866,14 @@ namespace WebCL {
       fixed(false) {
       // nothing
     }
+    ~AddressSpaceInfoManager() {
+      for (ArgumentAreaLimitMap::iterator it = argumentAreaLimits.begin();
+           it != argumentAreaLimits.begin();
+           ++it) {
+        delete it->second;
+      }
+    }
+
     void addAddressSpace(unsigned asNumber, bool isGlobalScope, const ArrayRef<Value*> &values, const ArrayRef<Constant*> &dataInit) {
       // TODO: make copy of values and all other data..
       // TODO: implement!
