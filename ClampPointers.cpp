@@ -1168,9 +1168,9 @@ namespace WebCL {
     void getConstantLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
-      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 0));
+      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 0));
       min->setName("constantLimits.min");
-      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 + 2 * n + 1));
+      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 1));
       max->setName("constantLimits.max");
     }
     GetElementPtrInst* getGlobalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
@@ -1198,9 +1198,9 @@ namespace WebCL {
     void getLocalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
-      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 0));
+      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 0));
       min->setName("localLimits.min");
-      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 + 2 * n + 1));
+      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 1));
       max->setName("localLimits.max");
     }
     GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder) const {
