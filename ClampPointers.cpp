@@ -720,6 +720,7 @@ namespace WebCL {
 
     virtual void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) = 0;
     virtual void print(llvm::raw_ostream& stream) const = 0;
+    virtual void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) { assert(0); }
   };
 
   // **AreaLimit** class holds information of single memory area allocation. Limits of the area
@@ -843,6 +844,10 @@ namespace WebCL {
         /* bitcast can be removed by later optimizations if not necessary */
         CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(max, type, "", checkStart);
         last = GetElementPtrInst::Create(type_fixed_limit, genIntVector<Value*>(c, -1), "", checkStart);
+      }
+
+      void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
+        (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max);
       }
 
       void print(llvm::raw_ostream& stream) const {
