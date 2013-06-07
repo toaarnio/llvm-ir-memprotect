@@ -878,34 +878,28 @@ namespace WebCL {
       }
       std::copy(dataInit.begin(), dataInit.end(), std::back_inserter(asInits[asNumber]));
     }
+    int nthArgAreaLimitIndex(unsigned asNumber, int n) {
+      // these two address spaces have a special limit for all allocations as the first argument, skip that
+      if (asNumber == constantAddressSpaceNumber || asNumber == localAddressSpaceNumber) {
+        ++n;
+      }
+      return n;
+    }
     void addDynamicLimitRange(Argument* arg) {
       // TODO: kernel is disregarded for now
       // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
       assert(!fixed);
       PointerType* type = cast<PointerType>(arg->getType());
-      dynamicRanges[type->getAddressSpace()].push_back(arg);
+      unsigned asNumber = type->getAddressSpace();
+      int idx = dynamicRanges[asNumber].size();
+      dynamicRanges[asNumber].push_back(arg);
+      argumentAreaLimits[arg] = new ASAreaLimit(*this, getASLimitsFunc(asNumber), asNumber, nthArgAreaLimitIndex(asNumber, idx));
     }
     // for an argument, return its area limits if it is a known argument, otherwise return an empty set
     AreaLimitSet getArgumentLimits(Argument* arg) {
       AreaLimitSet limits;
-      if (isa<PointerType>(arg->getType())) {
-        PointerType* type = cast<PointerType>(arg->getType());
-        unsigned asNumber = type->getAddressSpace();
-        int idx = 0;
-        const ArgumentVector args = dynamicRanges[asNumber];
-        ArgumentVector::const_iterator it;
-        for (it = args.begin();
-             it != args.end() && *it != arg;
-             ++it, ++idx) {
-          // iterate
-        }
-        // these two address spaces have a special limit for all allocations as the first argument, skip that
-        if (asNumber == constantAddressSpaceNumber || asNumber == localAddressSpaceNumber) {
-          ++idx;
-        }
-        if (it != args.end()) {
-          limits.insert(new ASAreaLimit(*this, getASLimitsFunc(asNumber), asNumber, idx));
-        }
+      if (argumentAreaLimits.count(arg)) {
+        limits.insert(argumentAreaLimits.find(arg)->second);
       }
       return limits;
     }
@@ -1085,11 +1079,13 @@ namespace WebCL {
     typedef std::map<unsigned, StructType*> AddressSpaceStructTypeMap;
     typedef std::vector<PointerType*> PointerTypeVector;
     typedef std::vector<Argument*> ArgumentVector;
+    typedef std::map<Argument*, AreaLimitBase*> ArgumentAreaLimitMap;
     typedef std::map<unsigned, ArgumentVector> AddressSpaceArgumentVectorMap;
     typedef std::vector<Constant*> ConstantValueVector; // not to be confused with llvm's ConstantVector..
     typedef std::map<unsigned, ConstantValueVector> ConstantValueVectorByAddressSpaceMap;
     AddressSpaceStructTypeMap allocationsTypes;
     AddressSpaceArgumentVectorMap dynamicRanges;
+    ArgumentAreaLimitMap argumentAreaLimits;
     AddressSpaceStructTypeMap asLimitsTypes;
     StructType* constantLimitsType;
     StructType* globalLimitsType;
