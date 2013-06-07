@@ -2357,7 +2357,6 @@ namespace WebCL {
     for (AreaLimitSet::const_iterator i = limits.begin(); i != limits.end(); i++) {
       DEBUG( dbgs() << **i; );
     }
-    DUMP(limits.size());
     fast_assert(limits.size() == 1, "Current boundary check generation does not support multiple limits checking.");
     AreaLimitBase *limit = *(limits.begin());
       
