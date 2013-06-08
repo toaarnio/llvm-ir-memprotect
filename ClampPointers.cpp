@@ -1329,12 +1329,95 @@ namespace WebCL {
     }
   };
 
+  // TODO: probably we could use more complete graph info
+  //       which allows to later trace all dependencies and
+  //       to find out e.g. all loads, stores and calls of
+  //       certain Value ( TODO TODO: check if llvm has
+  //       where we can query this kind of information directly)
   class DependenceAnalyser {
   private:
     InstrSet needChecks;
-    // TODO: fix this map to be able to contain also location
-    std::map< Value*, Value* > dependencies;
-      
+
+    typedef std::pair< Instruction*, Value* > DepValue;
+    typedef std::pair< Instruction*, Value* > IndirectAccess;
+    typedef std::pair< int, Value* > DepKey;
+    typedef std::set< DepValue > DepValueSet;
+    
+    std::map< DepKey, DepValueSet > dependencies;
+    std::set< IndirectAccess > indirectAccesses;
+    
+    ValueSet usedInCallOperand;
+    ValueSet usedInRelativeMemPtrOperand;
+    ValueSet usedInStoreValOperand;
+    
+    // values which finally limits the operand
+    std::map< Value*, Value* > limitingDeps;
+
+    /**
+     * Traces value ancestors until the base address is found.
+     * Could be int -> pointer cast, load, alloca or global variable.
+     *
+     * TODO: could be probably refactored with resolveAncestors
+     */
+    Value *getBase(Value* val, int recursion_level = 0) {
+
+      Value *next = NULL;
+      DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+        
+      if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(val) ) {
+        DEBUG( dbgs() << "Found GEP: "; val->print(dbgs()); dbgs() << " tracing to baseval.\n"; );
+        next = gep->getPointerOperand();
+      } else if ( LoadInst *load = dyn_cast<LoadInst>(val) ) {
+        DEBUG( dbgs() << "Returning LOAD: "; val->print(dbgs()); dbgs() << "\n"; );
+      } else if ( isa<StoreInst>(val) ) {
+        fast_assert(false, "No way! I dont have any idea how code can reach this point. Store cannot be used as operand.");
+      } else if ( CastInst* cast = dyn_cast<CastInst>(val) ) {
+        // if cast is not from pointer to pointer in same address space, cannot resolve
+        if (!cast->getType()->isPointerTy() ||
+            dyn_cast<PointerType>(cast->getType())->getAddressSpace() != dyn_cast<PointerType>(val->getType())->getAddressSpace()) {
+            DEBUG( dbgs() << "returning untraceable cast\n" );
+        } else {
+          DEBUG( dbgs() << " tracing to src op.\n" );
+          next = cast->getOperand(0);
+        }
+      } else if ( ConstantExpr *expr = dyn_cast<ConstantExpr>(val) ) {
+        Instruction* inst = getAsInstruction(expr);
+        if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
+          DEBUG( dbgs() << "... constant GEP, following to baseval.\n"; );
+          next = gep->getPointerOperand();
+        } else {
+          DEBUG( dbgs() << "... returning unhandled constant expr.\n"; );
+        }
+        delete inst;
+      }
+        
+      if (next) {
+        return getBase(next, recursion_level + 1);
+      }
+      return val;
+    }
+  
+    int getIndirection(Type* type) {
+      int retVal = 0;
+      while (type->isPointerTy()) {
+        retVal++;
+        type = type->getPointerElementType();
+      }
+      return retVal;
+    }
+    
+    Value* getBaseDep(Value *op) {
+      Value *current = op;
+      Value *next = NULL;
+      // TODO: make sure our tree cannot have circular dependencies..
+      while (true) {
+        next = getDependency(current);
+        if (current == next) break;
+        current = next;
+      }
+      return next;
+    }
+    
   public:
       
     InstrSet& needCheck() {
@@ -1344,28 +1427,154 @@ namespace WebCL {
     void addCheck(Instruction *inst) {
       needChecks.insert(inst);
     }
-      
-    void addDependency(Instruction* applyLocation, Value* newVal, Value *whoseLimitsToRespect) {
-      // TODO: just put new value to map..
-      dbgs() << "\nAdding dependency VAL: "; newVal->print(dbgs()); dbgs() << " DEP: "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
-        
-      if (dependencies.count(newVal) > 0) {
-        DEBUG( dbgs() << "Old dep: "; dependencies[newVal]->print(dbgs());
-               dbgs() << "\nNew dep: ";  whoseLimitsToRespect->print(dbgs()); );
-        fast_assert(dependencies[newVal] == whoseLimitsToRespect,
-                    "If this assert gets into way to be able to compile stuff, fix class to handle multiple stores to same memory address by using information about where store happened and where dependency is needed.");
-      }
-      dependencies[newVal] = whoseLimitsToRespect;
-    }
-      
-    Value* getDependency(Value *value) {
-      // TODO: check if limit is found
-      // TODO: if multiple limits were found try to exploit location info to select correct one
-      return dependencies[value];
-    }
-      
-    // TODO: ADD METHOD TO PRINT ALL ANALYSIS DATA
     
+    void analyseOperands(Instruction *inst) {     
+      // if inst is call / store / load check pointer, resolve some data about
+      // how their operands were used...
+    
+      // TODO: this thing could also resolve if relative mem operand is constant and in bounds
+      
+      if (inst != NULL) {
+        Value *memPtrOp = NULL;
+        if (CallInst *call = dyn_cast<CallInst>(inst) ) {
+          for (CallInst::op_iterator op = call->op_begin(); op != call->op_end(); ++op) {
+            Value *opVal = *op;
+            if (opVal->getType()->isPointerTy()) {
+              Value *base = getBase(opVal);
+              DEBUG(dbgs() << "Used in call operand: "; inst->print(dbgs());
+                    dbgs() << " base: "; base->print(dbgs()); dbgs() << "\n";);
+              usedInCallOperand.insert(base);
+              if (dyn_cast<LoadInst>(base)) indirectAccesses.insert( IndirectAccess(inst, opVal) );
+            }
+          }
+        } else if (StoreInst *store = dyn_cast<StoreInst>(inst)) {
+          memPtrOp = store->getPointerOperand();
+          if (store->getValueOperand()->getType()->isPointerTy()) {
+            Value *base = getBase(store->getValueOperand());
+            DEBUG(dbgs() << "Used in store val operand: "; inst->print(dbgs());
+                  dbgs() << " base: "; base->print(dbgs()); dbgs() << "\n";);
+            usedInStoreValOperand.insert(base);
+          }
+        } else if (LoadInst *load = dyn_cast<LoadInst>(inst)) {
+          memPtrOp = load->getPointerOperand();
+        }
+        
+        if (memPtrOp) {
+          // if not direct store without any gep / casting shenanigans assume dangerous
+          if (!dyn_cast<AllocaInst>(memPtrOp)) {
+            Value *base = getBase(memPtrOp);
+            DEBUG(dbgs() << "Used in relative mem ptr operand: "; inst->print(dbgs());
+                  dbgs() << " base: "; base->print(dbgs()); dbgs() << "\n";);
+            usedInRelativeMemPtrOperand.insert(base);
+            if (dyn_cast<LoadInst>(base)) indirectAccesses.insert( IndirectAccess(inst, memPtrOp) );
+          }
+        }
+      }      
+    }
+    
+    // TODO: maybe we should also trace ancestors of pointer -> non pointer casts to make sure
+    //       that those allocas will be also put to struct? For now we just don't support
+    //       int -> ptr casts (and then passing pointer to call or accessing data). 
+    // @param indirection number of pointers before reading actual value stored in address
+    //                    needed to be able to trace dependencies
+    void addDependency(int indirection,
+                       Instruction* applyLocation,
+                       Value* newVal, Value *whoseLimitsToRespect) {
+
+      DepKey key = DepKey(indirection, newVal);
+      
+      dbgs() << "\nAdding dependency[" << indirection << ": "; newVal->print(dbgs()); dbgs() << "] = "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
+      
+      dependencies[key].insert( DepValue(applyLocation, whoseLimitsToRespect) );
+    }
+    
+    Value* getDependency(Value *value) {
+      
+      if (LoadInst *load = dyn_cast<LoadInst>(value)) {
+        value = load->getPointerOperand();
+      }
+
+      int indirection = getIndirection(value->getType());
+
+      dbgs() << "Dep for: [" << indirection << ":"; value->print(dbgs()); dbgs() << "]\n";
+      DepKey key = DepKey(indirection, value);
+      DepValueSet &depSet = dependencies[key];
+
+      if (depSet.size() == 0) return NULL;
+
+      if (depSet.size() > 1) {
+        // TODO: if single depenedency return it... add different getter to analyse where to get
+        //       limits for load / store / call operand. Correct one can be resolved from DepValue location
+        //       and value location.
+        
+        for (DepValueSet::iterator dv = depSet.begin(); dv != depSet.end(); ++dv) {
+          dbgs() << "Dep: "; dv->second->print(dbgs());
+          dbgs() << "\nWas set in: "; dv->first->print(dbgs()); dbgs() << "\n";
+        }
+        
+        fast_assert(false, "More than 1 possible dependencies. Add here some more algorithm to resolve which one is the correct.");
+      }
+      
+      dbgs() << "returning: "; (*depSet.begin()).second->print(dbgs()); dbgs() << "\n";
+      
+      return (*depSet.begin()).second;
+    }
+    
+    bool hasOnlySafeAccesses(Value *ptrVal) {
+      if (ptrVal == NULL || !ptrVal->getType()->isPointerTy()) {
+        return false;
+      }
+      return (usedInCallOperand.count(ptrVal) == 0 &&
+              usedInRelativeMemPtrOperand.count(ptrVal) == 0 &&
+              usedInStoreValOperand.count(ptrVal) == 0);
+    }
+
+    // returns the memory allocation whose limits accessing this value should respect
+    Value* getLimitingDependency(Instruction *inst, Value *operand) {
+      // get from cache..
+      if (limitingDeps.count(operand) > 0) {
+        return limitingDeps[operand];
+      }
+      
+      bool isIndirect = indirectAccesses.count( IndirectAccess(inst, operand) ) > 0;
+      Value *limitingDep = NULL;
+      if (isIndirect) {
+        // if indirect access scan through getDepency hirarchy
+        limitingDep = getBaseDep(operand);
+      } else {
+        // for direct access, get base with getBase... we could have stored that earlier..
+        limitingDep = getBase(operand);
+      }
+      DEBUG( dbgs() << "LIMIT: "; limitingDep->print(dbgs()); dbgs() << "\n"; );
+      limitingDeps[operand] = limitingDep;
+      return limitingDep;
+    }
+    
+    // pre resolve all limiting dependencies to cache 
+    // before use replacements makes dependece graph inusable
+    void resolveLimitsForAllChecks() {
+      for (InstrSet::iterator inst = needCheck().begin(); inst != needCheck().end(); ++inst) {
+        DEBUG( dbgs() << "\nRESOLVING OPERAND LIMITS FOR: "; (*inst)->print(dbgs()); dbgs() << "\n"; );
+        Value *memOperand = NULL;
+        if (CallInst *call = dyn_cast<CallInst>(*inst)) {
+          for (CallInst::op_iterator op = call->op_begin(); op != call->op_end(); ++op) {
+            Value *opVal = *op;
+            if (opVal->getType()->isPointerTy()) {
+              Value *opLimits = getLimitingDependency(call, opVal);
+            }
+          }
+        } else if (LoadInst *load = dyn_cast<LoadInst>(*inst)) {
+          memOperand = load->getPointerOperand();
+        } else if (StoreInst *store = dyn_cast<StoreInst>(*inst)) {
+          memOperand = store->getPointerOperand();
+        }
+        
+        if (memOperand) {
+          Value *opLimits = getLimitingDependency(*inst, memOperand);
+        }
+      }
+    }
+
   };
 
   // handles creating limits according to information found from address space info manager and dependency analyser
@@ -1382,9 +1591,15 @@ namespace WebCL {
 
     ~AreaLimitManager() {}
 
-    AreaLimitSet getAreaLimits(Value* ptrOperand) {
+    AreaLimitSet getAreaLimits(Instruction* inst, Value* ptrOperand) {
       Value* current = ptrOperand;
       AreaLimitSet limits;
+
+      Value* base = dependenceAnalyser.getLimitingDependency(inst, ptrOperand);
+      dbgs() << "Getting limits of inst: "; inst->print(dbgs());
+      dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
+      dbgs() << "BASE: "; base->print(dbgs()); dbgs() << "\n";
+/*
       // find if we can find the limits of the value (or iteratively its dependency, is this required?) from
       // infoManager, assuming it is a dependency of a kernel argument
       while (current && isa<Argument>(current) && !limits.size()) {
@@ -1392,6 +1607,7 @@ namespace WebCL {
         limits = limit;
         current = dependenceAnalyser.getDependency(current);
       }
+*/    
       // if no limit there, get the address space limits
       if (!limits.size()) {
         assert(isa<PointerType>(ptrOperand->getType()));
@@ -1573,21 +1789,30 @@ namespace WebCL {
    * follows uses of pointer operand of the store.
    *
    * TODO: needs more clear implementation
+   *
+   * @param indirection tells how many levels we have pointers, if we follow store 
    */
-  void resolveUses(Value *val, DependenceAnalyser &dependenceAnalyser, int recursion_level = 0) {
+  void resolveUses(Value *val, DependenceAnalyser &dependenceAnalyser, int indirection = 1, int recursion_level = 0) {
       
     // check all uses of value until cannot trace anymore
     for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
       Value *use = *i;
-        
+      int indirAfter = indirection;
+
       // ----- continue to next use if cannot be sure about the limits
       if ( dyn_cast<GetElementPtrInst>(use) ) {
         DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
-        DEBUG( dbgs() << "Found GEP: "; use->print(dbgs()); dbgs() << "  ## Preserving original limits KEEP ON TRACKING\n"; );
+        DEBUG(dbgs() << "Found GEP: "; use->print(dbgs());
+              dbgs() << "  ## Preserving original limits KEEP ON TRACKING\n"; );
+      
       } else if ( isa<LoadInst>(use) ) {
         DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
-        DEBUG( dbgs() << "Found LOAD: "; use->print(dbgs()); dbgs() << "  ## If we reached here we should have already resolved limits of pointer operand from somewhere.\n"; );
-          
+        DEBUG( dbgs() << "Found LOAD: "; use->print(dbgs()); dbgs() << "  ## follow if loading from indirect pointer\n"; );
+        
+        indirAfter--;
+        // if we already loaded value no need to trace any more
+        if (indirAfter == 0) continue;
+        
       } else if ( StoreInst *store = dyn_cast<StoreInst>(use) ) {
         DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
         DEBUG( dbgs() << "Found STORE: "; use->print(dbgs()); dbgs() << "  ## If we are storing pointer, also pass VAL limits to destination address.\n" );
@@ -1598,11 +1823,17 @@ namespace WebCL {
           if (val->getType()->isPointerTy()) {
             // adds also place where limit was set to be able to trace, which limit
             // is valid in which place
-            dependenceAnalyser.addDependency(store, store->getPointerOperand(),
-                                             dependenceAnalyser.getDependency(val));
-            resolveUses(store->getPointerOperand(), dependenceAnalyser, recursion_level + 1);
+            indirAfter++;
+            dependenceAnalyser.addDependency(indirAfter, store, store->getPointerOperand(), val);
+            resolveUses(store->getPointerOperand(), dependenceAnalyser, indirAfter,
+                        recursion_level + 1);
           }
+        } else if (store->getPointerOperand() == val) {
+          // TODO: should we trace also storePtrOperand uses in case if indirection > 1?
+          //       maybe not because if there is pointer stored as value we should trace its
+          //       ancestor, not uses...
         }
+        
         continue;
           
       } else if ( CastInst* cast = dyn_cast<CastInst>(use) ) {
@@ -1624,8 +1855,8 @@ namespace WebCL {
       }
         
       // limits of use are directly derived from value
-      dependenceAnalyser.addDependency(NULL, use, dependenceAnalyser.getDependency(val));
-      resolveUses(use, dependenceAnalyser, recursion_level + 1);
+      dependenceAnalyser.addDependency(indirAfter, dyn_cast<Instruction>(use), use, val);
+      resolveUses(use, dependenceAnalyser, indirAfter, recursion_level + 1);
     }
   }
 
@@ -1634,6 +1865,8 @@ namespace WebCL {
    * Traces from leafs to root if dependency if found then adds dependency to each step.
    */
   bool resolveAncestors(Value *val, DependenceAnalyser &dependenceAnalyser, int recursion_level = 0) {
+    if (dependenceAnalyser.getDependency(val) != NULL ) return true;
+
     Value *next = NULL;
     DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
       
@@ -1670,11 +1903,11 @@ namespace WebCL {
       
     if (next) {
       if (dependenceAnalyser.getDependency(next) != NULL) {
-        dependenceAnalyser.addDependency(NULL, val, dependenceAnalyser.getDependency(next));
+        dependenceAnalyser.addDependency(1, NULL, val, dependenceAnalyser.getDependency(next));
         return true;
       } else {
         if (resolveAncestors(next, dependenceAnalyser, recursion_level + 1)) {
-          dependenceAnalyser.addDependency(NULL, val, dependenceAnalyser.getDependency(next));
+          dependenceAnalyser.addDependency(1, NULL, val, dependenceAnalyser.getDependency(next));
           return true;
         }
       }
@@ -1682,59 +1915,6 @@ namespace WebCL {
     return false;
   }
   
-      
-  /**
-   * Goes through global variables and adds limits to bookkeepping
-   */
-  void findAddressSpaceLimits( Module &M, AreaLimitByValueMap &valLimits, AreaLimitSetByAddressSpaceMap &asLimits,
-                               AddressSpaceStructByAddressSpaceMap& asStructs, GlobalValueMap& addressSpaceEndPtrs ) {
-    LLVMContext& c = M.getContext();
-    for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
-        
-      // for now unnamed addresses are kept ouside from general address space limits, because they might pollute it
-      // unnecessarily. If unnamed address requires limits, they are created on demand.
-      // this should work, because there shouldn't be any other than direct references to this kind of globals
-      if ( g->hasUnnamedAddr() ) {
-        DEBUG( dbgs() << "Found unnamed address, adding limits to bookkeeping\n"; );
-        Constant *firstValid = ConstantExpr::getGetElementPtr(g, genIntVector<Constant*>(c, 0, 0));
-        // NOTE: this works, but could be safer to check element type of global and get limits from number of element
-        Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, genIntVector<Constant*>(c, 1, 0));
-        valLimits[g] = AreaLimit::Create(firstValid, firstInvalid, false);
-      }
-        
-      // collect only named addresses which are not externs
-      if (!g->hasUnnamedAddr() && !(g->hasExternalLinkage() && g->isDeclaration())) {
-        DEBUG( dbgs() << "AS: " << g->getType()->getAddressSpace() << " Added global: "; g->print(dbgs()); dbgs() << "\n"; );
-        std::stringstream aliasName;
-        aliasName << "AS" << g->getType()->getAddressSpace();
-        // pointercast all limits to float* to make result more readable
-        AreaLimitBase *gvLimits = 0;
-        if (addressSpaceEndPtrs.count(g)) {
-          Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
-          Constant *firstInvalid = ConstantExpr::getGetElementPtr(addressSpaceEndPtrs[g], getConstInt(c,0));
-          gvLimits = AreaLimit::Create(firstValid, firstInvalid, true);
-        } else {
-          Constant *firstValid = ConstantExpr::getGetElementPtr(g, getConstInt(c,0));
-          Constant *firstInvalid = ConstantExpr::getGetElementPtr(g, getConstInt(c,1));
-          gvLimits = AreaLimit::Create(firstValid, firstInvalid, false);
-        }
-        asLimits[g->getType()->getAddressSpace()].insert(gvLimits);
-        // make sure that references to this global variable always respects its own limits
-        valLimits[g] = gvLimits;
-        /* GlobalAlias does not support GEP... if the support is added, then uncommenting this will improve readability of produced code greatly
-        // requires an extra alias for GEP and for Cast or llvm-as throws error: "Aliasee should be either GlobalValue or bitcast of GlobalValue"
-        GlobalAlias *firstInvalidAliasTemp = new GlobalAlias(firstInvalid->getType(), GlobalValue::InternalLinkage,
-        aliasName.str() + ".temp", firstInvalid, &M);
-        GlobalAlias *firstValidAlias = new GlobalAlias(firstValid->getType(), GlobalValue::InternalLinkage, aliasName.str() + ".min",
-        ConstantExpr::getPointerCast(firstValid, castType), &M);
-        GlobalAlias *firstInvalidAlias = new GlobalAlias(castType, GlobalValue::InternalLinkage, aliasName.str() + ".max",
-        ConstantExpr::getPointerCast(firstInvalidAliasTemp, castType), &M);
-        asLimits[g->getType()->getAddressSpace()].insert(AreaLimit::Create(firstValidAlias, firstInvalidAlias, false));
-        */
-      }
-    }
-  }
-      
   /** Returns 'true' if a constant is a simple one. Currently simple constants are null values, integers,
    * floats, or arrays, structs of expressions that are built of simpleConstants, but it could be anything
    * that doesn't depend on other values.
@@ -1807,7 +1987,8 @@ namespace WebCL {
    * Collect all allocas and global values for each address space and create one struct for each
    * address space.
    */
-  void scanStaticMemory( Module &M, AddressSpaceInfoManager &infoManager ) {
+  void scanStaticMemory(Module &M, AddressSpaceInfoManager &infoManager,
+                        DependenceAnalyser &dependenceAnalyser) {
       
     LLVMContext& c = M.getContext();
       
@@ -1843,7 +2024,7 @@ namespace WebCL {
       BasicBlock &entry = f->getEntryBlock();
       for (BasicBlock::iterator i = entry.begin(); i != entry.end(); i++) {
         AllocaInst *alloca = dyn_cast<AllocaInst>(i);
-        if (alloca != NULL) { 
+        if ( dependenceAnalyser.hasOnlySafeAccesses(alloca) ) {
           staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
         }
       }
@@ -2193,7 +2374,7 @@ namespace WebCL {
   bool isSafeAddressToLoad(Value *operand) {
     bool isSafe = false;
       
-    DEBUG( dbgs() << "Checking if safe to load: "; operand->print(dbgs()); dbgs() << " ... "; );
+    DEBUG( dbgs() << "Checking if safe to access: "; operand->print(dbgs()); dbgs() << " ... "; );
 
     if ( ConstantExpr *constExpr = dyn_cast<ConstantExpr>(operand) ) {
         
@@ -2210,6 +2391,9 @@ namespace WebCL {
       isSafe = true;      
     } else if ( isa<GlobalVariable>(operand) ) {
       DEBUG( dbgs() << "loading directly global variable .. "; );
+      isSafe = true;
+    } else if ( isa<AllocaInst>(operand) ) {
+      DEBUG( dbgs() << "loading directly from alloca variable .. "; );
       isSafe = true;
     } else if ( isa<ConstantStruct>(operand) ) {
       DEBUG( dbgs() << "ConstantStruct value.. maybe if support implemented"; );
@@ -2228,84 +2412,8 @@ namespace WebCL {
     DEBUG( dbgs() << "... returning: " << (isSafe ? "safe!" : "unsafe") << "\n"; );
     return isSafe;
   }
-      
-  /**
-   * Collects values, which can be handled without modifying.
-   * 
-   * e.g. main function arguments (int8** is not currently supported 
-   * and won't be in the first place).
-   *
-   * Note: this is quite dirty symbol name based hack...
-   */
-  void collectSafeExceptions(ValueSet &checkOperands, const FunctionMap &replacedFunctions, ValueSet &safeExceptions) {
-
-    for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
-      Value *operand = *i;
-
-      if (isSafeAddressToLoad(operand)) {
-        safeExceptions.insert(operand);
-      }
-    }
-      
-    if (RunUnsafeMode) {
-      for ( FunctionMap::const_iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++ )  {
-        Function *check = i->second;
-        if (check->getName() == "main__smart_ptrs__") {
-          check->takeName(i->first);
-          for( Function::arg_iterator a = check->arg_begin(); a != check->arg_end(); ++a ) {
-            Argument* arg = a;
-            if (arg->getName() == "argv") {
-              resolveArgvUses(arg, safeExceptions);
-            }
-          }
-        }
-      }
-
-      // TODO: don't check loading externals...
-      // for ( ValueSet::iterator i = checkOperands.begin(); i != checkOperands.end(); i++) {
-      //   Value *operand = *i;
-      // }
-    }
-  }
-    
-  /**
-   * Checks if store stores data to smart pointer and updates also smart pointer accordingly.
-   */
-  void addBoundaryChecks(const StoreInstrSet &stores, const LoadInstrSet &loads, AreaLimitByValueMap &valLimits, const AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
-    // check load instructions... 
-    for (LoadInstrSet::const_iterator i = loads.begin(); i != loads.end(); i++) {
-      addChecks((*i)->getPointerOperand(), *i, valLimits, asLimits, safeExceptions);
-    }   
-    // check store instructions
-    for (StoreInstrSet::const_iterator i = stores.begin(); i != stores.end(); i++) {
-      addChecks((*i)->getPointerOperand(), *i, valLimits, asLimits, safeExceptions);
-    }
-  }
-
-  /**
-   * If val touching pointer operand needs checks, then inject boundary check code.
-   */
-  void addChecks(Value *ptrOperand, Instruction *inst, AreaLimitByValueMap &valLimits, const AreaLimitSetByAddressSpaceMap &asLimits, ValueSet &safeExceptions) {
-      
-    // If no need to add checks, just skip
-    if (safeExceptions.count(ptrOperand)) {
-      DEBUG( dbgs() << "Skipping op that was listed in safe exceptions: "; inst->print(dbgs()); dbgs() << "\n" );        
-      return;
-    }
-      
-    AreaLimitSet limits;
-    if ( valLimits.count(ptrOperand) != 0 ) {
-      limits.insert(valLimits[ptrOperand]);
-    } else {
-      unsigned int addressSpace = dyn_cast<PointerType>(ptrOperand->getType())->getAddressSpace();
-      AreaLimitSetByAddressSpaceMap::const_iterator asLimitIt = asLimits.find(addressSpace);
-      assert(asLimitIt != asLimits.end());
-      limits.insert( asLimitIt->second.begin(), asLimitIt->second.end() );
-    }
-      
-    createLimitCheck(ptrOperand, limits, inst);
-  }
-    
+  
+ 
   /**
    * Adds boundary check for given pointer
    *
@@ -2942,18 +3050,19 @@ namespace WebCL {
       DependenceAnalyser dependenceAnalyser;
       AreaLimitManager areaLimitManager(addressSpaceInfoManager, dependenceAnalyser);
       
-      DEBUG( dbgs() << "\n --------------- COLLECT INFORMATION OF STATIC MEMORY ALLOCATIONS --------------\n" );
-      scanStaticMemory( M, addressSpaceInfoManager );
-
-      // Collect rest of the info about address space limits from kernel function arguments
-      DEBUG( dbgs() << "\n --------------- COLLECT LIMITS FROM KERNEL ARGUMENTS --------------\n" );
-      scanKernelArguments( M, addressSpaceInfoManager );
-
       // Do the rest of the analysis to be able to resolve all places where we have to do limit
       // checks and where to find limits for it
       // if can be traced to some argument or to some alloca or if we can trace it to single address space
       DEBUG( dbgs() << "\n ---- ANALYZE AND COLLECT INFORMATION ABOUT DEPENDENCIES ------\n" );
       collectDependencyInfo( M, dependenceAnalyser, functionManager );
+      dependenceAnalyser.resolveLimitsForAllChecks();
+      
+      DEBUG( dbgs() << "\n --------------- COLLECT INFORMATION OF STATIC MEMORY ALLOCATIONS --------------\n" );
+      scanStaticMemory( M, addressSpaceInfoManager, dependenceAnalyser );
+
+      // Collect rest of the info about address space limits from kernel function arguments
+      DEBUG( dbgs() << "\n --------------- COLLECT LIMITS FROM KERNEL ARGUMENTS --------------\n" );
+      scanKernelArguments( M, addressSpaceInfoManager );
       
       collectBuiltinFunctions(M, functionManager);
 
@@ -3080,8 +3189,10 @@ namespace WebCL {
         } else {
           fast_assert(false, "Can add check only for load or store");
         }
-        // TODO: enable this soon....
-        createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(ptrOperand), *inst);
+        
+        areaLimitManager.getAreaLimits(*inst, ptrOperand);
+        dbgs() << "GOT arealimits!\n";
+        // createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(*inst, ptrOperand), *inst);
       }
 
       // Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
@@ -3101,6 +3212,13 @@ namespace WebCL {
       
     void collectDependencyInfo( Module &M, DependenceAnalyser &dependenceAnalyser, FunctionManager &functionManager ) {
       ValueSet resolveLimitsOperands;
+      
+      // add each global value and alloca to be final dependency for them selves
+      for ( Module::global_iterator gv = M.global_begin(); gv != M.global_end(); ++gv ) {
+        GlobalVariable &global = *gv;
+        dependenceAnalyser.addDependency(1, NULL, &global, &global);
+        resolveUses(&global, dependenceAnalyser);
+      }
 
       for ( Module::iterator F = M.begin(); F != M.end(); ++F) {
 
@@ -3113,22 +3231,32 @@ namespace WebCL {
 
         DEBUG( dbgs() << "\n --------------- FINDING INTERESTING INSTRUCTIONS --------------\n" );
         sortInstructions( F,  functionManager );
+
+        // each alloca is final dep
+        const AllocaInstrSet& allocs = functionManager.getAllocas();
+        for (AllocaInstrSet::iterator i = allocs.begin(); i!= allocs.end(); i++) {
+          AllocaInst *alloca = *i;
+          dependenceAnalyser.addDependency(1, alloca, alloca, alloca);
+        }
         
         const LoadInstrSet& loads = functionManager.getLoads();
         for (LoadInstrSet::iterator i = loads.begin(); i!= loads.end(); i++) {
           LoadInst *load = *i;
+          dependenceAnalyser.analyseOperands(load);
           resolveLimitsOperands.insert(load->getPointerOperand());
         }
         
         const StoreInstrSet& stores = functionManager.getStores();
         for (StoreInstrSet::iterator i = stores.begin(); i != stores.end(); i++) {
           StoreInst *store = *i;
+          dependenceAnalyser.analyseOperands(store);
           resolveLimitsOperands.insert(store->getPointerOperand());
         }
         
         const CallInstrSet& allCalls = functionManager.getAllCalls();
         for (CallInstrSet::iterator i = allCalls.begin(); i != allCalls.end(); i++) {
           CallInst *call = *i;
+          dependenceAnalyser.analyseOperands(call);
           for (size_t op = 0; op < call->getNumOperands(); op++) {
             Value *operand = call->getOperand(op);
             /* ignore function pointers operands (not allowed in opencl)... no need to check them, but add all other pointer operands */
@@ -3144,7 +3272,7 @@ namespace WebCL {
           Argument &arg = *a;
           
           // arg does respect its own limits
-          dependenceAnalyser.addDependency(NULL, &arg, &arg);
+          dependenceAnalyser.addDependency(1, NULL, &arg, &arg);
           // if pointer argument, trace uses
           if ( arg.getType()->isPointerTy() ) {
             resolveUses(&arg, dependenceAnalyser);
