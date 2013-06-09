@@ -890,14 +890,22 @@ namespace WebCL {
     // moving functions to new signature
     Value* getReplacedValue(Value *original) {
       Value *replaced = replacedValues[original];
-      fast_assert(replaced, "Please implement bookkeeping where you add mapping between old and new value.");
+      if (!replaced) {
+        // here we should not assume that replaced value is same, because this query is currently done only
+        // for globalvariables / allocas 
+        dbgs() << "Could not find replacement for: "; original->print (dbgs()); dbgs() << "\n";
+        fast_assert(replaced, "Please implement bookkeeping where you add mapping between old and new value.");
+      }
       return replaced;
     }
     
     // get corresponding original value for the value after transformations
     Value* getOriginalValue(Value *replaced) {
       Value *original = originalValues[replaced];
-      fast_assert(original, "Please implement bookkeeping where you add mapping between new and old value.");
+      if (!original) {
+        // if exception is not found from bookkeeping, assume that original and new value is the same
+        return replaced;
+      }
       return original;
     }
     
@@ -1016,13 +1024,27 @@ namespace WebCL {
            ++it) {
         Value* const value = it->first;
         const ValueASIndex& index = it->second;
+        
+        DEBUG( dbgs() << "Replacing:"; value->print(dbgs());
+               dbgs() << " with AddressSpaceRef: " << index.asNumber << "," << index.index << "\n"; );
+        
         if (Instruction* inst = dyn_cast<Instruction>(value)) {
           IRBuilder<> blockBuilder(inst);
           Function* F = inst->getParent()->getParent();
           Value* replacement = getValueReplacement(F, blockBuilder, value);
           assert(replacement != value);
+          // store replacement to bookkeeping to be able to trace between original and new values
+          replacedValues[value] = replacement;
+          originalValues[replacement] = value;
           value->replaceAllUsesWith(replacement);
+
         } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
+
+          // TODO: why one can't use replaceAllUsesWith here?
+          //       since value is global variable creating contant gep and
+          //       replaceing all should be enough.. everywhere where global variable
+          //       is used constant gep whould work as well
+
           std::vector<User*> uses(global->use_begin(), global->use_end());
           for (std::vector<User*>::iterator it = uses.begin();
                it != uses.end();
@@ -1035,6 +1057,9 @@ namespace WebCL {
               if (replacement != value) {
                 user->replaceUsesOfWith(value, replacement);
               }
+              
+              replacedValues[value] = replacement;
+              originalValues[replacement] = value;
             } else if (ConstantExpr* constant = dyn_cast<ConstantExpr>(user)) {
 #if 0
               Instruction* inst = getAsInstruction(constant);
@@ -1051,12 +1076,14 @@ namespace WebCL {
               assert(0);
             }
           }
+          // do not erase yet, we still need original, which is referred from dependence manager
           global->removeFromParent();
         } else {
           assert(0);
         }
       }
     }
+
     Value* getValueReplacement(Function* F, IRBuilder<> &blockBuilder, Value *value) {
       if (!valueASMapping.count(value)) {
         return value;
@@ -1620,7 +1647,7 @@ namespace WebCL {
 
       // if there was not single limits try to check limits from dependence manager
       if (limits.size() != 1) {
-        // get original values to be able to query DependenceAnalyser
+        // get original values to be able to query DependenceAnalyser (original != inst only for calls)
         Instruction *originalInst = dyn_cast<Instruction>(infoManager.getOriginalValue(inst));
         Value *originalPtrOperand = infoManager.getOriginalValue(ptrOperand);
       
@@ -1660,7 +1687,7 @@ namespace WebCL {
     // find which limits the value respects, value should be pretty straight forward to
     // trace until some argument or struct field
     AreaLimitBase* getValueLimit(Value* val) {
-      fast_assert(false, "Need implementation, but first implement bookkeeping where each replacement during transformation is traced.");
+      fast_assert(false, "Needs implementation, this will finally return the AreaLimitBase object of value.");
       return NULL;
     }
     
