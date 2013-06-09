@@ -15,6 +15,8 @@ typedef struct {
 // Actually this is not allowed in OpenCL ( kernel cannot allocate from global )
 /* __global float test_global[3] = { 1, 2, 3 }; */
 
+// TODO add function call and also pass some args that are not directly got from argument
+
 __constant float test_constant[3] = { 1, 2, 3 };
 
 __kernel void test(
@@ -45,6 +47,6 @@ __kernel void test(
 
   test_local[i] = in[i];
   out[i] = in[i];
-  struct_table[i].f = test_local[i];
+  struct_table[i].f = test_private[i];
   struct_table[i].l = struct_table[i].f;
 }

@@ -830,7 +830,7 @@ namespace WebCL {
         // nothing
       }
       ~ASAreaLimit() {}
-
+      
       void validAddressBoundsFor(Type *type, Instruction *at, Value *&first, Value *&last) {
         Function* F = at->getParent()->getParent();
         LLVMContext& c = F->getContext();
@@ -885,7 +885,22 @@ namespace WebCL {
         }
       }
     }
-
+    
+    // get corresponding value after replacing static allocations with structs and
+    // moving functions to new signature
+    Value* getReplacedValue(Value *original) {
+      Value *replaced = replacedValues[original];
+      fast_assert(replaced, "Please implement bookkeeping where you add mapping between old and new value.");
+      return replaced;
+    }
+    
+    // get corresponding original value for the value after transformations
+    Value* getOriginalValue(Value *replaced) {
+      Value *original = originalValues[replaced];
+      fast_assert(original, "Please implement bookkeeping where you add mapping between new and old value.");
+      return original;
+    }
+    
     void addAddressSpace(unsigned asNumber, bool isGlobalScope, const ArrayRef<Value*> &values, const ArrayRef<Constant*> &dataInit) {
       // TODO: make copy of values and all other data..
       // TODO: implement!
@@ -1036,7 +1051,7 @@ namespace WebCL {
               assert(0);
             }
           }
-          global->eraseFromParent();
+          global->removeFromParent();
         } else {
           assert(0);
         }
@@ -1116,6 +1131,8 @@ namespace WebCL {
     StructType* localLimitsType;
     GlobalVariable* localAllocations;
     GlobalVariable* constantAllocations;
+    std::map<Value*, Value*> replacedValues;
+    std::map<Value*, Value*> originalValues;
     bool fixed;               // once fixed cannot become unfixed.
     struct ValueASIndex {
       unsigned asNumber;
@@ -1595,26 +1612,38 @@ namespace WebCL {
       Value* current = ptrOperand;
       AreaLimitSet limits;
 
-      Value* base = dependenceAnalyser.getLimitingDependency(inst, ptrOperand);
-      dbgs() << "Getting limits of inst: "; inst->print(dbgs());
-      dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
-      dbgs() << "BASE: "; base->print(dbgs()); dbgs() << "\n";
-/*
-      // find if we can find the limits of the value (or iteratively its dependency, is this required?) from
-      // infoManager, assuming it is a dependency of a kernel argument
-      while (current && isa<Argument>(current) && !limits.size()) {
-        AreaLimitSet limit = infoManager.getArgumentLimits(cast<Argument>(current));
-        limits = limit;
-        current = dependenceAnalyser.getDependency(current);
+      // get first limit from address space
+      assert(isa<PointerType>(ptrOperand->getType()));
+      PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
+      int asNumber = pointerType->getAddressSpace();
+      limits = infoManager.getASLimits(asNumber);
+
+      // if there was not single limits try to check limits from dependence manager
+      if (limits.size() != 1) {
+        // get original values to be able to query DependenceAnalyser
+        Instruction *originalInst = dyn_cast<Instruction>(infoManager.getOriginalValue(inst));
+        Value *originalPtrOperand = infoManager.getOriginalValue(ptrOperand);
+      
+        Value* base = dependenceAnalyser.getLimitingDependency(originalInst, originalPtrOperand);
+
+        // get replaced value of limit to be able to resolve if it is argument or inside
+        // static allocation of some address space
+        Value *replacedVal = infoManager.getReplacedValue(base);
+      
+        dbgs() << "Getting limits of inst: "; inst->print(dbgs());
+        dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
+        dbgs() << "BASE: "; replacedVal->print(dbgs()); dbgs() << "\n";
+
+        // find out limits from mappings if it is an safepointer argument or
+        AreaLimitBase *limit = getValueLimit(replacedVal);
+
+        // replace old set
+        if (limit) {
+          limits.clear();
+          limits.insert(limit);
+        }
       }
-*/    
-      // if no limit there, get the address space limits
-      if (!limits.size()) {
-        assert(isa<PointerType>(ptrOperand->getType()));
-        PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
-        int asNumber = pointerType->getAddressSpace();
-        limits = infoManager.getASLimits(asNumber);
-      }
+      
       return limits;
     }
       
@@ -1627,6 +1656,14 @@ namespace WebCL {
 
     // does not exist
     void operator=(const AreaLimitManager&);
+    
+    // find which limits the value respects, value should be pretty straight forward to
+    // trace until some argument or struct field
+    AreaLimitBase* getValueLimit(Value* val) {
+      fast_assert(false, "Need implementation, but first implement bookkeeping where each replacement during transformation is traced.");
+      return NULL;
+    }
+    
   };
 
   // Function signatures (where needed)
@@ -2024,8 +2061,13 @@ namespace WebCL {
       BasicBlock &entry = f->getEntryBlock();
       for (BasicBlock::iterator i = entry.begin(); i != entry.end(); i++) {
         AllocaInst *alloca = dyn_cast<AllocaInst>(i);
-        if ( dependenceAnalyser.hasOnlySafeAccesses(alloca) ) {
-          staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
+        if (alloca != NULL) {
+          if ( dependenceAnalyser.hasOnlySafeAccesses(alloca) ) {
+            DEBUG( dbgs() << "Skipping alloca from private address space beacuse it does not have any relative / indirect accesses:"; alloca->print(dbgs()); dbgs() << "\n"; );
+          } else {
+            DEBUG( dbgs() << "Collecting: "; alloca->print(dbgs()); dbgs() << "\n"; );
+            staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
+          }
         }
       }
     }
@@ -3191,7 +3233,6 @@ namespace WebCL {
         }
         
         areaLimitManager.getAreaLimits(*inst, ptrOperand);
-        dbgs() << "GOT arealimits!\n";
         // createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(*inst, ptrOperand), *inst);
       }
 
