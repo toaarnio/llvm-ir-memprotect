@@ -1053,9 +1053,10 @@ namespace WebCL {
           value->replaceAllUsesWith(replacement);
 
         } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
-          Constant *constGEP = ConstantExpr::getGetElementPtr(global, genIntVector<Constant*>(global->getParent()->getContext(), 0, 1));
+          Constant *constGEP = getASFieldGEP(index.asNumber, index.index);
           global->replaceAllUsesWith(constGEP);
           addReplacement(global, constGEP);
+          global->removeFromParent();
           deleteGlobalValues.insert(global);
           
         } else {
@@ -1665,10 +1666,10 @@ namespace WebCL {
         // static allocation of some address space
         Value *replacedVal = infoManager.getReplacedValue(base);
       
-        dbgs() << "Getting limits of inst: "; inst->print(dbgs());
-        dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
-        dbgs() << "BASE: "; replacedVal->print(dbgs()); dbgs() << "\n";
-/*
+        DEBUG(dbgs() << "Getting limits of inst: "; inst->print(dbgs());
+              dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
+              dbgs() << "BASE: "; replacedVal->print(dbgs()); dbgs() << "\n";);
+
         // find out limits from mappings if it is an safepointer argument or
         AreaLimitBase *limit = getValueLimit(replacedVal);
 
@@ -1677,7 +1678,6 @@ namespace WebCL {
           limits.clear();
           limits.insert(limit);
         }
- */
       }
       return limits;
     }
@@ -3283,8 +3283,7 @@ namespace WebCL {
           fast_assert(false, "Can add check only for load or store");
         }
         
-        areaLimitManager.getAreaLimits(*inst, ptrOperand);
-        // createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(*inst, ptrOperand), *inst);
+        createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(*inst, ptrOperand), *inst);
       }
 
       // Goes through all builtin WebCL calls and if they are unsafe (has pointer arguments), converts instruction to call safe
