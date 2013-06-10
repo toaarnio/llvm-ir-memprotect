@@ -1104,6 +1104,22 @@ namespace WebCL {
       return replacement;
     }
 
+    Constant* getASFieldGEP(unsigned asNumber, int index) {
+      LLVMContext& c = M.getContext();
+      if (asNumber == privateAddressSpaceNumber) {
+        assert(0);
+        return 0;
+      } else if (asNumber == constantAddressSpaceNumber) {
+        return ConstantExpr::getGetElementPtr( getConstantAllocations(), genIntVector<Constant*>(c, 0, index) );
+      } else if (asNumber == localAddressSpaceNumber) {
+        return ConstantExpr::getGetElementPtr( getLocalAllocations(), genIntVector<Constant*>(c, 0, index) );
+      } else if (asNumber == globalAddressSpaceNumber) {
+        assert(0);
+      } else {
+        assert(0);
+      }
+    }
+
     /** Given a function, retrieve the value for the program allocations value passed as the function's first
         parameter. */
     Value* getProgramAllocations(Function& F) const {
