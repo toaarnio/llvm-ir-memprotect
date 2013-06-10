@@ -1001,13 +1001,16 @@ namespace WebCL {
     }
     // supports only global scope address space structs
     AreaLimitSet getASAllocationsLimitsByValue(Value* value) {
-      if (value == getLocalAllocations()) {
-        return getASLimits(localAddressSpaceNumber);
-      } else if (value == getConstantAllocations()) {
-        return getASLimits(constantAddressSpaceNumber);
-      } else {
-        return AreaLimitSet();
+      AreaLimitSet limits;
+      if (value == getLocalAllocations() || value == getConstantAllocations()) {
+        GlobalValue* global = cast<GlobalValue>(value);
+        LLVMContext& c = M.getContext();
+        Value* min = global;
+        Value* max = ConstantExpr::getGetElementPtr(global, genIntVector<Constant*>(c, 1));
+        limits.insert(AreaLimit::Create(min, max, false));
+        return limits;
       }
+      return AreaLimitSet();
     }
     GlobalVariable* getLocalAllocations() {
       fixed = true;
