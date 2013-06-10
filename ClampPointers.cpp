@@ -1726,9 +1726,10 @@ namespace WebCL {
   void createLimitCheck(Value *ptr, const AreaLimitSet &limits, Instruction *meminst);
 
   void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun,
-                                        const ArgumentMap &replacedArguments, AreaLimitByValueMap &valLimits,
+                                        const ArgumentMap &replacedArguments,
+                                        AreaLimitManager &areaLimitManager,
                                         bool useProgramAllocationsArgument,
-                                        const AddressSpaceInfoManager& infoManager);
+                                        AddressSpaceInfoManager& infoManager);
 
   Function* createNewFunctionSignature(Function *F,  
                                        std::insert_iterator<FunctionMap> functionMappingInserter,
@@ -2627,8 +2628,8 @@ namespace WebCL {
    * Goes through external function externalCalls and if call is unsafe opencl call convert it to safe webcl
    * implementation which operates with smart pointers
    */
-  void makeBuiltinCallsSafe(const CallInstrSet &externalCalls, AreaLimitByValueMap &valLimits, const FunctionMap& unsafeToSafeBuiltin,
-                            Type* programAllocationsType, const AddressSpaceInfoManager& infoManager ) {
+  void makeBuiltinCallsSafe(const CallInstrSet &externalCalls, const FunctionMap& unsafeToSafeBuiltin,
+                            Type* programAllocationsType, AddressSpaceInfoManager& infoManager, AreaLimitManager& areaLimitManager ) {
     // if mapping is needed outside export this to be reference parameter instead of local 
     FunctionMap safeBuiltins;
     ArgumentMap dummyArgMap;
@@ -2645,7 +2646,7 @@ namespace WebCL {
       if ( unsafeToSafeBuiltinIt != unsafeToSafeBuiltin.end() ) {
         Function *newFun = unsafeToSafeBuiltinIt->second;
         ArgumentMap dummyArg;
-        convertCallToUseSmartPointerArgs( call, newFun, dummyArg, valLimits, false, infoManager );
+        convertCallToUseSmartPointerArgs( call, newFun, dummyArg, areaLimitManager, false, infoManager );
       } else if ( isWebClBuiltin(oldFun) ) {
 
         std::string demangledName = extractItaniumDemangledFunctionName(oldFun->getName().str());
@@ -2670,7 +2671,7 @@ namespace WebCL {
             
           Function *newFun = safeBuiltins[oldFun];
           ArgumentMap dummyArg;
-          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, valLimits, false, infoManager);
+          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, areaLimitManager, false, infoManager);
         }
 
       } else {
@@ -2694,8 +2695,8 @@ namespace WebCL {
   void fixCallsToUseChangedSignatures(const FunctionMap &replacedFunctions, 
                                       const ArgumentMap &replacedArguments, 
                                       const CallInstrSet &internalCalls,
-                                      AreaLimitByValueMap &valLimits,
-                                      const AddressSpaceInfoManager& infoManager) {
+                                      AddressSpaceInfoManager& infoManager,
+                                      AreaLimitManager& areaLimitManager) {
     DUMP(iteratorDistance(internalCalls.begin(), internalCalls.end()));
     for (CallInstrSet::const_iterator i = internalCalls.begin(); i != internalCalls.end(); i++) {
       CallInst *call = *i;
@@ -2710,7 +2711,7 @@ namespace WebCL {
       }
 
       Function* newFun = replacedFunctions.find(oldFun)->second;
-      convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, valLimits, true, infoManager);
+      convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, areaLimitManager, true, infoManager);
     }
   }
 
@@ -3269,8 +3270,9 @@ namespace WebCL {
       DEBUG( dbgs() << "\n --------------- FIX CALLS TO USE NEW SIGNATURES --------------\n" );
       fixCallsToUseChangedSignatures(functionManager.getReplacedFunctions(),
                                      functionManager.getReplacedArguments(), 
-                                     functionManager.getInternalCalls(), valueLimits,
-                                     addressSpaceInfoManager);
+                                     functionManager.getInternalCalls(),
+                                     addressSpaceInfoManager,
+                                     areaLimitManager);
 
       
       // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
@@ -3295,8 +3297,8 @@ namespace WebCL {
       // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
       // [makeBuiltinCallsSafe( ... )](#makeBuiltinCallsSafe)
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
-      makeBuiltinCallsSafe(functionManager.getExternalCalls(), valueLimits, functionManager.getUnsafeToSafeBuiltin(),
-                           programAllocationsType, addressSpaceInfoManager);
+      makeBuiltinCallsSafe(functionManager.getExternalCalls(), functionManager.getUnsafeToSafeBuiltin(),
+                           programAllocationsType, addressSpaceInfoManager, areaLimitManager);
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
