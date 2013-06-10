@@ -724,6 +724,9 @@ namespace WebCL {
 
     // returns final values that require no loading
     virtual void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) { assert(0); }
+    
+    // returns pointers to bounds
+    virtual void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) { assert(0); }
   };
 
   // **AreaLimit** class holds information of single memory area allocation. Limits of the area
@@ -824,7 +827,7 @@ namespace WebCL {
   // operations, and if the flag is set, the object cannot be mutated.
   class AddressSpaceInfoManager {
   public:
-    typedef void (AddressSpaceInfoManager::*GetLimitsFunc)(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const;
+    typedef void (AddressSpaceInfoManager::*GetLimitsFunc)(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const;
 
     class ASAreaLimit: public AreaLimitBase {
     public:
@@ -840,7 +843,7 @@ namespace WebCL {
         IRBuilder<> blockBuilder(at);
         Value* min;
         Value* max;
-        (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max);
+        (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max, true);
 
         first = BitCastInst::CreatePointerCast(min, type, "", at);
 
@@ -850,7 +853,11 @@ namespace WebCL {
       }
 
       void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
-        (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max);
+        (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max, true);
+      }
+
+      void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
+        (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max, false);
       }
 
       void print(llvm::raw_ostream& stream) const {
@@ -1219,12 +1226,14 @@ namespace WebCL {
       value->setName("constantLimits");
       return value;
     }
-    void getConstantLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+    void getConstantLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 0));
+      if (finalValues) min = blockBuilder.CreateLoad(min);
       min->setName("constantLimits.min");
       max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 1));
+      if (finalValues) max = blockBuilder.CreateLoad(max);
       max->setName("constantLimits.max");
     }
     GetElementPtrInst* getGlobalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
@@ -1234,12 +1243,14 @@ namespace WebCL {
       value->setName("globalLimits");
       return value;
     }
-    void getGlobalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+    void getGlobalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 0));
+      if (finalValues) min = blockBuilder.CreateLoad(min);
       min->setName("globalLimits.min");
       max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 1));
+      if (finalValues) max = blockBuilder.CreateLoad(max);
       max->setName("globalLimits.max");
     }
     GetElementPtrInst* getLocalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
@@ -1249,12 +1260,14 @@ namespace WebCL {
       value->setName("localLimits");
       return value;
     }
-    void getLocalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+    void getLocalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 0));
+      if (finalValues) min = blockBuilder.CreateLoad(min);
       min->setName("localLimits.min");
       max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 1));
+      if (finalValues) max = blockBuilder.CreateLoad(max);
       max->setName("localLimits.max");
     }
     GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder) const {
@@ -1271,7 +1284,9 @@ namespace WebCL {
       value->setName("privateAllocs");
       return value;
     }
-    void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max) const {
+    void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
+      // you cannot retrieve non-final values of private limits, which are read-only
+      assert(finalValues);
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
@@ -2310,7 +2325,7 @@ namespace WebCL {
         Value* min;
         Value* max;
         DUMP(*webClKernel);
-        limit.getBounds(webClKernel, blockBuilder, min, max);
+        limit.getBoundsPointers(webClKernel, blockBuilder, min, max);
 
         Value* elementCount = (++a);
         a->setName(origArg->getName() + ".size");
