@@ -894,6 +894,13 @@ namespace WebCL {
       }
     }
     
+    // add new replacement to bookkeeping
+    void addReplacement(Value* original, Value* replacement) {
+      DEBUG( dbgs() << "ASInfoManager bookkeeping, added value replacement: "; original->print(dbgs()); dbgs() << " replacement: "; replacement->print(dbgs()); dbgs() << "\n"; );
+      originalValues[replacement] = original;
+      replacedValues[original] = replacement;
+    }
+    
     // get corresponding value after replacing static allocations with structs and
     // moving functions to new signature
     Value* getReplacedValue(Value *original) {
@@ -1042,51 +1049,15 @@ namespace WebCL {
           Value* replacement = getValueReplacement(F, blockBuilder, value);
           assert(replacement != value);
           // store replacement to bookkeeping to be able to trace between original and new values
-          replacedValues[value] = replacement;
-          originalValues[replacement] = value;
+          addReplacement(value, replacement);
           value->replaceAllUsesWith(replacement);
 
         } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
-
-          // TODO: why one can't use replaceAllUsesWith here?
-          //       value is global variable creating contant gep and replacing all should be enough..
-          //       everywhere where global variable is used constant gep whould work as well...
-          //       anyways this seems to work for now, so no need to touch
-
-          std::vector<User*> uses(global->use_begin(), global->use_end());
-          for (std::vector<User*>::iterator it = uses.begin();
-               it != uses.end();
-               ++it) {
-            User* user = *it;
-            if (Instruction* inst = dyn_cast<Instruction>(user)) {
-              IRBuilder<> blockBuilder(inst);
-              Function* F = inst->getParent()->getParent();
-              Value* replacement = getValueReplacement(F, blockBuilder, value);
-              if (replacement != value) {
-                user->replaceUsesOfWith(value, replacement);
-              }
-              
-              replacedValues[value] = replacement;
-              originalValues[replacement] = value;
-            } else if (ConstantExpr* constant = dyn_cast<ConstantExpr>(user)) {
-#if 0
-              Instruction* inst = getAsInstruction(constant);
-              constant->replaceAllUsesWith(inst);
-              IRBuilder<> blockBuilder(inst);
-              Function* F = constant->getParent()->getParent();
-              Value* replacement = getValueReplacement(F, blockBuilder, value);
-              if (replacement != value) {
-                user->replaceUsesOfWith(value, replacement);
-              }
-#endif
-              assert(0);
-            } else {
-              assert(0);
-            }
-          }
-          // do not erase yet, we still need original, which is referred from dependence manager
-          global->removeFromParent();
+          Constant *constGEP = ConstantExpr::getGetElementPtr(global, genIntVector<Constant*>(global->getParent()->getContext(), 0, 1));
+          global->replaceAllUsesWith(constGEP);
+          addReplacement(global, constGEP);
           deleteGlobalValues.insert(global);
+          
         } else {
           assert(0);
         }
@@ -1168,10 +1139,8 @@ namespace WebCL {
       const ArgumentMap& replacedArgs = functionManager.getReplacedArguments();
       for (ArgumentMap::const_iterator a = replacedArgs.begin(); a != replacedArgs.end(); ++a) {
         Argument *original = a->first;
-        Argument *replaced = a->second;
-        DEBUG( dbgs() << "original: "; original->print(dbgs()); dbgs() << " replaced:"; replaced->print(dbgs()); dbgs() << "\n"; );
-        replacedValues[original] = replaced;
-        originalValues[replaced] = original;
+        Argument *replacement = a->second;
+        addReplacement(original, replacement);
       }
     }
     
@@ -1699,7 +1668,7 @@ namespace WebCL {
         dbgs() << "Getting limits of inst: "; inst->print(dbgs());
         dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
         dbgs() << "BASE: "; replacedVal->print(dbgs()); dbgs() << "\n";
-
+/*
         // find out limits from mappings if it is an safepointer argument or
         AreaLimitBase *limit = getValueLimit(replacedVal);
 
@@ -1708,10 +1677,11 @@ namespace WebCL {
           limits.clear();
           limits.insert(limit);
         }
+ */
       }
       return limits;
     }
-      
+    
   private:
     AddressSpaceInfoManager& infoManager;
     DependenceAnalyser& dependenceAnalyser;
@@ -2739,8 +2709,8 @@ namespace WebCL {
     }
   }
 
-  Value* replaceCallArgument(CallInst* call, Value* operand, Value* oldArg, Value* newArg, 
-                             const ArgumentMap &replacedArguments, bool& removeAttribute, AreaLimitByValueMap &valLimits)
+  Value* replaceCallArgument(CallInst* call, Value* operand, Value* oldArg, Value* newArg,
+                             const ArgumentMap &replacedArguments, bool& removeAttribute, AreaLimitManager &areaLimitManager)
   {
     removeAttribute = false;
 
@@ -2749,7 +2719,18 @@ namespace WebCL {
     // this argument type has been changed to smart pointer, find out corresponding smart
     if (oldArg->getType() != newArg->getType()) {
       //DEBUG( dbgs() << "- op #" << op << " needs fixing: "; operand->print(dbgs()); dbgs() << "\n" );
-          
+
+      AreaLimitSet limits = areaLimitManager.getAreaLimits(call, operand);
+      fast_assert(limits.size() == 1, "Call operands have to be able to resolved to single limits.");
+      AreaLimitBase *limit = *limits.begin();
+      // TODO: what is currently official limit API?...
+      // retArg = convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call);
+
+  /* HOPEFULLY THIS IS NOW ENOUGH... add tricks from below if normal llvm optimizations cannot handle them
+      retArg = convertArgumentToSmartStruct(operand, operand, operand, false, call);
+      removeAttribute = true;
+      
+      
       if ( Argument* arg = dyn_cast<Argument>(operand) ) {
         // if operand is argument it should be found from replacement map
         DEBUG( dbgs() << "Operand is argument of the same func! Passing it through.\n"; );
@@ -2764,7 +2745,7 @@ namespace WebCL {
         // TODO: to make this secure we have to check that operand argument is listed in replaced argument map and is really generated by us (types in replaced arguments must been changed)
         retArg = aggregateOp;
       } else {
-        AreaLimitBase *limit = NULL;
+        AreaLimitBase *limit = areaLimitManager.getAreaLimits(call, );
         // TODO: Temporarily disabled mechanism to allow running the app through for development purposes.
         // if (valLimits.count(operand) > 0) {
         //   limit = valLimits[operand];
@@ -2776,6 +2757,7 @@ namespace WebCL {
         retArg = convertArgumentToSmartStruct(operand, operand, operand, false, call);
         removeAttribute = true;
       }
+*/
     } else {
       retArg = operand;
     }
@@ -2788,9 +2770,10 @@ namespace WebCL {
    * Converts call function to use new function as called function and changes all pointer parameters to be smart pointers.
    */
   void convertCallToUseSmartPointerArgs(CallInst *call, Function *newFun,
-                                        const ArgumentMap &replacedArguments, AreaLimitByValueMap &valLimits,
+                                        const ArgumentMap &replacedArguments,
+                                        AreaLimitManager &areaLimitManager,
                                         bool useProgramAllocationsArgument,
-                                        const AddressSpaceInfoManager& infoManager) {
+                                        AddressSpaceInfoManager& infoManager) {
 
     Function* oldFun = call->getCalledFunction();
     call->setCalledFunction(newFun);
@@ -2818,7 +2801,7 @@ namespace WebCL {
 
         bool removeAttribute;
         newCallArguments[op] = replaceCallArgument(call, call->getOperand(op - 1), oldArg, newArg,
-                                                   replacedArguments, removeAttribute, valLimits);
+                                                   replacedArguments, removeAttribute, areaLimitManager);
         // ignore for now: should copy attributes except for these ones?
         // if (removeAttribute) {
         //   int argIdx = a->getArgNo() + 1; // removeAttribute does know about arg# 0 (the return value), thus +1
@@ -2830,7 +2813,8 @@ namespace WebCL {
 
       CallInst* newCall = CallInst::Create(newFun, newCallArguments, "", call);
       call->replaceAllUsesWith(newCall);
-      call->eraseFromParent();
+      call->removeFromParent();
+      infoManager.addReplacement(call, newCall);
       call = newCall;
     } else {
       int op = 0;
@@ -2846,7 +2830,7 @@ namespace WebCL {
         //       a lot easier... if there is need to add more and more special cases here, consider the option...
 
         bool removeAttribute;
-        call->setOperand(op, replaceCallArgument(call, call->getOperand(op), oldArg, newArg, replacedArguments, removeAttribute, valLimits));
+        call->setOperand(op, replaceCallArgument(call, call->getOperand(op), oldArg, newArg, replacedArguments, removeAttribute, areaLimitManager));
         if (removeAttribute) {
           int argIdx = a->getArgNo() + 1; // removeAttribute does know about arg# 0 (the return value), thus +1
           call->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
@@ -3271,9 +3255,9 @@ namespace WebCL {
       
       // fix all old alloca and globals uses to point new variables (required to be able to get limits correctly for call replacement ?)
       DEBUG( dbgs() << "\n --------------- FIX REFRENCES OF OLD ALLOCAS AND GLOBALS TO POINT ADDRESS SPACE STRUCT FIELDS --------------\n" );
+      addressSpaceInfoManager.addAReplacementsToBookkeepping(functionManager);
       addressSpaceInfoManager.replaceUsesOfOriginalVariables();
       
-      addressSpaceInfoManager.addAReplacementsToBookkeepping(functionManager);
       
       // Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
       // [fixCallsToUseChangedSignatures(...)](#fixCallsToUseChangedSignatures)

@@ -19,6 +19,18 @@ typedef struct {
 
 __constant float test_constant[3] = { 1, 2, 3 };
 
+float test_calling_foo(
+  int value_arg, 
+  float *test_private,
+  __global float* in, 
+  __global float* out, 
+  __constant float* factors, 
+  __local float* scratch,
+  __local test_struct* test) {
+
+  return (test_private[value_arg] + *in + *factors + *out + *scratch + test[0].f);
+}
+
 __kernel void test(
   __global float* in, __global float* out, 
   __constant float* factors, __local float* scratch) {
@@ -49,4 +61,6 @@ __kernel void test(
   out[i] = in[i];
   struct_table[i].f = test_private[i];
   struct_table[i].l = struct_table[i].f;
+
+  out[i] = test_calling_foo(i, test_private2, in, out, factors, scratch, struct_table);
 }
