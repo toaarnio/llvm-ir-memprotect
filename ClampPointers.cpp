@@ -815,7 +815,25 @@ namespace WebCL {
       first = getValidAddressFor(max, indirect, -1, type, checkStart);
       last = getValidAddressFor(max, indirect, -1, type, checkStart);
     }
-  };
+ 
+    // returns final values that require no loading
+    void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min_, Value *&max_) {
+      min_ = min;
+      max_ = max;
+      if (indirect) {
+        min_ = blockBuilder.CreateLoad(min_);
+        max_ = blockBuilder.CreateLoad(max_);
+      }
+    }
+    
+    // returns pointers to bounds
+    void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min_, Value *&max_) {
+      assert(indirect);
+      min_ = min;
+      max_ = max;
+    }
+ 
+ };
 
   llvm::raw_ostream& operator<<(llvm::raw_ostream& stream, const AreaLimitBase& areaLimit) {
     areaLimit.print(stream);
