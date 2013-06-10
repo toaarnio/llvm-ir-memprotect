@@ -1717,7 +1717,7 @@ namespace WebCL {
   Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel,
                               AddressSpaceInfoManager &infoManager);
 
-  template <typename Location> Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, bool isIndirect, Location* location);
+  template <typename Location> Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, Location* location);
 
   bool isSafeAddressToLoad(Value *operand);
 
@@ -2318,7 +2318,7 @@ namespace WebCL {
           
         // create smart pointer alloca to entry block of function, which is used as a argument to
         // function call
-        Value* newArgument = convertArgumentToSmartStruct( arg,  arg, lastLimit, false, kernelBlock);
+        Value* newArgument = convertArgumentToSmartStruct( arg,  arg, lastLimit, kernelBlock);
 
         args.push_back(newArgument);
 
@@ -2356,7 +2356,7 @@ namespace WebCL {
    * TODO: or just maybe we could create unnamed global variable and pass it to prevent polluting entry block too much
    */
   template <typename Location>
-  Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, bool isIndirect, Location* location) {
+  Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, Location* location) {
     typedef LocationKind<Location> LK;
 
     DEBUG( dbgs() << (LK::initAtEnd ? "2" : "1") << "-Converting arg: "; origArg->print(dbgs());
@@ -2378,11 +2378,6 @@ namespace WebCL {
     GetElementPtrInst *maxGEP = GetElementPtrInst::CreateInBounds(smartArgStructAlloca, genIntVector<Value*>(c, 0, 2), "", location);
     Value *minValue = minLimit;
     Value *maxValue = maxLimit;
-    // if indirect limit, we need to load value first
-    if (isIndirect) {
-      minValue = new LoadInst(minLimit, "", location);
-      maxValue = new LoadInst(maxLimit, "", location);
-    }
     CastInst *castedMinAddress = BitCastInst::CreatePointerCast(minValue, origArg->getType(), "", location);
     CastInst *castedMaxAddress = BitCastInst::CreatePointerCast(maxValue, origArg->getType(), "", location);
     new StoreInst(origArg, curGEP, location);
