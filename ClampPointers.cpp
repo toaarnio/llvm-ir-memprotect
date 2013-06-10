@@ -1041,9 +1041,9 @@ namespace WebCL {
         } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(value)) {
 
           // TODO: why one can't use replaceAllUsesWith here?
-          //       since value is global variable creating contant gep and
-          //       replaceing all should be enough.. everywhere where global variable
-          //       is used constant gep whould work as well
+          //       value is global variable creating contant gep and replacing all should be enough..
+          //       everywhere where global variable is used constant gep whould work as well...
+          //       anyways this seems to work for now, so no need to touch
 
           std::vector<User*> uses(global->use_begin(), global->use_end());
           for (std::vector<User*>::iterator it = uses.begin();
@@ -1137,6 +1137,19 @@ namespace WebCL {
       assert(paa);
       return paa;
     }
+    
+    // TODO: also needs to get replaced calls I suppose...
+    void addAReplacementsToBookkeepping(FunctionManager &functionManager) {
+      const ArgumentMap& replacedArgs = functionManager.getReplacedArguments();
+      for (ArgumentMap::const_iterator a = replacedArgs.begin(); a != replacedArgs.end(); ++a) {
+        Argument *original = a->first;
+        Argument *replaced = a->second;
+        DEBUG( dbgs() << "original: "; original->print(dbgs()); dbgs() << " replaced:"; replaced->print(dbgs()); dbgs() << "\n"; );
+        replacedValues[original] = replaced;
+        originalValues[replaced] = original;
+      }
+    }
+    
   private:
     Module& M;
     PointerType* programAllocationsType;
@@ -1670,7 +1683,6 @@ namespace WebCL {
           limits.insert(limit);
         }
       }
-      
       return limits;
     }
       
@@ -3234,6 +3246,8 @@ namespace WebCL {
       // fix all old alloca and globals uses to point new variables (required to be able to get limits correctly for call replacement ?)
       DEBUG( dbgs() << "\n --------------- FIX REFRENCES OF OLD ALLOCAS AND GLOBALS TO POINT ADDRESS SPACE STRUCT FIELDS --------------\n" );
       addressSpaceInfoManager.replaceUsesOfOriginalVariables();
+      
+      addressSpaceInfoManager.addAReplacementsToBookkeepping(functionManager);
       
       // Fixes all call instructions in the program to call new safe implementations so that program is again in functional state.
       // [fixCallsToUseChangedSignatures(...)](#fixCallsToUseChangedSignatures)
