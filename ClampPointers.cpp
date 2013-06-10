@@ -884,6 +884,11 @@ namespace WebCL {
           delete *alIt;
         }
       }
+      for (ValueSet::iterator it = deleteValues.begin();
+           it != deleteValues.begin();
+           ++it) {
+        delete *it;
+      }
     }
     
     // get corresponding value after replacing static allocations with structs and
@@ -1078,6 +1083,7 @@ namespace WebCL {
           }
           // do not erase yet, we still need original, which is referred from dependence manager
           global->removeFromParent();
+          deleteValues.insert(global);
         } else {
           assert(0);
         }
@@ -1189,6 +1195,7 @@ namespace WebCL {
     GlobalVariable* constantAllocations;
     std::map<Value*, Value*> replacedValues;
     std::map<Value*, Value*> originalValues;
+    ValueSet deleteValues;      // the set of values to delete at destructor
     bool fixed;               // once fixed cannot become unfixed.
     struct ValueASIndex {
       unsigned asNumber;
