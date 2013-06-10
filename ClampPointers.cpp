@@ -874,6 +874,8 @@ namespace WebCL {
       asAreaLimits[privateAddressSpaceNumber].insert(new ASAreaLimit(*this, getASLimitsFunc(privateAddressSpaceNumber), privateAddressSpaceNumber, 0));
       asAreaLimits[localAddressSpaceNumber].insert(new ASAreaLimit(*this, getASLimitsFunc(localAddressSpaceNumber), localAddressSpaceNumber, 0));
     }
+    // not implemented: cannot be copy-constructed
+    AddressSpaceInfoManager(const AddressSpaceInfoManager&);
     ~AddressSpaceInfoManager() {
       for (AddressSpaceAllocAreaLimitSetMap::iterator it = asAreaLimits.begin();
            it != asAreaLimits.begin();
