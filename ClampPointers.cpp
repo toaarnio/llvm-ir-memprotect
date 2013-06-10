@@ -981,6 +981,16 @@ namespace WebCL {
         return AreaLimitSet();
       }
     }
+    // supports only global scope address space structs
+    AreaLimitSet getASAllocationsLimitsByValue(Value* value) {
+      if (value == getLocalAllocations()) {
+        return getASLimits(localAddressSpaceNumber);
+      } else if (value == getConstantAllocations()) {
+        return getASLimits(constantAddressSpaceNumber);
+      } else {
+        return AreaLimitSet();
+      }
+    }
     GlobalVariable* getLocalAllocations() {
       fixed = true;
       if (!localAllocations) {
@@ -1067,7 +1077,6 @@ namespace WebCL {
           addReplacement(global, constGEP);
           global->removeFromParent();
           deleteGlobalValues.insert(global);
-          
         } else {
           assert(0);
         }
@@ -1663,40 +1672,55 @@ namespace WebCL {
 
     AreaLimitSet getAreaLimits(Instruction* inst, Value* ptrOperand) {
       Value* current = ptrOperand;
-      AreaLimitSet limits;
+      AreaLimitSet asLimits;
+      AreaLimitSet asValueLimits;
+      AreaLimitSet valueLimits;
 
       // get first limit from address space
       assert(isa<PointerType>(ptrOperand->getType()));
       PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
       int asNumber = pointerType->getAddressSpace();
-      limits = infoManager.getASLimits(asNumber);
+      asLimits = infoManager.getASLimits(asNumber);
 
       // if there was not single limits try to check limits from dependence manager
-      if (limits.size() != 1) {
+      if (asLimits.size() != 1) {
         // get original values to be able to query DependenceAnalyser (original != inst only for calls)
         Instruction *originalInst = dyn_cast<Instruction>(infoManager.getOriginalValue(inst));
         Value *originalPtrOperand = infoManager.getOriginalValue(ptrOperand);
-      
+
         Value* base = dependenceAnalyser.getLimitingDependency(originalInst, originalPtrOperand);
 
-        // get replaced value of limit to be able to resolve if it is argument or inside
-        // static allocation of some address space
-        Value *replacedVal = infoManager.getReplacedValue(base);
+        asValueLimits = infoManager.getASAllocationsLimitsByValue(base);
+
+        // only check replacement if the value itself isn't an address space allocations structure
+        if (asValueLimits.size() == 0) {
+          // get replaced value of limit to be able to resolve if it is argument or inside
+          // static allocation of some address space
+          Value *replacedVal = infoManager.getReplacedValue(base);
       
-        DEBUG(dbgs() << "Getting limits of inst: "; inst->print(dbgs());
-              dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
-              dbgs() << "BASE: "; replacedVal->print(dbgs()); dbgs() << "\n";);
+          DEBUG(dbgs() << "Getting limits of inst: "; inst->print(dbgs());
+                dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
+                dbgs() << "BASE: "; replacedVal->print(dbgs()); dbgs() << "\n";);
 
-        // find out limits from mappings if it is an safepointer argument or
-        AreaLimitBase *limit = getValueLimit(replacedVal);
+          // find out limits from mappings if it is an safepointer argument or
+          AreaLimitBase *limit = getValueLimit(replacedVal);
 
-        // replace old set
-        if (limit) {
-          limits.clear();
-          limits.insert(limit);
+          // replace old set
+          if (limit) {
+            valueLimits = AreaLimitSet(&limit, &limit + 1);
+          }
         }
       }
-      return limits;
+      // find the smallest area limit containing at least one limit
+      std::map<int, AreaLimitSet*> areaLimitMap;
+      if (asLimits.size()) areaLimitMap[asLimits.size()] = &asLimits;
+      if (asValueLimits.size()) areaLimitMap[asValueLimits.size()] = &asValueLimits;
+      if (valueLimits.size()) areaLimitMap[valueLimits.size()] = &valueLimits;
+      AreaLimitSet bestLimit;
+      if (areaLimitMap.size()) {
+        bestLimit = *areaLimitMap.begin()->second;
+      }
+      return bestLimit;
     }
     
   private:
