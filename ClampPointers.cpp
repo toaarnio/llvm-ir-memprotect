@@ -721,6 +721,8 @@ namespace WebCL {
 
     virtual void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) = 0;
     virtual void print(llvm::raw_ostream& stream) const = 0;
+
+    // returns final values that require no loading
     virtual void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) { assert(0); }
   };
 
