@@ -1695,8 +1695,18 @@ namespace WebCL {
     // find which limits the value respects, value should be pretty straight forward to
     // trace until some argument or struct field
     AreaLimitBase* getValueLimit(Value* val) {
-      fast_assert(false, "Needs implementation, this will finally return the AreaLimitBase object of value.");
-      return NULL;
+      val = infoManager.getOriginalValue(val);
+      Value* iterator = val;
+      AreaLimitSet limits;
+      do {
+        limits.erase(limits.begin(), limits.end());
+        if (isa<Argument>(val)) {
+          limits = infoManager.getArgumentLimits(cast<Argument>(val));
+        }
+        iterator = dependenceAnalyser.getDependency(iterator);
+      } while (limits.empty() && iterator && iterator != val);
+      assert(limits.size() <= 1);
+      return limits.empty() ? 0 : *limits.begin();
     }
     
   };
