@@ -532,6 +532,7 @@ namespace WebCL {
 
   typedef std::map< Value*, int > ValueIndexMap;
   typedef std::set< Value* > ValueSet;
+  typedef std::set< GlobalValue* > GlobalValueSet;
   typedef std::map< Function*, Function* > FunctionMap;
   typedef std::list< Function* > FunctionList;
   typedef std::map< Argument*, Argument* > ArgumentMap;
@@ -886,8 +887,8 @@ namespace WebCL {
           delete *alIt;
         }
       }
-      for (ValueSet::iterator it = deleteValues.begin();
-           it != deleteValues.begin();
+      for (GlobalValueSet::iterator it = deleteGlobalValues.begin();
+           it != deleteGlobalValues.end();
            ++it) {
         delete *it;
       }
@@ -1085,7 +1086,7 @@ namespace WebCL {
           }
           // do not erase yet, we still need original, which is referred from dependence manager
           global->removeFromParent();
-          deleteValues.insert(global);
+          deleteGlobalValues.insert(global);
         } else {
           assert(0);
         }
@@ -1197,7 +1198,7 @@ namespace WebCL {
     GlobalVariable* constantAllocations;
     std::map<Value*, Value*> replacedValues;
     std::map<Value*, Value*> originalValues;
-    ValueSet deleteValues;      // the set of values to delete at destructor
+    GlobalValueSet deleteGlobalValues; // the set of globals to be deleted at destructor
     bool fixed;               // once fixed cannot become unfixed.
     struct ValueASIndex {
       unsigned asNumber;
