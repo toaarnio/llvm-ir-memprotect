@@ -2731,6 +2731,14 @@ namespace WebCL {
       AreaLimitSet limits = areaLimitManager.getAreaLimits(call, operand);
       fast_assert(limits.size() == 1, "Call operands have to be able to resolved to single limits.");
       AreaLimitBase *limit = *limits.begin();
+
+      Value* min;
+      Value* max;
+      IRBuilder<> blockBuilder(call);
+      limit->getBounds(call->getParent()->getParent(), blockBuilder, min, max);
+      retArg = convertArgumentToSmartStruct(operand, min, max, call);
+      removeAttribute = true;
+
       // TODO: what is currently official limit API?...
       // retArg = convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call);
 
