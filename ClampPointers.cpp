@@ -878,7 +878,7 @@ namespace WebCL {
     AddressSpaceInfoManager(const AddressSpaceInfoManager&);
     ~AddressSpaceInfoManager() {
       for (AddressSpaceAllocAreaLimitSetMap::iterator it = asAreaLimits.begin();
-           it != asAreaLimits.begin();
+           it != asAreaLimits.end();
            ++it) {
         for (AreaLimitSet::iterator alIt = it->second.begin();
              alIt != it->second.end();
