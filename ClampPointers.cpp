@@ -2859,7 +2859,7 @@ namespace WebCL {
       Value* min;
       Value* max;
       IRBuilder<> blockBuilder(call);
-      limit->getBounds(call->getParent()->getParent(), blockBuilder, min, max);
+      limit->getBoundsPointers(call->getParent()->getParent(), blockBuilder, min, max);
       retArg = convertArgumentToSmartStruct(operand, min, max, call);
       removeAttribute = true;
 
