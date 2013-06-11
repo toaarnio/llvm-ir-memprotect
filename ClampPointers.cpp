@@ -1027,9 +1027,13 @@ namespace WebCL {
         AreaLimitSet argLimits = getArgumentLimits(dyn_cast<Argument>(getOriginalValue(arg)));
         fast_assert(argLimits.size() == 1, "We must have limits for arguments. If not something is wrong.");
         return *argLimits.begin();
+      } else if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(val)) {
+        return getValueLimit(gep->getPointerOperand());
+      } else if (isa<ConstantExpr>(val) && cast<ConstantExpr>(val)->getOpcode() == Instruction::GetElementPtr) {
+        return getValueLimit(cast<ConstantExpr>(val)->getOperand(0));
+      } else {
+        return 0;
       }
-      // TODO: check if value is field of some address space struct
-      
     }
     GlobalVariable* getLocalAllocations() {
       fixed = true;
