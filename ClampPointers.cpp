@@ -1854,7 +1854,8 @@ namespace WebCL {
                                         const ArgumentMap &replacedArguments,
                                         AreaLimitManager &areaLimitManager,
                                         bool useProgramAllocationsArgument,
-                                        AddressSpaceInfoManager& infoManager);
+                                        AddressSpaceInfoManager& infoManager,
+                                        InstrSet& postbonedInstrDeletes);
 
   Function* createNewFunctionSignature(Function *F,  
                                        std::insert_iterator<FunctionMap> functionMappingInserter,
@@ -2755,7 +2756,8 @@ namespace WebCL {
    * implementation which operates with smart pointers
    */
   void makeBuiltinCallsSafe(const CallInstrSet &externalCalls, const FunctionMap& unsafeToSafeBuiltin,
-                            Type* programAllocationsType, AddressSpaceInfoManager& infoManager, AreaLimitManager& areaLimitManager ) {
+                            Type* programAllocationsType, AddressSpaceInfoManager& infoManager, AreaLimitManager& areaLimitManager,
+                            InstrSet& postbonedInstrDeletes ) {
     // if mapping is needed outside export this to be reference parameter instead of local 
     FunctionMap safeBuiltins;
     ArgumentMap dummyArgMap;
@@ -2772,7 +2774,7 @@ namespace WebCL {
       if ( unsafeToSafeBuiltinIt != unsafeToSafeBuiltin.end() ) {
         Function *newFun = unsafeToSafeBuiltinIt->second;
         ArgumentMap dummyArg;
-        convertCallToUseSmartPointerArgs( call, newFun, dummyArg, areaLimitManager, false, infoManager );
+        convertCallToUseSmartPointerArgs( call, newFun, dummyArg, areaLimitManager, false, infoManager, postbonedInstrDeletes );
       } else if ( isWebClBuiltin(oldFun) ) {
 
         std::string demangledName = extractItaniumDemangledFunctionName(oldFun->getName().str());
@@ -2797,7 +2799,7 @@ namespace WebCL {
             
           Function *newFun = safeBuiltins[oldFun];
           ArgumentMap dummyArg;
-          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, areaLimitManager, false, infoManager);
+          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, areaLimitManager, false, infoManager, postbonedInstrDeletes);
         }
 
       } else {
@@ -2822,7 +2824,8 @@ namespace WebCL {
                                       const ArgumentMap &replacedArguments, 
                                       const CallInstrSet &internalCalls,
                                       AddressSpaceInfoManager& infoManager,
-                                      AreaLimitManager& areaLimitManager) {
+                                      AreaLimitManager& areaLimitManager,
+                                      InstrSet& postbonedInstrDeletes) {
     DUMP(iteratorDistance(internalCalls.begin(), internalCalls.end()));
     for (CallInstrSet::const_iterator i = internalCalls.begin(); i != internalCalls.end(); i++) {
       CallInst *call = *i;
@@ -2837,7 +2840,7 @@ namespace WebCL {
       }
 
       Function* newFun = replacedFunctions.find(oldFun)->second;
-      convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, areaLimitManager, true, infoManager);
+      convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, areaLimitManager, true, infoManager, postbonedInstrDeletes);
     }
   }
 
@@ -2913,7 +2916,8 @@ namespace WebCL {
                                         const ArgumentMap &replacedArguments,
                                         AreaLimitManager &areaLimitManager,
                                         bool useProgramAllocationsArgument,
-                                        AddressSpaceInfoManager& infoManager) {
+                                        AddressSpaceInfoManager& infoManager,
+                                        InstrSet& postbonedInstrDeletes) {
 
     Function* oldFun = call->getCalledFunction();
     call->setCalledFunction(newFun);
@@ -2954,6 +2958,7 @@ namespace WebCL {
       CallInst* newCall = CallInst::Create(newFun, newCallArguments, "", call);
       call->replaceAllUsesWith(newCall);
       call->removeFromParent();
+      postbonedInstrDeletes.insert(call);
       infoManager.addReplacement(call, newCall);
       call = newCall;
     } else {
@@ -3264,6 +3269,7 @@ namespace WebCL {
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
       AddressSpaceStructByAddressSpaceMap addressSpaceStructs;
       GlobalValueMap addressSpaceEndPtrs;
+      InstrSet postbonedInstrDeletes;
 
       // Set where is collected all values, which will not require boundary checks to
       // memory accesses. These have been resolved to be safe accesses in compile time.
@@ -3406,9 +3412,8 @@ namespace WebCL {
                                      functionManager.getReplacedArguments(), 
                                      functionManager.getInternalCalls(),
                                      addressSpaceInfoManager,
-                                     areaLimitManager);
-      
-      
+                                     areaLimitManager,
+                                     postbonedInstrDeletes);
       
       // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
       // creates some memory intrinsics we might need to take care of checking their operands as well.
@@ -3435,7 +3440,13 @@ namespace WebCL {
       // [makeBuiltinCallsSafe( ... )](#makeBuiltinCallsSafe)
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
       makeBuiltinCallsSafe(functionManager.getExternalCalls(), functionManager.getUnsafeToSafeBuiltin(),
-                           programAllocationsType, addressSpaceInfoManager, areaLimitManager);
+                           programAllocationsType, addressSpaceInfoManager, areaLimitManager, postbonedInstrDeletes);
+
+      for (InstrSet::iterator it = postbonedInstrDeletes.begin();
+           it != postbonedInstrDeletes.end();
+           ++it) {
+        delete *it;
+      }
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
