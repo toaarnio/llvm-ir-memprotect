@@ -1030,9 +1030,11 @@ namespace WebCL {
         return getValueLimit(gep->getPointerOperand());
       } else if (isa<ConstantExpr>(val) && cast<ConstantExpr>(val)->getOpcode() == Instruction::GetElementPtr) {
         return getValueLimit(cast<ConstantExpr>(val)->getOperand(0));
+      } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(val)) {
+        return getASAllocationsLimitsByValue(val);
       } else {
-        // TODO: add here actually getting the limits for traced global variable / address space  and maybe even programAllocations arg maybe?
-        //       currently we are still not generating limits here.
+        DUMP(*arg);
+        DUMP(arg);
         return 0;
       }
     }
