@@ -1004,18 +1004,17 @@ namespace WebCL {
     // supports only global scope address space structs
     // @param value GlobalValue whose min and max is returned
     // @return Set of one area limit if given parameter was global value
-    AreaLimitSet getASAllocationsLimitsByValue(Value* value) {
-      AreaLimitSet limits;
+    AreaLimitBase* getASAllocationsLimitsByValue(Value* value) {
+      AreaLimitBase* limit = 0;
       if (value == getLocalAllocations() || value == getConstantAllocations()) {
         GlobalValue* global = cast<GlobalValue>(value);
         LLVMContext& c = M.getContext();
         Value* min = global;
         Value* max = ConstantExpr::getGetElementPtr(global, genIntVector<Constant*>(c, 1));
         // NOTE: AreaLimit creation and bookkeeping should be handled by AreaLimitManager
-        limits.insert(AreaLimit::Create(min, max, false));
-        return limits;
+        limit = AreaLimit::Create(min, max, false);
       }
-      return AreaLimitSet();
+      return limit;
     }
     // NOTE: actually creating limits should be done be arealimit manager
     //       and address space info manager only contains information of
