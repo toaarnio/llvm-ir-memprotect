@@ -970,7 +970,7 @@ namespace WebCL {
       }
       return n;
     }
-    void addDynamicLimitRange(Argument* arg) {
+    void addArgumentLimitRange(Argument* arg) {
       DEBUG( dbgs() << "Adding limit range for arg (" << arg << "): "; arg->print(dbgs()); dbgs() << "\n"; );
       assert(!fixed);
       PointerType* type = cast<PointerType>(arg->getType());
@@ -1024,7 +1024,7 @@ namespace WebCL {
     AreaLimitBase* getValueLimit(Value *val) {
       // check if value is argument and return argument limits
       if (Argument *arg = dyn_cast<Argument>(val)) {
-        AreaLimitSet argLimits = getArgumentLimits(dyn_cast<Argument>(getOriginalValue(arg)));
+        AreaLimitSet argLimits = getArgumentLimits(cast<Argument>(getOriginalValue(arg)));
         fast_assert(argLimits.size() == 1, "We must have limits for arguments. If not something is wrong.");
         return *argLimits.begin();
       } else if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(val)) {
@@ -2134,7 +2134,7 @@ namespace WebCL {
           Argument* arg = a;
           Type* t = arg->getType();
           if ( t->isPointerTy() ) {
-            infoManager.addDynamicLimitRange(arg);
+            infoManager.addArgumentLimitRange(arg);
           }
         }
       }
