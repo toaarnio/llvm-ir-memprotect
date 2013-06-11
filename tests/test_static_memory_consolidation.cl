@@ -22,13 +22,13 @@ __constant float test_constant[3] = { 1, 2, 3 };
 float test_calling_foo(
   int value_arg, 
   float *test_private,
-  __global float* in, 
-  __global float* out, 
-  __constant float* factors, 
-  __local float* scratch,
-  __local test_struct* test) {
+  __global float* helper_in, 
+  __global float* helper_out, 
+  __constant float* helper_factors, 
+  __local float* helper_scratch,
+  __local test_struct* helper_test) {
 
-  return (test_private[value_arg] + *in + *factors + *out + *scratch + test[0].f);
+  return (test_private[value_arg] + *helper_in + *helper_factors + *helper_out + *helper_scratch + helper_test[0].f);
 }
 
 __kernel void test(

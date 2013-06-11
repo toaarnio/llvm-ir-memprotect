@@ -1032,6 +1032,8 @@ namespace WebCL {
       } else if (isa<ConstantExpr>(val) && cast<ConstantExpr>(val)->getOpcode() == Instruction::GetElementPtr) {
         return getValueLimit(cast<ConstantExpr>(val)->getOperand(0));
       } else {
+        // TODO: add here actually getting the limits for traced global variable / address space  and maybe even programAllocations arg maybe?
+        //       currently we are still not generating limits here.
         return 0;
       }
     }
@@ -3357,7 +3359,8 @@ namespace WebCL {
                                      functionManager.getInternalCalls(),
                                      addressSpaceInfoManager,
                                      areaLimitManager);
-
+      
+      
       
       // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
       // creates some memory intrinsics we might need to take care of checking their operands as well.
@@ -3375,6 +3378,7 @@ namespace WebCL {
         }
         
         DEBUG( dbgs() << "Adding limit checks for:"; (*inst)->print(dbgs()); dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n" );
+        //areaLimitManager.getAreaLimits(*inst, ptrOperand);
         createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(*inst, ptrOperand), *inst);
       }
 
