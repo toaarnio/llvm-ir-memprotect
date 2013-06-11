@@ -812,7 +812,7 @@ namespace WebCL {
     }
       
     void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) {
-      first = getValidAddressFor(max, indirect, -1, type, checkStart);
+      first = getValidAddressFor(min, indirect, 0, type, checkStart);
       last = getValidAddressFor(max, indirect, -1, type, checkStart);
     }
  
