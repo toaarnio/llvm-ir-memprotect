@@ -971,6 +971,7 @@ namespace WebCL {
       return n;
     }
     void addDynamicLimitRange(Argument* arg) {
+      DEBUG( dbgs() << "Adding limit range for arg (" << arg << "): "; arg->print(dbgs()); dbgs() << "\n"; );
       assert(!fixed);
       PointerType* type = cast<PointerType>(arg->getType());
       unsigned asNumber = type->getAddressSpace();
@@ -985,6 +986,7 @@ namespace WebCL {
     // for an argument, return its area limits if it is a known argument, otherwise return an empty set
     AreaLimitSet getArgumentLimits(Argument* arg) {
       AreaLimitSet limits;
+      DEBUG( dbgs() << "Getting argument limits for arg (" << arg << "):"; arg->print(dbgs()); dbgs() << "\n"; );
       if (argumentAreaLimits.count(arg)) {
         limits.insert(argumentAreaLimits.find(arg)->second);
       }
@@ -1020,15 +1022,14 @@ namespace WebCL {
     //       value replacements and where to find intructions / Value* required
     //       for creation.
     AreaLimitBase* getValueLimit(Value *val) {
-      // TODO: check if value is argument and return argument limits
+      // check if value is argument and return argument limits
       if (Argument *arg = dyn_cast<Argument>(val)) {
-        AreaLimitSet argLimits = getArgumentLimits(arg);
+        AreaLimitSet argLimits = getArgumentLimits(dyn_cast<Argument>(getOriginalValue(arg)));
         fast_assert(argLimits.size() == 1, "We must have limits for arguments. If not something is wrong.");
         return *argLimits.begin();
       }
       // TODO: check if value is field of some address space struct
       
-    
     }
     GlobalVariable* getLocalAllocations() {
       fixed = true;
@@ -2368,6 +2369,7 @@ namespace WebCL {
     for( Function::arg_iterator a = webClKernel->arg_begin(); a != webClKernel->arg_end(); ++a ) {
       Argument* arg = a;
       arg->setName(origArg->getName());
+      origArg->setName(origArg->getName() + ".initial");
       Type* t = arg->getType();
         
       if ( t->isPointerTy() ) {
