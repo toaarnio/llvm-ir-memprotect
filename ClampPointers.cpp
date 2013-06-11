@@ -1385,8 +1385,8 @@ namespace WebCL {
       return value;
     }
     void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
-      // you cannot retrieve non-final values of private limits, which are read-only
-      assert(finalValues);
+      // TODO: is thus correct?
+      assert(!finalValues);
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
