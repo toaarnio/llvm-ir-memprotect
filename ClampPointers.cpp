@@ -1787,7 +1787,10 @@ namespace WebCL {
 
         // TODO: what limits are these and why it gets limits by dependence analyser alloca
         //       which should not be used anymore anywhere...
-        asValueLimits = infoManager.getASAllocationsLimitsByValue(base);
+        {
+          AreaLimitBase* limit = infoManager.getASAllocationsLimitsByValue(base);
+          if (limit) asValueLimits.insert(limit);
+        }
 
         // only check replacement if the value itself isn't an address space allocations structure
         if (asValueLimits.size() == 0) {
