@@ -831,6 +831,7 @@ namespace WebCL {
  
     // returns final values that require no loading
     void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min_, Value *&max_) {
+      assert(indirect);
       min_ = min;
       max_ = max;
       if (indirect) {
@@ -841,7 +842,6 @@ namespace WebCL {
     
     // returns pointers to bounds
     void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min_, Value *&max_) {
-      assert(indirect);
       min_ = min;
       max_ = max;
     }
