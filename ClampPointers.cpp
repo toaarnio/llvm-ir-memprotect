@@ -407,6 +407,18 @@ namespace WebCL {
     return result;
   }
 
+  bool isGeneratedSafePointerType( Type* arg ) {
+    bool result = false;
+    StructType* st = dyn_cast<StructType>(arg);
+    if (st && st->indexValid(2ul)) {
+      llvm::PointerType* pt1 = dyn_cast<PointerType>(st->getTypeAtIndex(0u));
+      llvm::PointerType* pt2 = dyn_cast<PointerType>(st->getTypeAtIndex(1u));
+      llvm::PointerType* pt3 = dyn_cast<PointerType>(st->getTypeAtIndex(2u));
+      result = ( pt1 == pt2 && pt2 == pt3 );
+    }
+    return result;
+  }
+
   /* **SafeArgTypes** is the operation for making a smartptrized
    * version of a function signature. Look at the constructor 
    * for more documentation.
@@ -846,7 +858,35 @@ namespace WebCL {
       max_ = max;
     }
  
- };
+  };
+
+  class SmartPtrAreaLimit: public AreaLimitBase {
+  public:
+    SmartPtrAreaLimit(Value* smartptr) : smartptr(smartptr) {
+      // nothing
+    }
+    ~SmartPtrAreaLimit() {}
+      
+    void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
+      getBoundsPointers(F, blockBuilder, min, max);
+      min = blockBuilder.CreateLoad(min);
+      max = blockBuilder.CreateLoad(max);
+    }
+
+    void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
+      LLVMContext& c = F->getContext();
+      min = blockBuilder.CreateExtractValue(smartptr, genVector(1u));
+      max = blockBuilder.CreateExtractValue(smartptr, genVector(2u));
+    }
+
+    void print(llvm::raw_ostream& stream) const {
+      stream << "### SmartPtrAreaLimit(*" << smartptr << " = " << *smartptr << ")\n";
+    }
+  private:
+    Value* smartptr;
+  };
+
+
 
   llvm::raw_ostream& operator<<(llvm::raw_ostream& stream, const AreaLimitBase& areaLimit) {
     areaLimit.print(stream);
@@ -987,6 +1027,10 @@ namespace WebCL {
       DEBUG( dbgs() << "Getting argument limits for arg (" << arg << "):"; arg->print(dbgs()); dbgs() << "\n"; );
       if (argumentAreaLimits.count(arg)) {
         limits.insert(argumentAreaLimits.find(arg)->second);
+      } else {
+        // not a kernel argument, thus it must be a function argument that is a safe pointer
+        assert(isGeneratedSafePointerType(arg->getType()));
+        limits.insert(new SmartPtrAreaLimit(arg));
       }
       return limits;
 
