@@ -719,7 +719,20 @@ namespace WebCL {
     AreaLimitBase() {}
     virtual ~AreaLimitBase() {}
 
-    virtual void validAddressBoundsFor(Type *type, Instruction *checkStart, Value *&first, Value *&last) = 0;
+    virtual void validAddressBoundsFor(Type *type, Instruction *at, Value *&first, Value *&last) {
+      Function* F = at->getParent()->getParent();
+      LLVMContext& c = F->getContext();
+      IRBuilder<> blockBuilder(at);
+      Value* min;
+      Value* max;
+      getBoundsPointers(F, blockBuilder, min, max);
+
+      first = BitCastInst::CreatePointerCast(min, type, "", at);
+
+      /* bitcast can be removed by later optimizations if not necessary */
+      CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(max, type, "", at);
+      last = GetElementPtrInst::Create(type_fixed_limit, genIntVector<Value*>(c, -1), "", at);
+    }
     virtual void print(llvm::raw_ostream& stream) const = 0;
 
     // returns final values that require no loading
@@ -855,21 +868,6 @@ namespace WebCL {
       }
       ~ASAreaLimit() {}
       
-      void validAddressBoundsFor(Type *type, Instruction *at, Value *&first, Value *&last) {
-        Function* F = at->getParent()->getParent();
-        LLVMContext& c = F->getContext();
-        IRBuilder<> blockBuilder(at);
-        Value* min;
-        Value* max;
-        (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max, true);
-
-        first = BitCastInst::CreatePointerCast(min, type, "", at);
-
-        /* bitcast can be removed by later optimizations if not necessary */
-        CastInst *type_fixed_limit = BitCastInst::CreatePointerCast(max, type, "", at);
-        last = GetElementPtrInst::Create(type_fixed_limit, genIntVector<Value*>(c, -1), "", at);
-      }
-
       void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
         (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max, true);
       }
