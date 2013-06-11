@@ -1065,8 +1065,10 @@ namespace WebCL {
     AreaLimitBase* getValueLimit(Value *val) {
       // check if value is argument and return argument limits
       if (Argument *arg = dyn_cast<Argument>(val)) {
-        AreaLimitSet argLimits = getArgumentLimits(cast<Argument>(getOriginalValue(arg)));
-        fast_assert(argLimits.size() == 1, "We must have limits for arguments. If not something is wrong.");
+        //AreaLimitSet argLimits = getArgumentLimits(cast<Argument>(getOriginalValue(arg)));
+        AreaLimitSet argLimits = getArgumentLimits(arg);
+        fast_assert(argLimits.size() != 0, "We must have some limits for arguments. If not something is wrong.");
+        fast_assert(argLimits.size() == 1, "We must have exactly one for arguments. If not something is wrong.");
         return *argLimits.begin();
       } else if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(val)) {
         return getValueLimit(gep->getPointerOperand());
