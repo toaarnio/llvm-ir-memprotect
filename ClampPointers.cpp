@@ -971,13 +971,13 @@ namespace WebCL {
       return n;
     }
     void addDynamicLimitRange(Argument* arg) {
-      // TODO: kernel is disregarded for now
-      // TODO: implement, add enough info to be able to calculate worst case scenario how many limit areas we should use.
       assert(!fixed);
       PointerType* type = cast<PointerType>(arg->getType());
       unsigned asNumber = type->getAddressSpace();
       int idx = dynamicRanges[asNumber].size();
       dynamicRanges[asNumber].push_back(arg);
+      // NOTE: address space info manager should work with terms of Value* just to give access to limits and AreaLimitManager should
+      //       actually create AreaLimitBase instances...
       ASAreaLimit* areaLimit = new ASAreaLimit(*this, getASLimitsFunc(asNumber), asNumber, nthArgAreaLimitIndex(asNumber, idx));
       asAreaLimits[asNumber].insert(areaLimit);
       argumentAreaLimits[arg] = areaLimit;
@@ -1000,6 +1000,8 @@ namespace WebCL {
       }
     }
     // supports only global scope address space structs
+    // @param value GlobalValue whose min and max is returned
+    // @return Set of one area limit if given parameter was global value
     AreaLimitSet getASAllocationsLimitsByValue(Value* value) {
       AreaLimitSet limits;
       if (value == getLocalAllocations() || value == getConstantAllocations()) {
@@ -1007,10 +1009,26 @@ namespace WebCL {
         LLVMContext& c = M.getContext();
         Value* min = global;
         Value* max = ConstantExpr::getGetElementPtr(global, genIntVector<Constant*>(c, 1));
+        // NOTE: AreaLimit creation and bookkeeping should be handled by AreaLimitManager
         limits.insert(AreaLimit::Create(min, max, false));
         return limits;
       }
       return AreaLimitSet();
+    }
+    // NOTE: actually creating limits should be done be arealimit manager
+    //       and address space info manager only contains information of
+    //       value replacements and where to find intructions / Value* required
+    //       for creation.
+    AreaLimitBase* getValueLimit(Value *val) {
+      // TODO: check if value is argument and return argument limits
+      if (Argument *arg = dyn_cast<Argument>(val)) {
+        AreaLimitSet argLimits = getArgumentLimits(arg);
+        fast_assert(argLimits.size() == 1, "We must have limits for arguments. If not something is wrong.");
+        return *argLimits.begin();
+      }
+      // TODO: check if value is field of some address space struct
+      
+    
     }
     GlobalVariable* getLocalAllocations() {
       fixed = true;
@@ -1701,6 +1719,9 @@ namespace WebCL {
       assert(isa<PointerType>(ptrOperand->getType()));
       PointerType* pointerType = cast<PointerType>(ptrOperand->getType());
       int asNumber = pointerType->getAddressSpace();
+      
+      // NOTE: actually interface should be fixed here so that we get just geps from infoManager
+      //       and create limits here
       asLimits = infoManager.getASLimits(asNumber);
 
       // if there was not single limits try to check limits from dependence manager
@@ -1709,8 +1730,11 @@ namespace WebCL {
         Instruction *originalInst = dyn_cast<Instruction>(infoManager.getOriginalValue(inst));
         Value *originalPtrOperand = infoManager.getOriginalValue(ptrOperand);
 
+        // value of original program which defines the limits for access
         Value* base = dependenceAnalyser.getLimitingDependency(originalInst, originalPtrOperand);
 
+        // TODO: what limits are these and why it gets limits by dependence analyser alloca
+        //       which should not be used anymore anywhere...
         asValueLimits = infoManager.getASAllocationsLimitsByValue(base);
 
         // only check replacement if the value itself isn't an address space allocations structure
@@ -1721,17 +1745,18 @@ namespace WebCL {
       
           DEBUG(dbgs() << "Getting limits of inst: "; inst->print(dbgs());
                 dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n";
-                dbgs() << "BASE: "; replacedVal->print(dbgs()); dbgs() << "\n";);
+                dbgs() << "DEP ANALYSER: "; base->print(dbgs()); dbgs() << "\n";
+                dbgs() << "REPLACEMENT: "; replacedVal->print(dbgs()); dbgs() << "\n";);
 
           // find out limits from mappings if it is an safepointer argument or
-          AreaLimitBase *limit = getValueLimit(replacedVal);
-
-          // replace old set
+          AreaLimitBase *limit = infoManager.getValueLimit(replacedVal);
+          
           if (limit) {
-            valueLimits = AreaLimitSet(&limit, &limit + 1);
+            valueLimits.insert(limit);
           }
         }
       }
+      
       // find the smallest area limit containing at least one limit
       std::map<int, AreaLimitSet*> areaLimitMap;
       if (asLimits.size()) areaLimitMap[asLimits.size()] = &asLimits;
@@ -1753,24 +1778,7 @@ namespace WebCL {
 
     // does not exist
     void operator=(const AreaLimitManager&);
-    
-    // find which limits the value respects, value should be pretty straight forward to
-    // trace until some argument or struct field
-    AreaLimitBase* getValueLimit(Value* val) {
-      val = infoManager.getOriginalValue(val);
-      Value* iterator = val;
-      AreaLimitSet limits;
-      do {
-        limits.erase(limits.begin(), limits.end());
-        if (isa<Argument>(val)) {
-          limits = infoManager.getArgumentLimits(cast<Argument>(val));
-        }
-        iterator = dependenceAnalyser.getDependency(iterator);
-      } while (limits.empty() && iterator && iterator != val);
-      assert(limits.size() <= 1);
-      return limits.empty() ? 0 : *limits.begin();
-    }
-    
+        
   };
 
   // Function signatures (where needed)
@@ -3360,6 +3368,7 @@ namespace WebCL {
           fast_assert(false, "Can add check only for load or store");
         }
         
+        DEBUG( dbgs() << "Adding limit checks for:"; (*inst)->print(dbgs()); dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n" );
         createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(*inst, ptrOperand), *inst);
       }
 
