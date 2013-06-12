@@ -990,8 +990,9 @@ namespace WebCL {
     }
     
     void addAddressSpace(unsigned asNumber, bool isGlobalScope, const ArrayRef<Value*> &values, const ArrayRef<Constant*> &dataInit) {
-      // TODO: make copy of values and all other data..
-      // TODO: implement!
+      // isGlobalScope is not used at the moment. it could be used for determining whether to allocate values
+      // from global scope or with alloca, but currently address space is the sole determining factor for
+      // that.
       assert(!fixed);
       for (ArrayRef<Value*>::const_iterator it = values.begin();
            it != values.end();
