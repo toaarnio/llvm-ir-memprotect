@@ -2410,7 +2410,13 @@ namespace WebCL {
     FunctionType *newFunctionType = FunctionType::get( functionType->getReturnType(), paramTypes, false );
     Function *webClKernel = dyn_cast<Function>( M.getOrInsertFunction("", newFunctionType) );
     webClKernel->takeName( origKernel );
-
+    
+    // fix calling conv to correct place (necessary with ptx kernels)
+    CallingConv::ID CC = webClKernel->getCallingConv();
+    webClKernel->setCallingConv(origKernel->getCallingConv());
+    // TODO: when on llvm 3.3 this could be fixed for spir and nvptx separately check CallingConv:: values
+    smartKernel->setCallingConv(CC);
+    
     // create basic block and builder
     BasicBlock* kernelBlock = BasicBlock::Create( c, "entry", webClKernel );
     IRBuilder<> blockBuilder( kernelBlock );
@@ -2431,7 +2437,7 @@ namespace WebCL {
       arg->setName(origArg->getName());
       origArg->setName(origArg->getName() + ".initial");
       Type* t = arg->getType();
-        
+
       if ( t->isPointerTy() ) {
         AreaLimitSet limits = infoManager.getArgumentLimits(origArg);
         assert(limits.size() == 1);
