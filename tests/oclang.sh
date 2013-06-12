@@ -20,7 +20,7 @@ if [ "x$USE_CLC" = "x1" ]; then
     fi
     LIBCLC=$TOPDIR/libclc
   fi
-  TARGET_FLAGS="-I$LIBCLC/generic/include -include $LIBCLC/generic/include/clc/clc.h -Dcl_clang_storage_class_specifiers"
+  TARGET_FLAGS="-I$LIBCLC/generic/include -include $LIBCLC/generic/include/clc/clc.h -Dcl_clang_storage_class_specifiers $TARGET_FLAGS"
 fi
 
 if [ "x$BUILDING_RUNKERNEL" = x1 ]; then 
