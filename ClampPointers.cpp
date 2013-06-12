@@ -1391,8 +1391,9 @@ namespace WebCL {
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
       min->setName("privateLimits.min");
-      // TODO: return proper maximum
-      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
+      Value* castedMinPtr = blockBuilder.CreateBitCast(min, PointerType::get(getASAllocationsType(privateAddressSpaceNumber), localAddressSpaceNumber),
+                                                       "privateLimits.min.casted");
+      max = blockBuilder.CreateGEP(castedMinPtr, genIntVector<Value*>(c, 1));
       max->setName("privateLimits.max");
     }
     ConstantExpr* getConstantAllocationsField(Function *F, IRBuilder<> &blockBuilder, int n) {
@@ -1422,6 +1423,11 @@ namespace WebCL {
       LLVMContext& c = M.getContext();
       // TODO
       return ConstantStruct::get(getASAllocationsType(localAddressSpaceNumber), genIntVector<Constant*>(c, 0));
+    }
+
+    StructType* getASAllocationsType(int asNumber) const {
+      assert(fixed);
+      return const_cast<AddressSpaceInfoManager*>(this)->getASAllocationsType(asNumber);
     }
 
     StructType* getASAllocationsType(int asNumber) {
