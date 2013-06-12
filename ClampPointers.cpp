@@ -2419,7 +2419,7 @@ namespace WebCL {
 
       
     //TODO: fix calling smart kernel.. probably one can ask limits or even safe pointer directly from manager... 
- 
+
     Function::arg_iterator origArg = origKernel->arg_begin();
     for( Function::arg_iterator a = webClKernel->arg_begin(); a != webClKernel->arg_end(); ++a ) {
       Argument* arg = a;
@@ -2456,7 +2456,7 @@ namespace WebCL {
       origArg++;
     }
 
-    DEBUG( dbgs() << "\nCreated arguments: "; 
+    DEBUG( dbgs() << "\nCreated arguments: ";
            for ( size_t i = 0; i < args.size(); i++ ) { 
              args[i]->getType()->print(dbgs()); dbgs() << " "; 
            } dbgs() << "\n"; ) ;
@@ -2995,9 +2995,10 @@ namespace WebCL {
    * 2. For each argument if necessary adds exctractvalue instruction to get passed pointer value
    * 3. Replaces all uses of old function argument with extractvalue instruction or with new function argument if it was not pointer.
    */
-  void moveOldFunctionImplementationsToNewSignatures(const FunctionMap &replacedFunctions, 
+  void moveOldFunctionImplementationsToNewSignatures(const FunctionMap &replacedFunctions,
                                                      const ArgumentMap &replacedArguments,
-                                                     const FunctionSet &safeBuiltinFunctions) {
+                                                     const FunctionSet &safeBuiltinFunctions,
+                                                     AddressSpaceInfoManager &infoManager) {
             
     for (FunctionMap::const_iterator i = replacedFunctions.begin(); i != replacedFunctions.end(); i++) {
       // loop through arguments and if type has changed, then create label to access original arg 
@@ -3011,6 +3012,7 @@ namespace WebCL {
  
       DEBUG( dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n" );
 
+      // TODO: hmm.. why do we need isBuiltin check here? is this part of code deprecated?
       if ( isBuiltin ) {
         const llvm::AttrListPtr& oldAttributes = oldFun->getAttributes();
         // we need to do special operations to fold three safe arguments into one struct
@@ -3034,11 +3036,14 @@ namespace WebCL {
             Instruction* exBegin = ExtractValueInst::Create(oldArg, genVector(1u), name + ".Begin", instAt);
             Instruction* exEnd   = ExtractValueInst::Create(oldArg, genVector(2u), name + ".End", instAt);
 
-            argCur->replaceAllUsesWith(exCur);
             argBegin->replaceAllUsesWith(exBegin);
             argEnd->replaceAllUsesWith(exEnd);
+            argCur->replaceAllUsesWith(exCur);
+            infoManager.addReplacement(argCur, exCur);
           } else {
-            oldArgIt->replaceAllUsesWith(replacedArguments.find(oldArgIt)->second);
+            Value * replacement = replacedArguments.find(oldArgIt)->second;
+            oldArgIt->replaceAllUsesWith(replacement);
+            infoManager.addReplacement(oldArgIt, replacement);
           }
         }          
       } else {
@@ -3056,6 +3061,7 @@ namespace WebCL {
             DEBUG( dbgs() << "type was not changed. Just replacing oldArg uses with newArg.\n" );
             // argument was not tampered, just replace uses to point the new function
             oldArg->replaceAllUsesWith(newArg);
+            infoManager.addReplacement(oldArg, newArg);
           } else {
             // if argument types are not the same we need to find smart pointer that was generated for
             // argument and create initializations so that existing smart alloca will get correct values
@@ -3077,6 +3083,7 @@ namespace WebCL {
             DEBUG( dbgs() << "Replacing old arg: "; oldArg->getType()->print(dbgs()); dbgs() << " with: "; newArgCur->getType()->print(dbgs()); dbgs() << "\n"; );
 
             oldArg->replaceAllUsesWith(newArgCur);
+            infoManager.addReplacement(oldArg, newArgCur);
           }
         } // -- end arguments for loop
       }  
@@ -3381,7 +3388,8 @@ namespace WebCL {
       DEBUG( dbgs() << "\n ----------- CONVERTING OLD FUNCTIONS TO NEW ONES AND FIXING SMART POINTER ARGUMENT PASSING  ----------\n" );
       moveOldFunctionImplementationsToNewSignatures(functionManager.getReplacedFunctions(), 
                                                     functionManager.getReplacedArguments(),
-                                                    functionManager.getSafeBuiltinFunctions());
+                                                    functionManager.getSafeBuiltinFunctions(),
+                                                    addressSpaceInfoManager);
       
       // Finds out kernel functions from Module metadata and creates WebCL kernels from them. `kernel void
       // foo(global float *bar)` -> `kernel void foo(global float *bar, size_t bar_size)`. Also calculates and
