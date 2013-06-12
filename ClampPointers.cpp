@@ -874,7 +874,6 @@ namespace WebCL {
     }
 
     void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
-      LLVMContext& c = F->getContext();
       min = blockBuilder.CreateExtractValue(smartptr, genVector(1u));
       max = blockBuilder.CreateExtractValue(smartptr, genVector(2u));
     }
@@ -1075,7 +1074,7 @@ namespace WebCL {
         return getValueLimit(gep->getPointerOperand());
       } else if (isa<ConstantExpr>(val) && cast<ConstantExpr>(val)->getOpcode() == Instruction::GetElementPtr) {
         return getValueLimit(cast<ConstantExpr>(val)->getOperand(0));
-      } else if (GlobalVariable* global = dyn_cast<GlobalVariable>(val)) {
+      } else if (isa<GlobalVariable>(val)) {
         return getASAllocationsLimitsByValue(val);
       } else {
         DUMP(*arg);
@@ -1538,7 +1537,7 @@ namespace WebCL {
       if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(val) ) {
         DEBUG( dbgs() << "Found GEP: "; val->print(dbgs()); dbgs() << " tracing to baseval.\n"; );
         next = gep->getPointerOperand();
-      } else if ( LoadInst *load = dyn_cast<LoadInst>(val) ) {
+      } else if ( isa<LoadInst>(val) ) {
         DEBUG( dbgs() << "Returning LOAD: "; val->print(dbgs()); dbgs() << "\n"; );
       } else if ( isa<StoreInst>(val) ) {
         fast_assert(false, "No way! I dont have any idea how code can reach this point. Store cannot be used as operand.");
@@ -1763,7 +1762,6 @@ namespace WebCL {
     ~AreaLimitManager() {}
 
     AreaLimitSet getAreaLimits(Instruction* inst, Value* ptrOperand) {
-      Value* current = ptrOperand;
       AreaLimitSet asLimits;
       AreaLimitSet asValueLimits;
       AreaLimitSet valueLimits;
