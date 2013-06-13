@@ -82,7 +82,11 @@ echo "}" >> $KRUNNER_C
 
 BUILDING_RUNKERNEL=1 $OCLANG -o $KRUNNER_BC $KRUNNER_C &&
 llvm-link $LIBRARY_BC  $KRUNNER_BC $kernel_path -o $KRUNNER_LINKED_BC &&
-lli $KRUNNER_LINKED_BC
+if [ "x$BENCHMARK" = "x1" ]; then
+    time lli $KRUNNER_LINKED_BC
+else
+    lli $KRUNNER_LINKED_BC
+fi
 
 ret_val=$?
 
