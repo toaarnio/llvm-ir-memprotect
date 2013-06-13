@@ -28,15 +28,15 @@
 // RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
 // RUN: opt -S -O3 $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.O3.ll &&
 // RUN: echo "Running original.O0:" &&
-// RUN: time lli $OUT_FILE.ll && 
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.ll test_kernel 8 "(int,{0}):(int,1)") && 
 // RUN: echo "Running original.O3:" &&
-// RUN: time lli $OUT_FILE.O3.ll && 
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.ll test_kernel 8 "(int,{0}):(int,1)") && 
 // RUN: echo "Running clamped.O0:" &&
-// RUN: time lli $OUT_FILE.clamped.ll &&
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.clamped.ll test_kernel 8 "(int,{0}):(int,1)") &&
 // RUN: echo "Running O3.clamped:" &&
-// RUN: time lli $OUT_FILE.O3.clamped.ll &&
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.clamped.ll test_kernel 8 "(int,{0}):(int,1)") &&
 // RUN: echo "Running clamped.O3:" &&
-// RUN: time lli $OUT_FILE.clamped.O3.ll
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.clamped.O3.ll)
 
 typedef int int32_t;
 typedef short int16_t;
@@ -117,7 +117,7 @@ float porteuse(const float h,const float p)
   return Porteuse0+hf*(Porteuse1-Porteuse0);
 }
 
-__kernel void test_kernel(__global int16_t* out_val)
+__kernel void test_kernel(__global int* out_val)
 {
   //Formant table for various french vowels (you can add your own)
   float F1[]={  730,  200,  400,  250,  190,  350,  550,  550,  450};
