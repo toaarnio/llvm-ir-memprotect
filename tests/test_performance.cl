@@ -21,10 +21,10 @@
 // NOTE: for now looks like -O3 cripples safe exception load/store analysis
 // TODO: get times from unclamped versions and compare to clamped ones and expect perf hit to be max 30%
 
-// RUN: TARGET_FLAGS="-target nvptx" clang -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
+// RUN: clang -target nvptx -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
 // RUN: opt -S -O3 $OUT_FILE.ll -o $OUT_FILE.O3.ll &&
-// RUN: opt -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
+// RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
 // RUN: opt -S -O3 $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.O3.ll &&
 // RUN: echo "Running original.O0:" &&
@@ -41,10 +41,12 @@
 typedef int int32_t;
 typedef short int16_t;
 
-float expf(float f)
-{
-  return exp(f);
-}
+float expf(float f);
+float sinf(float f);
+float cosf(float f);
+float floorf(float f);
+float powf(float a, float b);
+float fmodf(float x, float y);
 
 //Approximates cos(pi*x) for x in [-1,1].
 float fast_cos(const float x)
@@ -104,7 +106,7 @@ float formant(float p,float i, float TF[])
 // p : phase
 float porteuse(const float h,const float p)
 {
-  float h0=floor(h);  //integer and
+  float h0=floorf(h);  //integer and
   float hf=h-h0;      //decimal part of harmonic number.
   // modulos pour ramener p*h0 et p*(h0+1) dans [-1,1]
   float phi0=fmodf(p* h0   +1+1000,2.0f)-1.0f;
