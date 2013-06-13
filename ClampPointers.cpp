@@ -1585,13 +1585,51 @@ namespace WebCL {
     Value* getBaseDep(Value *op) {
       Value *current = op;
       Value *next = NULL;
-      // TODO: make sure our tree cannot have circular dependencies..
+      
       while (true) {
         next = getDependency(current);
         if (current == next) break;
         current = next;
       }
       return next;
+    }
+    
+    // returns list of all base dependencies of value
+    void getAllBaseDependencies(Value* op, ValueSet &retVal, InstrSet *checkedLocations = NULL) {
+      
+      dbgs() << "GETTING BASE:"; op->print(dbgs()); dbgs() << "\n";
+      if (LoadInst *load = dyn_cast<LoadInst>(op)) {
+        op = load->getPointerOperand();
+      }
+      
+      int indirection = getIndirection(op->getType());
+      DepKey key = DepKey(indirection, op);
+      
+      dbgs() << "depkey: [" << indirection << ","; op->print(dbgs()); dbgs() << "]\n";
+      
+      DepValueSet deps = dependencies[key];
+      
+      // I did prefer static memory allocation without changing original call places.. wastes some inits in recursion though, hardly a bottleneck
+      InstrSet checkedLocationsSetAllocation;
+      if (checkedLocations == NULL) {
+        checkedLocations = &checkedLocationsSetAllocation;
+      }
+      
+      for (DepValueSet::iterator iter = deps.begin(); iter != deps .end(); iter++) {
+        const DepValue &dep = *iter;
+        dbgs() << "ITERATING DEP:"; dep.first->print(dbgs()); dbgs() << " OP: "; dep.second->print(dbgs()); dbgs() << "\n";
+        if (checkedLocations->count(dep.first) == 0) {
+          checkedLocations->insert(dep.first);
+
+          if (dep.second == op) {
+            // if self dependence then we did find root
+            retVal.insert(dep.second);
+          } else {
+            // otherwise keep on walking
+            getAllBaseDependencies(dep.second, retVal, checkedLocations);
+          }
+        }
+      }
     }
     
   public:
@@ -1653,29 +1691,48 @@ namespace WebCL {
     //       int -> ptr casts (and then passing pointer to call or accessing data). 
     // @param indirection number of pointers before reading actual value stored in address
     //                    needed to be able to trace dependencies
-    void addDependency(int indirection,
+    bool addDependency(int indirection,
                        Instruction* applyLocation,
                        Value* newVal, Value *whoseLimitsToRespect) {
 
       DepKey key = DepKey(indirection, newVal);
+
+      // if the exact same dependency is already there return false to be able to prevent loops in analysis
+      DepValueSet &oldDeps = dependencies[key];
+      for (DepValueSet::iterator dvIter = oldDeps.begin(); dvIter != oldDeps.end(); ++dvIter) {
+        Instruction* oldLocation = dvIter->first;
+        if (oldLocation == applyLocation) return false;
+      }
       
-      dbgs() << "\nAdding dependency[" << indirection << ": "; newVal->print(dbgs()); dbgs() << "] = "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n";
-      
+      DEBUG( dbgs() << "\n## Adding dependency[" << indirection << ": "; newVal->print(dbgs()); dbgs() << "] = "; whoseLimitsToRespect->print(dbgs()); dbgs() << "\n"; );
       dependencies[key].insert( DepValue(applyLocation, whoseLimitsToRespect) );
+      return true;
     }
     
+    // @return Dependency of value. Returns it self in case of root dependence. NULL if no dependencies found.
     Value* getDependency(Value *value) {
       
+      ValueSet baseSet;
+      
+      getAllBaseDependencies(value, baseSet);
+      
+      fast_assert( baseSet.size() == 1, "More than 1 possible dependencies. Add here some more algorithm to resolve which one is the correct.");
+
+      return (*baseSet.begin());
+/*
       if (LoadInst *load = dyn_cast<LoadInst>(value)) {
         value = load->getPointerOperand();
       }
 
+      // TODO: fix this to eliminate circular dependencies.
+
       int indirection = getIndirection(value->getType());
 
-      dbgs() << "Dep for: [" << indirection << ":"; value->print(dbgs()); dbgs() << "]\n";
+      dbgs() << "# getDependency Dep for: [" << indirection << ":"; value->print(dbgs()); dbgs() << "] \t";
       DepKey key = DepKey(indirection, value);
       DepValueSet &depSet = dependencies[key];
 
+      
       if (depSet.size() == 0) return NULL;
 
       if (depSet.size() > 1) {
@@ -1683,17 +1740,26 @@ namespace WebCL {
         //       limits for load / store / call operand. Correct one can be resolved from DepValue location
         //       and value location.
         
+        // verify that all deps points ultimately to same limiting depencence
+        Value *dep = NULL;
         for (DepValueSet::iterator dv = depSet.begin(); dv != depSet.end(); ++dv) {
-          dbgs() << "Dep: "; dv->second->print(dbgs());
-          dbgs() << "\nWas set in: "; dv->first->print(dbgs()); dbgs() << "\n";
+          DEBUG( dbgs() << "Found multiple choices:\n"; );
+          DEBUG( dbgs() << "\nDep: "; dv->second->print(dbgs()); dbgs() << "\t Was set in: "; dv->first->print(dbgs()); dbgs() << "\n"; );
+          
+          ValueSet bases;
+          getAllBaseDependencies(dv->second, bases);
+          fast_assert(bases.size() == 1, "Operand has multiple base dependences.");
+          Value *next = *(bases.begin());
+           if ( dep != NULL ) {
+            fast_assert(dep != next, "More than 1 possible dependencies. Add here some more algorithm to resolve which one is the correct.");
+          }
+          dep = next;
         }
-        
-        fast_assert(false, "More than 1 possible dependencies. Add here some more algorithm to resolve which one is the correct.");
       }
-      
-      dbgs() << "returning: "; (*depSet.begin()).second->print(dbgs()); dbgs() << "\n";
-      
+
+      dbgs() << "returning: "; (*depSet.begin()).second->print(dbgs()); dbgs() << " end getDependency ####\n";      
       return (*depSet.begin()).second;
+*/
     }
     
     bool hasOnlySafeAccesses(Value *ptrVal) {
@@ -2007,7 +2073,7 @@ namespace WebCL {
    * @param indirection tells how many levels we have pointers, if we follow store 
    */
   void resolveUses(Value *val, DependenceAnalyser &dependenceAnalyser, int indirection = 1, int recursion_level = 0) {
-      
+        
     // check all uses of value until cannot trace anymore
     for( Value::use_iterator i = val->use_begin(); i != val->use_end(); ++i ) {
       Value *use = *i;
@@ -2038,9 +2104,9 @@ namespace WebCL {
             // adds also place where limit was set to be able to trace, which limit
             // is valid in which place
             indirAfter++;
-            dependenceAnalyser.addDependency(indirAfter, store, store->getPointerOperand(), val);
-            resolveUses(store->getPointerOperand(), dependenceAnalyser, indirAfter,
-                        recursion_level + 1);
+            if ( dependenceAnalyser.addDependency(indirAfter, store, store->getPointerOperand(), val) ) {
+              resolveUses(store->getPointerOperand(), dependenceAnalyser, indirAfter, recursion_level + 1);
+            }
           }
         } else if (store->getPointerOperand() == val) {
           // TODO: should we trace also storePtrOperand uses in case if indirection > 1?
@@ -2060,7 +2126,16 @@ namespace WebCL {
         }
         DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
         DEBUG( dbgs() << "  ## Found valid pointer cast, keep on tracking.\n" );
-          
+        
+      } else if ( PHINode* phi = dyn_cast<PHINode>(use) ) {
+        DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+        DEBUG( dbgs() << "  ## Found PHI node, add just keep on resolving.\n" );
+
+        // DEBUG( dbgs() << "  ## Found PHI node, add deps for each operand.\n" );
+        //for (int i = 0; i < phi->llvm::User::getNumOperands(); i++) {
+        //  dependenceAnalyser.addDependency(indirAfter, phi, phi, phi->getOperand(i));
+        //}
+        
       } else {
         // notify about unexpected cannot be resolved cases for debug
         DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
@@ -2069,8 +2144,9 @@ namespace WebCL {
       }
         
       // limits of use are directly derived from value
-      dependenceAnalyser.addDependency(indirAfter, dyn_cast<Instruction>(use), use, val);
-      resolveUses(use, dependenceAnalyser, indirAfter, recursion_level + 1);
+      if (dependenceAnalyser.addDependency(indirAfter, dyn_cast<Instruction>(use), use, val)) {
+        resolveUses(use, dependenceAnalyser, indirAfter, recursion_level + 1);
+      }
     }
   }
 
@@ -2117,11 +2193,11 @@ namespace WebCL {
       
     if (next) {
       if (dependenceAnalyser.getDependency(next) != NULL) {
-        dependenceAnalyser.addDependency(1, NULL, val, dependenceAnalyser.getDependency(next));
+        dependenceAnalyser.addDependency(1, dyn_cast<Instruction>(val), val, dependenceAnalyser.getDependency(next));
         return true;
       } else {
         if (resolveAncestors(next, dependenceAnalyser, recursion_level + 1)) {
-          dependenceAnalyser.addDependency(1, NULL, val, dependenceAnalyser.getDependency(next));
+          dependenceAnalyser.addDependency(1, dyn_cast<Instruction>(val), val, dependenceAnalyser.getDependency(next));
           return true;
         }
       }
@@ -3224,26 +3300,14 @@ namespace WebCL {
           }
 
         } else if ( AllocaInst *alloca = dyn_cast< AllocaInst >(&inst) ) {
-            
-          // TODO: check if alloca is from smart pointer argument. 
-          // ( for these we should no do traditional smart pointer initialization, 
-          //  but initialize them from sp read from argument )
-            
           functionManager.addAlloca(alloca);
           DEBUG( dbgs() << "Found alloca: "; alloca->print(dbgs()); dbgs() << "\n" );
             
         } else if ( StoreInst *store = dyn_cast< StoreInst >(&inst) ) {
-            
-          if (dyn_cast<Argument>(store->getValueOperand())) {
-            DEBUG( dbgs() << "Skipping store which reads function argument: "; store->print(dbgs()); dbgs() << "\n" );
-            continue;
-          } 
-            
           functionManager.addStore(store);
           DEBUG( dbgs() << "Found store: "; store->print(dbgs()); dbgs() << "\n" );
             
-        } else if ( LoadInst *load = dyn_cast< LoadInst >(&inst) ) {            
-            
+        } else if ( LoadInst *load = dyn_cast< LoadInst >(&inst) ) {
           functionManager.addLoad(load);
           DEBUG( dbgs() << "Found load: "; load->print(dbgs()); dbgs() << "\n" );
 
@@ -3557,6 +3621,12 @@ namespace WebCL {
           }
         }
 
+        // resolve also uses of alloca instructions, otherwise we might not be able to trace private variable limits
+        for (AllocaInstrSet::const_iterator allocaIter = allocs.begin() ; allocaIter != allocs.end(); ++allocaIter) {
+          AllocaInst *alloca = *allocaIter;
+          resolveUses(alloca, dependenceAnalyser);
+        }
+        
         DEBUG( dbgs() << "----- Tracing call/load/store operands: \n"; );
         for (ValueSet::iterator limitOperand = resolveLimitsOperands.begin();
              limitOperand != resolveLimitsOperands.end() ; limitOperand++) {
@@ -3565,11 +3635,10 @@ namespace WebCL {
           DEBUG( dbgs() << "Tracing dependency for: "; val->print(dbgs()); dbgs() << "\n"; );
 
           if ( resolveAncestors(val, dependenceAnalyser) ) {
-            DEBUG( dbgs() << "Traced limits successful!\n"; );
             fast_assert( dependenceAnalyser.getDependency(val) != NULL,
                          "Got true from resolve. Obviously limits should have been added to set.");
           } else {
-            DEBUG( dbgs() << "Could not trace the dependency!\n"; );
+            DEBUG( dbgs() << "!!! Could not trace the dependency!\n"; );
           }
         }
         
