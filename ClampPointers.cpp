@@ -2363,18 +2363,23 @@ namespace WebCL {
 
   void createMainEntryPoint(Module& M,
                             const FunctionMap &replacedFunctions,
-                            ValueSet& safeExceptions) {
-    Function* main = 0;
+                            ValueSet& safeExceptions,
+                            AddressSpaceInfoManager &infoManager) {
+    Function* origMain = 0;
+    Function* smartMain = 0;
     for (FunctionMap::const_iterator funIt = replacedFunctions.begin();
-         !main && funIt != replacedFunctions.end();
+         !origMain && funIt != replacedFunctions.end();
          ++funIt) {
       if (funIt->first->getName() == "main") {
-        main = funIt->second;
+        origMain = funIt->first;
+        smartMain = funIt->second;
       }
     }
-    if (main) {
+    if (origMain) {
       LLVMContext& c = M.getContext();
-      IRBuilder<> blockBuilder( main->getEntryBlock().begin() );
+      // If there is need, create new kernel wrapper and replace old kernel reference with new WebCl
+      // compatible version.
+      createWebClKernel(M, origMain, smartMain, infoManager);
     }
   }
 
@@ -2476,8 +2481,12 @@ namespace WebCL {
              a->getType()->print(dbgs()); dbgs() << " ";
            } dbgs() << "\n"; ) ;
 
-    blockBuilder.CreateCall(smartKernel, args);
-    blockBuilder.CreateRetVoid();
+    Value* retValue = blockBuilder.CreateCall(smartKernel, args);
+    if (retValue->getType()->isVoidTy()) {
+      blockBuilder.CreateRetVoid();
+    } else {
+      blockBuilder.CreateRet(retValue);
+    }
 
     DEBUG( webClKernel->print(dbgs()) );
     return webClKernel;
@@ -3414,7 +3423,7 @@ namespace WebCL {
 
       // The same but for only 'main' functions; currently only handles the allocation of private structs
       if (RunUnsafeMode) {
-        createMainEntryPoint(M, functionManager.getReplacedFunctions(), safeExceptions);
+        createMainEntryPoint(M, functionManager.getReplacedFunctions(), safeExceptions, addressSpaceInfoManager);
       }
 
       
