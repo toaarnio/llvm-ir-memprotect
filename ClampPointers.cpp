@@ -10,14 +10,14 @@
 // [Go directly to algorithm](#runOnModule) TODO: Write complete "proof summary" here and refer later sections
 
 #include "llvm/Pass.h"
-#include "llvm/Function.h"
-#include "llvm/Module.h"
-#include "llvm/Constants.h"
-#include "llvm/Instructions.h"
-#include "llvm/Intrinsics.h"
-#include "llvm/User.h"
-#include "llvm/IRBuilder.h"
-#include "llvm/Operator.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/User.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Operator.h"
 
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/raw_ostream.h"
@@ -73,61 +73,6 @@ namespace {
 #define DUMP(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " DUMP(" << (#contents) << ") = " << (contents) << "\n"; )
 #define DUMP_CONTAINER(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " DUMP(" << (#contents) << ") = " << "\n"; dumpContainer(contents); )
 #define DUMP_CONTAINER2(contents) DEBUG( dbgs() << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << " DUMP(" << (#contents) << ") = " << "\n"; dumpContainer2(contents); )
-
-// LLVM 3.2 didn't support ConstantExpt::getAsInstruction() yet
-// so for now we have copypasted it from trunk. This will be removed in future llvm.
-Instruction *getAsInstruction(ConstantExpr *expr) {
-  SmallVector<Value*,4> ValueOperands;
-  for (ConstantExpr::op_iterator I = expr->op_begin(), E = expr->op_end(); I != E; ++I)
-    ValueOperands.push_back(cast<Value>(I));
-  ArrayRef<Value*> Ops(ValueOperands);
-  switch (expr->getOpcode()) {
-  case Instruction::Trunc:
-  case Instruction::ZExt:
-  case Instruction::SExt:
-  case Instruction::FPTrunc:
-  case Instruction::FPExt:
-  case Instruction::UIToFP:
-  case Instruction::SIToFP:
-  case Instruction::FPToUI:
-  case Instruction::FPToSI:
-  case Instruction::PtrToInt:
-  case Instruction::IntToPtr:
-  case Instruction::BitCast:
-    return CastInst::Create((Instruction::CastOps)expr->getOpcode(), Ops[0], expr->getType());
-  case Instruction::Select:
-    return SelectInst::Create(Ops[0], Ops[1], Ops[2]);
-  case Instruction::InsertElement:
-    return InsertElementInst::Create(Ops[0], Ops[1], Ops[2]);
-  case Instruction::ExtractElement:
-    return ExtractElementInst::Create(Ops[0], Ops[1]);
-  case Instruction::InsertValue:
-    return InsertValueInst::Create(Ops[0], Ops[1], expr->getIndices());
-  case Instruction::ExtractValue:
-    return ExtractValueInst::Create(Ops[0], expr->getIndices());
-  case Instruction::ShuffleVector:
-    return new ShuffleVectorInst(Ops[0], Ops[1], Ops[2]);
-  case Instruction::GetElementPtr:
-    if (cast<GEPOperator>(expr)->isInBounds())
-      return GetElementPtrInst::CreateInBounds(Ops[0], Ops.slice(1));
-    else
-      return GetElementPtrInst::Create(Ops[0], Ops.slice(1));
-  case Instruction::ICmp:
-  case Instruction::FCmp:
-    return CmpInst::Create((Instruction::OtherOps)expr->getOpcode(), expr->getPredicate(), Ops[0], Ops[1]);
-  default:
-    assert(expr->getNumOperands() == 2 && "Must be binary operator?");
-    BinaryOperator *BO =
-      BinaryOperator::Create((Instruction::BinaryOps)expr->getOpcode(), Ops[0], Ops[1]);
-    if (isa<OverflowingBinaryOperator>(BO)) {
-      assert(false && "Not supported hopefully never needed until llvm 3.3 is out.");
-    }
-    if (isa<PossiblyExactOperator>(BO)) {
-      assert(false && "Not supported hopefully never needed until llvm 3.3 is out.");
-    }
-    return BO;
-  }
-}
 
 // # WebCL to OpenCL instrumentation
 // Detailed description of the algorithm is documented in [virtual bool runOnModule( Module &M )](#runOnModule)
@@ -1557,7 +1502,7 @@ namespace WebCL {
           next = cast->getOperand(0);
         }
       } else if ( ConstantExpr *expr = dyn_cast<ConstantExpr>(val) ) {
-        Instruction* inst = getAsInstruction(expr);
+        Instruction* inst = expr->getAsInstruction();
         if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
           DEBUG( dbgs() << "... constant GEP, following to baseval.\n"; );
           next = gep->getPointerOperand();
@@ -1980,8 +1925,8 @@ namespace WebCL {
                                                functionType->param_end() );
     TypeVector newTypes;
 
-    const llvm::AttrListPtr& origAttributes = F.getAttributes();
-    llvm::AttrListPtr newAttributes;
+    const AttributeSet& origAttributes = F.getAttributes();
+    AttributeSet newAttributes;
 
     // Construct new attributes and new types. There may be fewer
     // arguments than in the original as three pointer arguments are
@@ -1994,9 +1939,10 @@ namespace WebCL {
               E = F.arg_end();
             origArgIt != E;
             ++origArgIt, ++newArgIdx, ++origArgIdx ) {
-        llvm::Attributes attribs = origAttributes.getParamAttributes(origArgIdx);
-        newAttributes = newAttributes.addAttr(c, newArgIdx, attribs);
-        bool byval = attribs.hasAttribute(llvm::Attributes::ByVal);
+        AttributeSet attribs = origAttributes.getParamAttributes(origArgIdx);
+
+        newAttributes = newAttributes.addAttributes(c, newArgIdx, attribs);
+        bool byval = attribs.hasAttrSomewhere(llvm::Attribute::ByVal);
 
         if ( !byval && isa<PointerType>(origArgIt->getType()) ) {
           PointerType* pt0 = dyn_cast<PointerType>(origArgIt->getType());
@@ -2036,12 +1982,12 @@ namespace WebCL {
            newArgIt   = newFunction->arg_begin();
          origArgIt != E;
          ++origArgIt, ++newArgIt ) {
-      bool byval = origAttributes.getParamAttributes(origArgIt->getArgNo() + 1).hasAttribute(llvm::Attributes::ByVal);
+      bool byval = origAttributes.getParamAttributes(origArgIt->getArgNo() + 1).hasAttrSomewhere(llvm::Attribute::ByVal);
       // remove attribute which does not make sense for non-pointer argument
       // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
       int argIdx = newArgIt->getArgNo()+1;
-      newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)) );
-      newFunction->removeAttribute( argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)) );
+      AttributeSet removeAttrs = AttributeSet::get(c, argIdx, genVector(Attribute::NoCapture, Attribute::ByVal));
+      newFunction->removeAttributes(argIdx, removeAttrs);
 
       // it is a smart pointer: we can skip three of the original arguments
       if (!byval && isa<PointerType>(origArgIt->getType())) {
@@ -2181,7 +2127,7 @@ namespace WebCL {
       }
     } else if ( ConstantExpr *expr = dyn_cast<ConstantExpr>(val) ) {
           
-      Instruction* inst = getAsInstruction(expr);
+      Instruction* inst = expr->getAsInstruction();
       if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
         DEBUG( dbgs() << "... constant GEP, following to baseval.\n"; );
         next = gep->getPointerOperand();
@@ -2688,7 +2634,7 @@ namespace WebCL {
 
     if ( ConstantExpr *constExpr = dyn_cast<ConstantExpr>(operand) ) {
         
-      Instruction* inst = getAsInstruction(constExpr);
+      Instruction* inst = constExpr->getAsInstruction();
       if ( GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(inst) ) {
         isSafe = isSafeGEP(gep);
       } else {
@@ -2966,41 +2912,6 @@ namespace WebCL {
       retArg = convertArgumentToSmartStruct(operand, min, max, call);
       removeAttribute = true;
 
-      // TODO: what is currently official limit API?...
-      // retArg = convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call);
-
-  /* HOPEFULLY THIS IS NOW ENOUGH... add tricks from below if normal llvm optimizations cannot handle them
-      retArg = convertArgumentToSmartStruct(operand, operand, operand, false, call);
-      removeAttribute = true;
-      
-      
-      if ( Argument* arg = dyn_cast<Argument>(operand) ) {
-        // if operand is argument it should be found from replacement map
-        DEBUG( dbgs() << "Operand is argument of the same func! Passing it through.\n"; );
-        retArg = replacedArguments.find(arg)->second;
-          
-      } else if (ExtractValueInst *extract = dyn_cast<ExtractValueInst>(operand)) {
-        // TODO: REMOVE THIS HACK IT OPENS SECURITY HOLE, ALWAYS GET LIMITS FROM RESULT OF ANALYSIS
-        //       THIS WILL ALLOW UNSAFE CODE IF STRUCT IS GIVEN AS ARGUMENT AND THEN ONE ELEMENT OF
-        //       IT IS PASSED TO OTHER FUNCTION
-        Value* aggregateOp = extract->getAggregateOperand();
-        DEBUG( dbgs() << "Operand is extractval of argument of the same func: "; aggregateOp->print(dbgs()); dbgs() << "\n"; );
-        // TODO: to make this secure we have to check that operand argument is listed in replaced argument map and is really generated by us (types in replaced arguments must been changed)
-        retArg = aggregateOp;
-      } else {
-        AreaLimitBase *limit = areaLimitManager.getAreaLimits(call, );
-        // TODO: Temporarily disabled mechanism to allow running the app through for development purposes.
-        // if (valLimits.count(operand) > 0) {
-        //   limit = valLimits[operand];
-        // } else {
-        //   DEBUG( dbgs() << "In basic block: \n"; call->getParent()->print(dbgs()); dbgs() << "\nin call:\n"; call->print(dbgs()); dbgs() << "\nOperand:"; operand->print(dbgs()); dbgs() << "\n"; );
-        //   fast_assert(false, "Could not resolve limits for a value passed as operand. Try to make code less obscure, write better limit analysis or do not change signature of this method at all and check against all limits of address space.");
-        // }
-        // retArg = convertArgumentToSmartStruct(operand, limit->min, limit->max, limit->indirect, call);
-        retArg = convertArgumentToSmartStruct(operand, operand, operand, false, call);
-        removeAttribute = true;
-      }
-*/
     } else {
       retArg = operand;
     }
@@ -3078,7 +2989,7 @@ namespace WebCL {
         call->setOperand(op, replaceCallArgument(call, call->getOperand(op), oldArg, newArg, replacedArguments, removeAttribute, areaLimitManager));
         if (removeAttribute) {
           int argIdx = a->getArgNo() + 1; // removeAttribute does know about arg# 0 (the return value), thus +1
-          call->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
+          call->removeAttribute(argIdx, Attribute::get(c, llvm::Attribute::ByVal));
         }
 
         op++;
@@ -3114,14 +3025,14 @@ namespace WebCL {
 
       // TODO: hmm.. why do we need isBuiltin check here? is this part of code deprecated?
       if ( isBuiltin ) {
-        const llvm::AttrListPtr& oldAttributes = oldFun->getAttributes();
+        const llvm::AttributeSet& oldAttributes = oldFun->getAttributes();
         // we need to do special operations to fold three safe arguments into one struct
         for( Function::arg_iterator
                oldArgIt = oldFun->arg_begin(),
                newArgIt = newFun->arg_begin();
              oldArgIt != oldFun->arg_end(); 
              ++oldArgIt, ++newArgIt ) {
-          bool byval = oldAttributes.getParamAttributes(oldArgIt->getArgNo() + 1).hasAttribute(llvm::Attributes::ByVal);
+          bool byval = oldAttributes.getParamAttributes(oldArgIt->getArgNo() + 1).hasAttrSomewhere(llvm::Attribute::ByVal);
           if ( !byval && isa<PointerType>(oldArgIt->getType()) ) {
             Argument*   argCur   = oldArgIt;
             ++oldArgIt; assert(oldArgIt != oldFun->arg_end());
@@ -3261,9 +3172,9 @@ namespace WebCL {
       // remove attribute which does not make sense for non-pointer argument
       // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
       int argIdx = a_new->getArgNo()+1;
-      new_function->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::NoCapture)));
+      new_function->removeAttributes(argIdx, AttributeSet::get(c, argIdx, genVector(llvm::Attribute::NoCapture)));
       if (safeTypeArgNos.count(a_new->getArgNo())) {
-        new_function->removeAttribute(argIdx, Attributes::get(c, genVector(llvm::Attributes::ByVal)));
+        new_function->removeAttributes(argIdx, AttributeSet::get(c, argIdx, genVector(llvm::Attribute::ByVal)));
       }
         
       *argumentMappingInserter++ = std::make_pair(a, a_new);
