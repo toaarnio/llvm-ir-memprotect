@@ -36,7 +36,7 @@
 // RUN: echo "Running O3.clamped:" &&
 // RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.clamped.ll test_kernel 8 "(int,{0}):(int,1)") &&
 // RUN: echo "Running clamped.O3:" &&
-// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.clamped.O3.ll)
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.clamped.O3.ll test_kernel 8 "(int,{0}):(int,1)")
 
 typedef int int32_t;
 typedef short int16_t;
