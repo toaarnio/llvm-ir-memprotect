@@ -2457,6 +2457,10 @@ namespace WebCL {
         a->setName(origArg->getName() + ".size");
         GetElementPtrInst *lastLimit = dyn_cast<GetElementPtrInst>(blockBuilder.CreateGEP(arg, elementCount));
 
+        if (isa<PointerType>(arg->getType())) {
+          fast_assert(cast<PointerType>(arg->getType())->getAddressSpace() != privateAddressSpaceNumber,
+                      "Arguments cannot be in private address space. Is the file compiled properly?");
+        }
         blockBuilder.CreateStore(arg, min);
         blockBuilder.CreateStore(lastLimit, max);
           
