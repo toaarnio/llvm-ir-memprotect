@@ -82,11 +82,11 @@ namespace WebCL {
   // address spaces, whose variables are in global scope from global scope
   // and address spaces allocated with alloca in function scope
   
-  // Numbers according to SPIR target
-  //const unsigned privateAddressSpaceNumber  = 0;
-  //const unsigned globalAddressSpaceNumber   = 1;
-  //const unsigned constantAddressSpaceNumber = 2;
-  //const unsigned localAddressSpaceNumber    = 3;
+  // Numbers according to SPIR target (if nvptx constantAddressSpaceNumber will be overrided to be 4)
+  unsigned privateAddressSpaceNumber  = 0;
+  unsigned globalAddressSpaceNumber   = 1;
+  unsigned constantAddressSpaceNumber = 2;
+  unsigned localAddressSpaceNumber    = 3;
 
   // std::string addressSpaceLabel(unsigned as) {
   //   switch (as) {
@@ -99,10 +99,10 @@ namespace WebCL {
   // }
 
   // Numbers of NVPTX backend: http://llvm.org/docs/NVPTXUsage.html
-  const unsigned privateAddressSpaceNumber  = 0;
-  const unsigned globalAddressSpaceNumber   = 1;
-  const unsigned constantAddressSpaceNumber = 4;
-  const unsigned localAddressSpaceNumber    = 3; // Shared address space
+  //const unsigned privateAddressSpaceNumber  = 0;
+  //const unsigned globalAddressSpaceNumber   = 1;
+  //const unsigned constantAddressSpaceNumber = 4;
+  //const unsigned localAddressSpaceNumber    = 3; // Shared address space
 
   std::string addressSpaceLabel(unsigned as) {
     switch (as) {
@@ -3272,6 +3272,13 @@ namespace WebCL {
     // 6. Add boundary checks to loads/stores if instruction was not proved to be valid in compile time.
     // 7. Fix calls to unsafe builtin functions to call safe versions instead.
     virtual bool runOnModule( Module &M ) {
+
+      // set address space mapping depending on backend
+      if (std::string::npos != std::string(M.getTargetTriple()).find("nvptx")) {
+        DEBUG( dbgs() << "Compiling for NVPTX\n"; );
+        constantAddressSpaceNumber = 4;
+      }
+      
       FunctionManager functionManager(M);
       
       ValueSet       resolveLimitsOperands;
@@ -3464,9 +3471,9 @@ namespace WebCL {
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
-      dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
-      M.print(dbgs(), NULL);
-      dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
+      // dbgs() << "\n --------------- FINAL OUTPUT --------------\n";
+      // M.print(dbgs(), NULL);
+      // dbgs() << "\n --------------- FINAL OUTPUT END --------------\n";
       return true;
     }
       
@@ -3481,9 +3488,22 @@ namespace WebCL {
       }
 
       for ( Module::iterator F = M.begin(); F != M.end(); ++F) {
-
+        
         std::string functionName = extractItaniumDemangledFunctionName(F->getName().str());
 
+        if (F->getName() == "clamppointers_keep_reference") {
+          // if these iterators works as STL iterators, then this kind of deletion should be ok...
+          Function *deleteMe = F;
+          if (F != M.begin()) {
+            F--;
+            deleteMe->eraseFromParent();
+          } else {
+            deleteMe->eraseFromParent();
+            F = M.begin();
+          }
+          continue;
+        }
+        
         if ( F->isIntrinsic() || F->isDeclaration() ||
              unsupportedUnsafeBuiltins.count(functionName) ) {
           continue;

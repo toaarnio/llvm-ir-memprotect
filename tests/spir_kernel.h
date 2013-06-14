@@ -2760,10 +2760,11 @@ DECLARE_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomic_xchg);
 DECLARE_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomic_xchg);
 
 // build a giant fake function to make references to forementioned functions
-#ifdef REFER_BUILTINS
+
 // can be implemented as a function returning 0
 char* clamppointers_mkpointer(void);
 
+#ifndef BUILDING_RUNKERNEL
 void clamppointers_keep_reference(void)
 {
   REFER_FOR_DUMP_ADDRESS();
@@ -2814,13 +2815,3 @@ void clamppointers_keep_reference(void)
 }
 #endif
 
-// vload_half/vstore_half variants not supported for now. 
-
-/*
-void wait_group_events__smart_ptrs__IPE(int num_events, smart_event_t *event_list) {
-     if (event_list->current >= event_list->first && event_list->current+num_events <= event_list->last) {
-        wait_group_events(num_events, event_list->current);
-     }
-}
-
-*/
