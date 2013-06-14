@@ -18,10 +18,10 @@
 
 // The output is a 44100Hz 16bit stereo PCM file.
 
-// RUN: clang -x cl -target nvptx -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
+// RUN: $OCLANG -c $TEST_SRC -O0 -o $OUT_FILE.bc &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
 // RUN: opt -O3 $OUT_FILE.bc -o $OUT_FILE.O3.bc &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.bc -o $OUT_FILE.clamped.bc &&
+// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.bc -o $OUT_FILE.clamped.bc &&
 // RUN: opt -O3 $OUT_FILE.clamped.bc -o $OUT_FILE.clamped.optimized.bc &&
 // RUN: echo "Running original and clamped and comparing outputs:" &&
 // RUN: [ $($RUN_KERNEL $OUT_FILE.O3.bc test_kernel 1 "(int,{0}):(int,1)") == $($RUN_KERNEL $OUT_FILE.clamped.optimized.bc test_kernel 1 "(int,{0}):(int,1)") ] &&
@@ -37,7 +37,7 @@ float floorf(float f);
 float powf(float a, float b);
 float fmodf(float x, float y);
 
-int printf(const char* fmt, int arg);
+//int printf(const char* fmt, int arg);
 
 //Approximates cos(pi*x) for x in [-1,1].
 float fast_cos(const float x)
@@ -108,9 +108,8 @@ float porteuse(const float h,const float p)
   return Porteuse0+hf*(Porteuse1-Porteuse0);
 }
 
-volatile int16_t val;
 
-int main()
+__kernel void test_kernel(__global int* out_val)
 {
   //Formant table for various french vowels (you can add your own)
   float F1[]={  730,  200,  400,  250,  190,  350,  550,  550,  450};
@@ -156,7 +155,5 @@ int main()
 
       // write to volatile variable to test... (use puts to verify correctness)
       printf("%i", (int16_t)(15000.0f*out));
-    }
-  
-  return 0;
+    }  
 }

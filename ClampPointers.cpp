@@ -1585,7 +1585,8 @@ namespace WebCL {
       for (DepValueSet::iterator iter = deps.begin(); iter != deps .end(); iter++) {
         const DepValue &dep = *iter;
         DEBUG( dbgs() << "ITERATING DEP:"; dep.first->print(dbgs()); dbgs() << " OP: "; dep.second->print(dbgs()); dbgs() << "\n"; );
-        if (checkedLocations->count(dep.first) == 0) {
+        // if location is not any instruction or not already passed through
+        if (dep.first == NULL || checkedLocations->count(dep.first) == 0) {
           checkedLocations->insert(dep.first);
 
           if (dep.second == op) {
@@ -1622,10 +1623,12 @@ namespace WebCL {
             Value *opVal = *op;
             if (opVal->getType()->isPointerTy()) {
               Value *base = getBase(opVal);
-              DEBUG(dbgs() << "Used in call operand: "; inst->print(dbgs());
-                    dbgs() << " base: "; base->print(dbgs()); dbgs() << "\n";);
-              usedInCallOperand.insert(base);
-              if (dyn_cast<LoadInst>(base)) indirectAccesses.insert( IndirectAccess(inst, opVal) );
+              if (!base->getType()->isFunctionTy()) {
+                DEBUG(dbgs() << "Used in call operand: "; inst->print(dbgs());
+                      dbgs() << " base: "; base->print(dbgs()); dbgs() << "\n";);
+                usedInCallOperand.insert(base);
+                if (dyn_cast<LoadInst>(base)) indirectAccesses.insert( IndirectAccess(inst, opVal) );
+              }
             }
           }
         } else if (StoreInst *store = dyn_cast<StoreInst>(inst)) {
@@ -1678,55 +1681,11 @@ namespace WebCL {
     
     // @return Dependency of value. Returns it self in case of root dependence. NULL if no dependencies found.
     Value* getDependency(Value *value) {
-      
       ValueSet baseSet;
-      
       getAllBaseDependencies(value, baseSet);
-      
+      fast_assert( baseSet.size() != 0, "No dependencies were found? Maybe we should add some more deps to bookkeeping.");
       fast_assert( baseSet.size() == 1, "More than 1 possible dependencies. Add here some more algorithm to resolve which one is the correct.");
-
       return (*baseSet.begin());
-/*
-      if (LoadInst *load = dyn_cast<LoadInst>(value)) {
-        value = load->getPointerOperand();
-      }
-
-      // TODO: fix this to eliminate circular dependencies.
-
-      int indirection = getIndirection(value->getType());
-
-      dbgs() << "# getDependency Dep for: [" << indirection << ":"; value->print(dbgs()); dbgs() << "] \t";
-      DepKey key = DepKey(indirection, value);
-      DepValueSet &depSet = dependencies[key];
-
-      
-      if (depSet.size() == 0) return NULL;
-
-      if (depSet.size() > 1) {
-        // TODO: if single depenedency return it... add different getter to analyse where to get
-        //       limits for load / store / call operand. Correct one can be resolved from DepValue location
-        //       and value location.
-        
-        // verify that all deps points ultimately to same limiting depencence
-        Value *dep = NULL;
-        for (DepValueSet::iterator dv = depSet.begin(); dv != depSet.end(); ++dv) {
-          DEBUG( dbgs() << "Found multiple choices:\n"; );
-          DEBUG( dbgs() << "\nDep: "; dv->second->print(dbgs()); dbgs() << "\t Was set in: "; dv->first->print(dbgs()); dbgs() << "\n"; );
-          
-          ValueSet bases;
-          getAllBaseDependencies(dv->second, bases);
-          fast_assert(bases.size() == 1, "Operand has multiple base dependences.");
-          Value *next = *(bases.begin());
-           if ( dep != NULL ) {
-            fast_assert(dep != next, "More than 1 possible dependencies. Add here some more algorithm to resolve which one is the correct.");
-          }
-          dep = next;
-        }
-      }
-
-      dbgs() << "returning: "; (*depSet.begin()).second->print(dbgs()); dbgs() << " end getDependency ####\n";      
-      return (*depSet.begin()).second;
-*/
     }
     
     bool hasOnlySafeAccesses(Value *ptrVal) {
@@ -2096,14 +2055,34 @@ namespace WebCL {
         DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
         DEBUG( dbgs() << "  ## Found valid pointer cast, keep on tracking.\n" );
         
-      } else if ( PHINode* phi = dyn_cast<PHINode>(use) ) {
+      } else if ( isa<PHINode>(use) ) {
         DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
         DEBUG( dbgs() << "  ## Found PHI node, add just keep on resolving.\n" );
 
-        // DEBUG( dbgs() << "  ## Found PHI node, add deps for each operand.\n" );
-        //for (int i = 0; i < phi->llvm::User::getNumOperands(); i++) {
-        //  dependenceAnalyser.addDependency(indirAfter, phi, phi, phi->getOperand(i));
-        //}
+      } else if ( ConstantExpr* constExpr = dyn_cast<ConstantExpr>(use) ) {
+        // Currently we support pointer to pointer bitcast and gep constant expressions
+        Instruction *constInst = constExpr->getAsInstruction();
+        DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+        DEBUG( dbgs() << "Found Constant Expr" );
+        
+        if ( isa<GetElementPtrInst>(constInst) ) {
+          DEBUG( dbgs() << "Found valid const expr... keep on tracing."; );
+        
+        } else if (CastInst* cast = dyn_cast<CastInst>(constInst) ) {
+          if (!cast->getType()->isPointerTy() ||
+              dyn_cast<PointerType>(cast->getType())->getAddressSpace() != dyn_cast<PointerType>(val->getType())->getAddressSpace()) {
+            DEBUG( for (int i = 0; i < recursion_level; i++ ) dbgs() << "  "; );
+            DEBUG( dbgs() << "  ## Found cast that cannot preserve limits.\n" );
+            continue;
+          }
+          DEBUG( dbgs() << "  ## Found valid pointer cast, keep on tracking.\n" );
+          
+        } else {
+          DEBUG( dbgs() << "Unknown constant expr... cannot resolve\n"; );
+          DEBUG( dbgs() << "  #### Cannot resolve limit for: "; use->print(dbgs()); dbgs() << "\n");
+          continue;
+        }
+        delete constInst;
         
       } else {
         // notify about unexpected cannot be resolved cases for debug
