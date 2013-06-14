@@ -1874,8 +1874,6 @@ int get_image_width (image2d_t image);
 int get_image_height (image2d_t image);
 
 
-
-#if !defined(BUILDING_RUNKERNEL)
 // Safe versions of builtins... should be in forbidden list to call directly.
 
 #define IS_IN_RANGE(ptr) (ptr >= first && ptr <= last - 1)
@@ -1893,6 +1891,9 @@ int get_image_height (image2d_t image);
   void _cl_overloadable dumpAddress(SMARTPTR(Q T)) {                    \
     printf("%p, %p, %p (%s bounds)", current, first, last, IS_IN_RANGE(current) ? "within" : "out of"); \
   }
+
+#define REFER_FOR_DUMP_ADDRESS_T_Q(T, Q)                                \
+  dumpAddress((Q T*) 0, (Q T*) 0, (Q T*) 0);
 
 #define DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)                   \
   _cl_overloadable                                                      \
@@ -1929,9 +1930,48 @@ int get_image_height (image2d_t image);
   event_t async_work_group_strided_copy (__global GENTYPE *dstPtr,      \
                                          __global GENTYPE *dstFirst,    \
                                          __global GENTYPE *dstLast,     \
-                                         const __local GENTYPE *src,    \
+                                         const __local GENTYPE *srcPtr, \
+                                         const __local GENTYPE *srcFirst, \
+                                         const __local GENTYPE *srcLast, \
                                          size_t num_gentypes,           \
                                          event_t event);                \
+
+#define REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)             \
+  async_work_group_copy ((__local GENTYPE *) 0,                \
+                         (__local GENTYPE *) 0,                 \
+                         (__local GENTYPE *) 0,                 \
+                         (const __global GENTYPE *) 0,          \
+                         (const __global GENTYPE *) 0,          \
+                         (const __global GENTYPE *) 0,          \
+                         0,                                     \
+                         0);                                    \
+                                                                \
+  async_work_group_copy ((__global GENTYPE *) 0,                \
+                         (__global GENTYPE *) 0,                \
+                         (__global GENTYPE *) 0,                \
+                         (const __local GENTYPE *) 0,           \
+                         (const __local GENTYPE *) 0,           \
+                         (const __local GENTYPE *) 0,           \
+                         0,                                     \
+                         0);                                    \
+                                                                \
+  async_work_group_strided_copy ((__local GENTYPE *) 0,         \
+                                 (__local GENTYPE *) 0,         \
+                                 (__local GENTYPE *) 0,         \
+                                 (const __global GENTYPE *) 0,  \
+                                 (const __global GENTYPE *) 0,  \
+                                 (const __global GENTYPE *) 0,  \
+                                 0,                             \
+                                 0);                            \
+                                                                \
+  async_work_group_strided_copy ((__global GENTYPE *) 0,        \
+                                 (__global GENTYPE *) 0,        \
+                                 (__global GENTYPE *) 0,        \
+                                 (const __local GENTYPE *) 0,   \
+                                 (const __local GENTYPE *) 0,   \
+                                 (const __local GENTYPE *) 0,   \
+                                 0,                             \
+                                 0);                            \
 
 #define DECLARE_SAFE_ASYNC_COPY_FUNCS(GENTYPE)          \
   DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)         \
@@ -1940,6 +1980,14 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##4)      \
   DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##8)      \
   DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##16)     \
+
+#define REFER_SAFE_ASYNC_COPY_FUNCS(GENTYPE)            \
+  REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)           \
+  REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##2)        \
+  REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##3)        \
+  REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##4)        \
+  REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##8)        \
+  REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE##16)       \
 
 #define DECLARE_SAFE_ASYNC_COPY_FUNCS_ALL()                     \
   DECLARE_SAFE_ASYNC_COPY_FUNCS(char);                          \
@@ -1954,6 +2002,20 @@ int get_image_height (image2d_t image);
   __IF_FP16(DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(half));        \
   DECLARE_SAFE_ASYNC_COPY_FUNCS(float);                         \
   __IF_FP64(DECLARE_SAFE_ASYNC_COPY_FUNCS(double));
+
+#define REFER_SAFE_ASYNC_COPY_FUNCS_ALL()               \
+  REFER_SAFE_ASYNC_COPY_FUNCS(char);                    \
+  REFER_SAFE_ASYNC_COPY_FUNCS(uchar);                   \
+  REFER_SAFE_ASYNC_COPY_FUNCS(short);                   \
+  REFER_SAFE_ASYNC_COPY_FUNCS(ushort);                  \
+  REFER_SAFE_ASYNC_COPY_FUNCS(int);                     \
+  REFER_SAFE_ASYNC_COPY_FUNCS(uint);                    \
+  __IF_INT64(REFER_SAFE_ASYNC_COPY_FUNCS(long));        \
+  __IF_INT64(REFER_SAFE_ASYNC_COPY_FUNCS(ulong));       \
+                                                        \
+  __IF_FP16(REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(half));  \
+  REFER_SAFE_ASYNC_COPY_FUNCS(float);                   \
+  __IF_FP64(REFER_SAFE_ASYNC_COPY_FUNCS(double));
 
 #define IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)                 \
   _cl_overloadable                                                      \
@@ -2062,6 +2124,25 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float4, __private);    \
   IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float8, __private);    \
   IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float16, __private);
+#define REFER_FOR_DUMP_ADDRESS()                    \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float, __global);      \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float2, __global);     \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float3, __global);     \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float4, __global);     \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float8, __global);     \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float16, __global);    \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float, __local);       \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float2, __local);      \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float3, __local);      \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float4, __local);      \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float8, __local);      \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float16, __local);     \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float, __private);     \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float2, __private);    \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float3, __private);    \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float4, __private);    \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float8, __private);    \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float16, __private);
 #define DECLARE_FOR_DUMP_ADDRESS()                      \
   DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __global);        \
   DECLARE_FOR_DUMP_ADDRESS_T_Q(float2, __global);       \
@@ -2086,6 +2167,10 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __global);      \
   IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __local);       \
   IMPLEMENT_FOR_DUMP_ADDRESS_T_Q(float, __private);
+#define REFER_FOR_DUMP_ADDRESS()                    \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float, __global);      \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float, __local);       \
+  REFER_FOR_DUMP_ADDRESS_T_Q(float, __private);
 #define DECLARE_FOR_DUMP_ADDRESS(FN)                    \
   DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __global);        \
   DECLARE_FOR_DUMP_ADDRESS_T_Q(float, __local);         \
@@ -2106,7 +2191,8 @@ int get_image_height (image2d_t image);
   T _cl_overloadable FN(T x, Q T*);                   \
   T _cl_overloadable FN(T x, SMARTPTR(Q T));
 
-
+#define REFER_FOR_T_TYPES_VT_VTVTP(T, V, Q, FN)     \
+  FN(V, (Q T*) 0, (Q T*) 0, (Q T*) 0);
 
 #ifndef FAKECL
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \
@@ -2147,6 +2233,25 @@ int get_image_height (image2d_t image);
   DECLARE_FOR_T_TYPES_VT_VTVTP(float4, __private, FN);  \
   DECLARE_FOR_T_TYPES_VT_VTVTP(float8, __private, FN);  \
   DECLARE_FOR_T_TYPES_VT_VTVTP(float16, __private, FN);
+#define REFER_FOR_FLOAT_TYPES_VF_VFVFP(FN)            \
+  REFER_FOR_T_TYPES_VT_VTVTP(float, 0, __global, FN);                   \
+  REFER_FOR_T_TYPES_VT_VTVTP(float2, (float2)(0, 0), __global, FN);     \
+  REFER_FOR_T_TYPES_VT_VTVTP(float3, (float3)(0, 0, 0), __global, FN);  \
+  REFER_FOR_T_TYPES_VT_VTVTP(float4, (float4)(0, 0, 0, 0), __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTP(float8, (float8)(0, 0, 0, 0, 0, 0, 0, 0), __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTP(float16, (float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTP(float, 0, __local, FN);                    \
+  REFER_FOR_T_TYPES_VT_VTVTP(float2, (float2)(0, 0), __local, FN);      \
+  REFER_FOR_T_TYPES_VT_VTVTP(float3, (float3)(0, 0, 0), __local, FN);   \
+  REFER_FOR_T_TYPES_VT_VTVTP(float4, (float4)(0, 0, 0, 0), __local, FN);     \
+  REFER_FOR_T_TYPES_VT_VTVTP(float8, (float8)(0, 0, 0, 0, 0, 0, 0, 0), __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTP(float16, (float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTP(float, 0, __private, FN);                  \
+  REFER_FOR_T_TYPES_VT_VTVTP(float2, (float2)(0, 0), __private, FN);    \
+  REFER_FOR_T_TYPES_VT_VTVTP(float3, (float3)(0, 0, 0), __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTP(float4, (float4)(0, 0, 0, 0), __private, FN);  \
+  REFER_FOR_T_TYPES_VT_VTVTP(float8, (float8)(0, 0, 0, 0, 0, 0, 0, 0), __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTP(float16, (float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), __private, FN);
 #else
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(FN)                   \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTP(float, __global, FN);           \
@@ -2156,6 +2261,10 @@ int get_image_height (image2d_t image);
   DECLARE_FOR_T_TYPES_VT_VTVTP(float, __global, FN);    \
   DECLARE_FOR_T_TYPES_VT_VTVTP(float, __local, FN);     \
   DECLARE_FOR_T_TYPES_VT_VTVTP(float, __private, FN);
+#define REFER_FOR_FLOAT_TYPES_VF_VFVFP(FN)            \
+  REFER_FOR_T_TYPES_VT_VTVTP(float, 0, __global, FN);  \
+  REFER_FOR_T_TYPES_VT_VTVTP(float, 0, __local, FN);    \
+  REFER_FOR_T_TYPES_VT_VTVTP(float, 0, __private, FN);
 #endif
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VTVUP(T, U, Q, FN)     \
@@ -2170,6 +2279,9 @@ int get_image_height (image2d_t image);
 #define DECLARE_FOR_T_TYPES_VT_VTVUP(T, U, Q, FN)       \
   T _cl_overloadable FN(T x, Q U*);                     \
   T _cl_overloadable FN(T x, SMARTPTR(Q U));
+
+#define REFER_FOR_T_TYPES_VT_VTVUP(T, V, U, Q, FN)       \
+  FN(V, (Q U*) 0, (Q U*) 0, (Q U*) 0);
 
 #ifndef FAKECL
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(FN)                          \
@@ -2210,6 +2322,26 @@ int get_image_height (image2d_t image);
   DECLARE_FOR_T_TYPES_VT_VTVUP(float4, int4, __private, FN);          \
   DECLARE_FOR_T_TYPES_VT_VTVUP(float8, int8, __private, FN);          \
   DECLARE_FOR_T_TYPES_VT_VTVUP(float16, int16, __private, FN);
+#define REFER_FOR_FLOAT_TYPES_VF_VFVIP(FN)                              \
+  REFER_FOR_T_TYPES_VT_VTVUP(float, 0, int, __global, FN);              \
+  REFER_FOR_T_TYPES_VT_VTVUP(float2, (float2)(0, 0), int2, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float3, (float3)(0, 0, 0), int3, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float4, (float4)(0, 0, 0, 0), int4, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float8, (float8)(0, 0, 0, 0, 0, 0, 0, 0), int8, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float16, (float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), int16, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float, 0, int, __local, FN);               \
+  REFER_FOR_T_TYPES_VT_VTVUP(float2, (float2)(0, 0), int2, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float3, (float3)(0, 0, 0), int3, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float4, (float4)(0, 0, 0, 0), int4, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float8, (float8)(0, 0, 0, 0, 0, 0, 0, 0), int8, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float16, (float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), int16, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float, 0, int, __private, FN);             \
+  REFER_FOR_T_TYPES_VT_VTVUP(float2, (float2)(0, 0), int2, __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float3, (float3)(0, 0, 0), int3, __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float4, (float4)(0, 0, 0, 0), int4, __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float8, (float8)(0, 0, 0, 0, 0, 0, 0, 0), int8, __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float16, (float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), int16, __private, FN);
+
 #else
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(FN)                          \
   IMPLEMENT_FOR_T_TYPES_VT_VTVUP(float, int, __global, FN);             \
@@ -2231,6 +2363,16 @@ int get_image_height (image2d_t image);
   DECLARE_FOR_T_TYPES_VT_VTVUP(float, int, __private, FN);      \
   DECLARE_FOR_T_TYPES_VT_VTVUP(float2, int2, __private, FN);    \
   DECLARE_FOR_T_TYPES_VT_VTVUP(float4, int4, __private, FN);          
+#define REFER_FOR_FLOAT_TYPES_VF_VFVIP(FN)                    \
+  REFER_FOR_T_TYPES_VT_VTVUP(float, 0, int, __global, FN);     \
+  REFER_FOR_T_TYPES_VT_VTVUP(float2, (float2)(0, 0), int2, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVUP(float4, (float4)(0, 0, 0, 0), int4, __global, FN);     \
+  REFER_FOR_T_TYPES_VT_VTVUP(float, 0, int, __local, FN);      \
+  REFER_FOR_T_TYPES_VT_VTVUP(float2, (float2)(0, 0), int2, __local, FN);      \
+  REFER_FOR_T_TYPES_VT_VTVUP(float4, (float4)(0, 0, 0, 0), int4, __local, FN);      \
+  REFER_FOR_T_TYPES_VT_VTVUP(float, 0, int, __private, FN);    \
+  REFER_FOR_T_TYPES_VT_VTVUP(float2, (float2)(0, 0), int2, __private, FN);    \
+  REFER_FOR_T_TYPES_VT_VTVUP(float4, (float4)(0, 0, 0, 0), int4, __private, FN);          
 #endif
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(T, U, Q, FN)   \
@@ -2245,6 +2387,9 @@ int get_image_height (image2d_t image);
 #define DECLARE_FOR_T_TYPES_VT_VTVTVUP(T, U, Q, FN)   \
   T _cl_overloadable FN(T x, T y, Q U*);                \
   T _cl_overloadable FN(T x, T y, SMARTPTR(Q U));
+
+#define REFER_FOR_T_TYPES_VT_VTVTVUP(V, U, Q, FN)    \
+  FN(V, V, (Q U*) 0, (Q U*) 0, (Q U*) 0);
 
 #ifndef FAKECL
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                        \
@@ -2266,25 +2411,44 @@ int get_image_height (image2d_t image);
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __private, FN);        \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __private, FN);        \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __private, FN);
-#define DECLARE_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                        \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float, int, __global, FN);           \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __global, FN);         \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __global, FN);         \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __global, FN);         \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __global, FN);         \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __global, FN);       \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float, int, __local, FN);            \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __local, FN);          \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __local, FN);          \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __local, FN);          \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __local, FN);          \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __local, FN);        \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float, int, __private, FN);          \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __private, FN);        \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __private, FN);        \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __private, FN);        \
-  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __private, FN);        \
+#define DECLARE_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                          \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float, int, __global, FN);             \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __global, FN);           \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __global, FN);           \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __global, FN);           \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __global, FN);           \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __global, FN);         \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float, int, __local, FN);              \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __local, FN);            \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __local, FN);            \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __local, FN);            \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __local, FN);            \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __local, FN);          \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float, int, __private, FN);            \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __private, FN);          \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float3, int3, __private, FN);          \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __private, FN);          \
+  DECLARE_FOR_T_TYPES_VT_VTVTVUP(float8, int8, __private, FN);          \
   DECLARE_FOR_T_TYPES_VT_VTVTVUP(float16, int16, __private, FN);
+#define REFER_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                            \
+  REFER_FOR_T_TYPES_VT_VTVTVUP(0, int, __global, FN);                   \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float2)(0, 0), int2, __global, FN);     \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float3)(0, 0, 0), int3, __global, FN);  \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float4)(0, 0, 0, 0), int4, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float8)(0, 0, 0, 0, 0, 0, 0, 0), int8, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), int16, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP(0, int, __local, FN);                    \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float2)(0, 0), int2, __local, FN);      \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float3)(0, 0, 0), int3, __local, FN);   \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float4)(0, 0, 0, 0), int4, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float8)(0, 0, 0, 0, 0, 0, 0, 0), int8, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), int16, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP(0, int, __private, FN);                  \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float2)(0, 0), int2, __private, FN);    \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float3)(0, 0, 0), int3, __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float4)(0, 0, 0, 0), int4, __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float8)(0, 0, 0, 0, 0, 0, 0, 0), int8, __private, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float16)(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), int16, __private, FN);
 #else
 #define IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                        \
   IMPLEMENT_FOR_T_TYPES_VT_VTVTVUP(float, int, __global, FN);           \
@@ -2306,6 +2470,17 @@ int get_image_height (image2d_t image);
   DECLARE_FOR_T_TYPES_VT_VTVTVUP(float, int, __private, FN);    \
   DECLARE_FOR_T_TYPES_VT_VTVTVUP(float2, int2, __private, FN);  \
   DECLARE_FOR_T_TYPES_VT_VTVTVUP(float4, int4, __private, FN);        
+#define REFER_FOR_FLOAT_TYPES_VF_VFVFVIP(FN)                            \
+  REFER_FOR_T_TYPES_VT_VTVTVUP(0, int, __global, FN);                   \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float2)(0, 0), int2, __global, FN);     \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float4)(0, 0, 0, 0), int4, __global, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP(0, int, __local, FN);                    \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float2)(0, 0), int2, __local, FN);      \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float4)(0, 0, 0, 0), int4, __local, FN); \
+  REFER_FOR_T_TYPES_VT_VTVTVUP(0, int, __private, FN);                  \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float2)(0, 0), int2, __private, FN);    \
+  REFER_FOR_T_TYPES_VT_VTVTVUP((float4)(0, 0, 0, 0), int4, __private, FN);
+
 #endif
 
 #define IMPLEMENT_SAFE_VLOAD(TYPE, Q, N, DEFAULT)                       \
@@ -2319,6 +2494,9 @@ int get_image_height (image2d_t image);
 #define DECLARE_SAFE_VLOAD(TYPE, Q, N, DEFAULT)                       \
   TYPE##N _cl_overloadable vload##N(long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end);
 
+#define REFER_SAFE_VLOAD(TYPE, Q, N)                    \
+  vload##N(0, (Q TYPE*) 0, (Q TYPE*) 0, (Q TYPE*) 0);
+
 #define IMPLEMENT_SAFE_VSTORE(TYPE, Q, N)                               \
   void _cl_overloadable vstore##N(TYPE##N x, long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end) { \
     Q TYPE *ptr = cur + i * N;                                          \
@@ -2329,6 +2507,9 @@ int get_image_height (image2d_t image);
 
 #define DECLARE_SAFE_VSTORE(TYPE, Q, N)                               \
   void _cl_overloadable vstore##N(TYPE##N x, long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end);
+
+#define REFER_SAFE_VSTORE(TYPE, Q, N)                           \
+  vstore##N(*(TYPE*) clamppointers_mkpointer(), 0, (Q TYPE*) 0, (Q TYPE*) 0, (Q TYPE*) 0);
 
 #define IMPLEMENT_SAFE_VLOAD_N_TYPES(N, Q, DEFAULT)     \
   IMPLEMENT_SAFE_VLOAD(char, Q, N, DEFAULT);            \
@@ -2352,6 +2533,17 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_VLOAD(ulong, Q, N, DEFAULT);           \
   DECLARE_SAFE_VLOAD(float, Q, N, DEFAULT);                   
 
+#define REFER_SAFE_VLOAD_N_TYPES(N, Q)          \
+  REFER_SAFE_VLOAD(char, Q, N);                 \
+  REFER_SAFE_VLOAD(uchar, Q, N);                \
+  REFER_SAFE_VLOAD(short, Q, N);                \
+  REFER_SAFE_VLOAD(ushort, Q, N);               \
+  REFER_SAFE_VLOAD(int, Q, N);                  \
+  REFER_SAFE_VLOAD(uint, Q, N);                 \
+  REFER_SAFE_VLOAD(long, Q, N);                 \
+  REFER_SAFE_VLOAD(ulong, Q, N);                \
+  REFER_SAFE_VLOAD(float, Q, N);                   
+
 #define IMPLEMENT_SAFE_VLOAD_N(N, DEFAULT)             \
   IMPLEMENT_SAFE_VLOAD_N_TYPES(N, __private, DEFAULT); \
   IMPLEMENT_SAFE_VLOAD_N_TYPES(N, __global, DEFAULT);  \
@@ -2363,6 +2555,12 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_VLOAD_N_TYPES(N, __global, DEFAULT);  \
   DECLARE_SAFE_VLOAD_N_TYPES(N, __const, DEFAULT);   \
   DECLARE_SAFE_VLOAD_N_TYPES(N, __local, DEFAULT);
+
+#define REFER_SAFE_VLOAD_N(N)                   \
+  REFER_SAFE_VLOAD_N_TYPES(N, __private);       \
+  REFER_SAFE_VLOAD_N_TYPES(N, __global);        \
+  REFER_SAFE_VLOAD_N_TYPES(N, __const);         \
+  REFER_SAFE_VLOAD_N_TYPES(N, __local);
 
 #define IMPLEMENT_SAFE_VSTORE_N_TYPES(N, Q)     \
   IMPLEMENT_SAFE_VSTORE(char, Q, N);            \
@@ -2386,6 +2584,17 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_VSTORE(ulong, Q, N);           \
   DECLARE_SAFE_VSTORE(float, Q, N); 
 
+#define REFER_SAFE_VSTORE_N_TYPES(N, Q)     \
+  REFER_SAFE_VSTORE(char, Q, N);            \
+  REFER_SAFE_VSTORE(uchar, Q, N);           \
+  REFER_SAFE_VSTORE(short, Q, N);           \
+  REFER_SAFE_VSTORE(ushort, Q, N);          \
+  REFER_SAFE_VSTORE(int, Q, N);             \
+  REFER_SAFE_VSTORE(uint, Q, N);            \
+  REFER_SAFE_VSTORE(long, Q, N);            \
+  REFER_SAFE_VSTORE(ulong, Q, N);           \
+  REFER_SAFE_VSTORE(float, Q, N); 
+
 #define IMPLEMENT_SAFE_VSTORE_N(N)              \
   IMPLEMENT_SAFE_VSTORE_N_TYPES(N, __private);  \
   IMPLEMENT_SAFE_VSTORE_N_TYPES(N, __global);   \
@@ -2396,11 +2605,14 @@ int get_image_height (image2d_t image);
   DECLARE_SAFE_VSTORE_N_TYPES(N, __global);   \
   DECLARE_SAFE_VSTORE_N_TYPES(N, __local);
 
+#define REFER_SAFE_VSTORE_N(N)              \
+  REFER_SAFE_VSTORE_N_TYPES(N, __private);  \
+  REFER_SAFE_VSTORE_N_TYPES(N, __global);   \
+  REFER_SAFE_VSTORE_N_TYPES(N, __local);
+
 DECLARE_SAFE_ASYNC_COPY_FUNCS_ALL()
-IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_ALL()
 
 DECLARE_FOR_DUMP_ADDRESS()
-IMPLEMENT_FOR_DUMP_ADDRESS()
 
 // T fract(T x, Q T *iptr) 
 // T modf(T x, Q T *iptr) 
@@ -2408,11 +2620,8 @@ IMPLEMENT_FOR_DUMP_ADDRESS()
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFP(fract)
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFP(modf)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(fract)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(modf)
 #endif
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
 
 // Tn frexp(T x, int *exp)
 // Tn frexp(T x, intn *exp)
@@ -2421,22 +2630,18 @@ IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVIP(frexp)
 DECLARE_FOR_FLOAT_TYPES_VF_VFVIP(remquo)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(frexp)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(remquo)
 #endif
 
 // Ts lgamma_r(T x, Q int *signp)
 // Tn lgamma_r(T x, Q intn *signp)
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r)
 #endif
 
 // Ts remquo(T x, T y, int *quo) { }
 // Tn remquo(T x, T y, intn *quo) { }
 #ifndef FAKECL
 DECLARE_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo)
-IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo)
 #endif
 
 // Tn vloadn(long, Q T* p)
@@ -2446,11 +2651,6 @@ DECLARE_SAFE_VLOAD_N(3, (-42, -42, -42))
 DECLARE_SAFE_VLOAD_N(4, (-42, -42, -42, -42))
 DECLARE_SAFE_VLOAD_N(8, (-42, -42, -42, -42, -42, -42, -42, -42))
 DECLARE_SAFE_VLOAD_N(16, (-42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(2, (-42, -42))
-IMPLEMENT_SAFE_VLOAD_N(3, (-42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(4, (-42, -42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(8, (-42, -42, -42, -42, -42, -42, -42, -42))
-IMPLEMENT_SAFE_VLOAD_N(16, (-42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42, -42))
 #endif
 
 // void vstoren(T x, long, Q T* p)
@@ -2460,11 +2660,6 @@ DECLARE_SAFE_VSTORE_N(3)
 DECLARE_SAFE_VSTORE_N(4)
 DECLARE_SAFE_VSTORE_N(8)
 DECLARE_SAFE_VSTORE_N(16)
-IMPLEMENT_SAFE_VSTORE_N(2)
-IMPLEMENT_SAFE_VSTORE_N(3)
-IMPLEMENT_SAFE_VSTORE_N(4)
-IMPLEMENT_SAFE_VSTORE_N(8)
-IMPLEMENT_SAFE_VSTORE_N(16)
 #endif
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VOLAPT(T, Q, FN)                       \
@@ -2480,6 +2675,9 @@ IMPLEMENT_SAFE_VSTORE_N(16)
   _cl_overloadable T FN(volatile Q T *p);                               \
   _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last);
 
+#define REFER_FOR_T_TYPES_VT_VOLAPT(T, Q, FN)                           \
+  FN((volatile Q T *) 0, (Q T *) 0, (Q T *) 0);
+
 #define IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, FN)                      \
   _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last, T x) { \
     if (IS_IN_RANGE(current)) {                                         \
@@ -2492,6 +2690,9 @@ IMPLEMENT_SAFE_VSTORE_N(16)
 #define DECLARE_FOR_T_TYPES_VT_VOLAPTT(T, Q, FN)                        \
   _cl_overloadable T FN(volatile Q T *p, T val);                        \
   _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last, T x);
+
+#define REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, FN)                        \
+  FN((volatile Q T *) 0, (Q T *) 0, (Q T *) 0, *(T*) clamppointers_mkpointer());
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VOLAPTTT(T, Q, FN)                     \
   _cl_overloadable T FN(volatile Q T *p, T x, T y);                     \
@@ -2507,6 +2708,9 @@ IMPLEMENT_SAFE_VSTORE_N(16)
 #define DECLARE_FOR_T_TYPES_VT_VOLAPTTT(T, Q, FN)                       \
   _cl_overloadable T FN(volatile Q T *p, T x, T y);                     \
   _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last, T x, T y);
+
+#define REFER_FOR_T_TYPES_VT_VOLAPTTT(T, Q, FN)         \
+  FN((volatile Q T *) 0, (Q T *) 0, (Q T *) 0, *(T*) clamppointers_mkpointer(), *(T*) clamppointers_mkpointer());
 
 #define IMPLEMENT_SAFE_ATOMIC(T, Q)                             \
   IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_add);           \
@@ -2534,21 +2738,81 @@ IMPLEMENT_SAFE_VSTORE_N(16)
   DECLARE_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_or);            \
   DECLARE_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_xor);
 
+#define REFER_SAFE_ATOMIC(T, Q)                             \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_add);           \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_sub);           \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_xchg);          \
+  REFER_FOR_T_TYPES_VT_VOLAPT(T, Q, atomic_inc);            \
+  REFER_FOR_T_TYPES_VT_VOLAPT(T, Q, atomic_dec);            \
+  REFER_FOR_T_TYPES_VT_VOLAPTTT(T, Q, atomic_cmpxchg);      \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_min);           \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_max);           \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_and);           \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_or);            \
+  REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, atomic_xor);
+
 DECLARE_SAFE_ATOMIC(int, __global)
 DECLARE_SAFE_ATOMIC(uint, __global)
 DECLARE_SAFE_ATOMIC(int, __local )
 DECLARE_SAFE_ATOMIC(uint, __local)
-IMPLEMENT_SAFE_ATOMIC(int, __global)
-IMPLEMENT_SAFE_ATOMIC(uint, __global)
-IMPLEMENT_SAFE_ATOMIC(int, __local )
-IMPLEMENT_SAFE_ATOMIC(uint, __local)
 
 DECLARE_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomic_xchg);
 DECLARE_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomic_xchg);
-IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomic_xchg);
-IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomic_xchg);
 
-#endif // !defined(BUILDING_RUNKERNEL)
+// build a giant fake function to make references to forementioned functions
+#ifdef REFER_BUILTINS
+// can be implemented as a function returning 0
+char* clamppointers_mkpointer(void);
+
+void clamppointers_keep_reference(void)
+{
+  REFER_FOR_DUMP_ADDRESS();
+  REFER_SAFE_ASYNC_COPY_FUNCS_ALL();
+
+#ifndef FAKECL
+  REFER_FOR_FLOAT_TYPES_VF_VFVFP(fract);
+  REFER_FOR_FLOAT_TYPES_VF_VFVFP(modf);
+#endif
+  REFER_FOR_FLOAT_TYPES_VF_VFVFP(sincos);
+
+#ifndef FAKECL
+  REFER_FOR_FLOAT_TYPES_VF_VFVIP(frexp);
+  REFER_FOR_FLOAT_TYPES_VF_VFVIP(remquo);
+#endif
+
+#ifndef FAKECL
+  REFER_FOR_FLOAT_TYPES_VF_VFVIP(lgamma_r);
+#endif
+
+#ifndef FAKECL
+  REFER_FOR_FLOAT_TYPES_VF_VFVFVIP(remquo);
+#endif
+
+#ifndef FAKECL
+  REFER_SAFE_VLOAD_N(2);
+  REFER_SAFE_VLOAD_N(3);
+  REFER_SAFE_VLOAD_N(4);
+  REFER_SAFE_VLOAD_N(8);
+  REFER_SAFE_VLOAD_N(16);
+#endif
+
+#ifndef FAKECL
+  REFER_SAFE_VSTORE_N(2);
+  REFER_SAFE_VSTORE_N(3);
+  REFER_SAFE_VSTORE_N(4);
+  REFER_SAFE_VSTORE_N(8);
+  REFER_SAFE_VSTORE_N(16);
+#endif
+
+  REFER_SAFE_ATOMIC(int, __global);
+  REFER_SAFE_ATOMIC(uint, __global);
+  REFER_SAFE_ATOMIC(int, __local );
+  REFER_SAFE_ATOMIC(uint, __local);
+
+  REFER_FOR_T_TYPES_VT_VOLAPTT(float, __global, atomic_xchg);
+  REFER_FOR_T_TYPES_VT_VOLAPTT(float, __local, atomic_xchg);
+}
+#endif
 
 // vload_half/vstore_half variants not supported for now. 
 
