@@ -27,6 +27,10 @@ if [ "x$BUILDING_RUNKERNEL" = x1 ]; then
     TARGET_FLAGS="-DBUILDING_RUNKERNEL=1 $TARGET_FLAGS"
 fi
 
+if [ "x$REFER_BUILTINS" = x1 ]; then 
+    TARGET_FLAGS="-DREFER_BUILTINS=1 $TARGET_FLAGS"
+fi
+
 # Compiles .cl file to llvm IR
 echo oclang.sh $@
 clang -x cl -fno-builtin $TARGET_FLAGS -emit-llvm -c $@

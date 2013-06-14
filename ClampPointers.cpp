@@ -314,7 +314,8 @@ namespace WebCL {
       "vstorea_half2_rte", "vstorea_half3_rte", "vstorea_half4_rte", "vstorea_half8_rte","vstorea_half16_rte",
       "vstorea_half2_rtz", "vstorea_half3_rtz", "vstorea_half4_rtz", "vstorea_half8_rtz","vstorea_half16_rtz",
       "vstorea_half2_rtp", "vstorea_half3_rtp", "vstorea_half4_rtp", "vstorea_half8_rtp","vstorea_half16_rtp",
-      "vstorea_half2_rtn", "vstorea_half3_rtn", "vstorea_half4_rtn", "vstorea_half8_rtn","vstorea_half16_rtn"
+      "vstorea_half2_rtn", "vstorea_half3_rtn", "vstorea_half4_rtn", "vstorea_half8_rtn","vstorea_half16_rtn",
+      "clamppointers_mkpointer", "clamppointers_keep_reference"
     };
     std::set<std::string> unsupportedUnsafeBuiltins(unsupportedUnsafeBuiltins_tmp, unsupportedUnsafeBuiltins_tmp + sizeof(unsupportedUnsafeBuiltins_tmp) / sizeof(unsupportedUnsafeBuiltins_tmp[0]));
   }
@@ -338,7 +339,7 @@ namespace WebCL {
    * sequential pointers of the same type. It is by no means a certain
    * indicator, you should use it only for builtins where there is no
    * chance of mistake . */
-  bool argsHasSafePointer( llvm::Function::ArgumentListType& args ) {
+  bool argsHasOriginalSafePointer( llvm::Function::ArgumentListType& args ) {
     bool result = false;
     TypeVector types = typesOfArgumentList(args);
     for ( signed i = 0; 
@@ -360,6 +361,27 @@ namespace WebCL {
       llvm::PointerType* pt2 = dyn_cast<PointerType>(st->getTypeAtIndex(1u));
       llvm::PointerType* pt3 = dyn_cast<PointerType>(st->getTypeAtIndex(2u));
       result = ( pt1 == pt2 && pt2 == pt3 );
+    }
+    return result;
+  }
+
+  /** returns true if an argument list looks like it might contain a
+   * transformed safe pointer; it searches for a record with three
+   * sequential pointers of the same type. It is by no means a certain
+   * indicator, you should use it only for builtins where there is no
+   * chance of mistake . */
+  bool argsHasTransformedSafePointer( llvm::Function::ArgumentListType& args ) {
+    bool result = false;
+    for ( llvm::Function::ArgumentListType::const_iterator argIt = args.begin();
+          !result && argIt != args.end();
+          ++argIt ) {
+      if ( llvm::StructType* st = dyn_cast<StructType>(argIt->getType()) ) {
+        const llvm::StructType::element_iterator firstEl = st->element_begin();
+        result = (st->element_end() - firstEl == 3 &&
+                  firstEl[0]->isPointerTy() &&  
+                  firstEl[1]->isPointerTy() &&  
+                  firstEl[2]->isPointerTy());
+      }
     }
     return result;
   }
@@ -1887,20 +1909,21 @@ namespace WebCL {
     // If function is intrinsic or WebCL builtin declaration (we know how it will behave) we
     // just skip it. If function is unknown external call compilation will fail.
     for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-
       if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
-        if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
-          functionManager.addUnsafeBuiltinFunction(i);
-        } else if ( !i->isDeclaration() && argsHasSafePointer(i->getArgumentList()) ) {
+        if ( i->isDeclaration() && argsHasOriginalSafePointer(i->getArgumentList()) ) {
           ArgumentMap replacedArguments;
           Function* newFunction = transformSafeArguments(*i, replacedArguments);
           functionManager.replaceArguments(replacedArguments);
           functionManager.replaceFunction(&*i, newFunction);
           functionManager.addSafeBuiltinFunction(newFunction);
+        } else if ( i->isDeclaration() && argsHasOriginalSafePointer(i->getArgumentList()) ) {
+          functionManager.addSafeBuiltinFunction(i);
+
+        } else if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
+          functionManager.addUnsafeBuiltinFunction(i);
         } else {
           // skip this case, just some other function
         }
-        continue;          
       }
     }
   }
@@ -3016,6 +3039,11 @@ namespace WebCL {
       Function* oldFun = i->first;
       Function* newFun = i->second;
       bool isBuiltin = safeBuiltinFunctions.count(newFun);
+
+      // builtin functions may appears as only declarations; skip those
+      if ( oldFun->isDeclaration() ) {
+        continue;
+      }
         
       // move all instructions to new function
       newFun->getBasicBlockList().splice( newFun->begin(), oldFun->getBasicBlockList() );
@@ -3475,8 +3503,11 @@ namespace WebCL {
 
       for ( Module::iterator F = M.begin(); F != M.end(); ++F) {
 
-        if ( F->isIntrinsic() || F->isDeclaration() ) {
-            continue;
+        std::string functionName = extractItaniumDemangledFunctionName(F->getName().str());
+
+        if ( F->isIntrinsic() || F->isDeclaration() ||
+             unsupportedUnsafeBuiltins.count(functionName) ) {
+          continue;
         }
         
         // Runs through all instructions in function and collects instructions.
