@@ -5,7 +5,7 @@ SCRIPT_PATH=$(pushd `dirname $0` > /dev/null && pwd && popd > /dev/null)
 
 # default our cpu target... SPIR in future...
 if [ -z  "$TARGET_FLAGS" ]; then 
-TARGET_FLAGS="-include $SCRIPT_PATH/pocl_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64"
+TARGET_FLAGS="-target spir -include $SCRIPT_PATH/spir_kernel.h -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64"
 fi
 
 if [ "x$USE_CLC" = "x1" ]; then

@@ -21,22 +21,25 @@
 // NOTE: for now looks like -O3 cripples safe exception load/store analysis
 // TODO: get times from unclamped versions and compare to clamped ones and expect perf hit to be max 30%
 
-// RUN: clang -target spir -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
+// RUN: clang -target spir -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.O0.ll &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
-// RUN: opt -S -O3 $OUT_FILE.ll -o $OUT_FILE.O3.ll &&
-// RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
+// RUN: opt -S -O3 $OUT_FILE.O0.ll -o $OUT_FILE.O3.ll &&
+// RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.O0.ll -o $OUT_FILE.O0.clamped.ll &&
 // RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
-// RUN: opt -S -O3 $OUT_FILE.clamped.ll -o $OUT_FILE.clamped.O3.ll &&
+// RUN: opt -S -O3 $OUT_FILE.O0.clamped.ll -o $OUT_FILE.O0.clamped.O3.ll &&
+// RUN: opt -S -O3 $OUT_FILE.O3.clamped.ll -o $OUT_FILE.O3.clamped.O3.ll &&
 // RUN: echo "Running original.O0:" &&
-// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.ll test_kernel 8 "(int,{0}):(int,1)") && 
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O0.ll test_kernel 1 "(int,{0}):(int,1)") && 
 // RUN: echo "Running original.O3:" &&
-// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.ll test_kernel 8 "(int,{0}):(int,1)") && 
-// RUN: echo "Running clamped.O0:" &&
-// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.clamped.ll test_kernel 8 "(int,{0}):(int,1)") &&
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.ll test_kernel 1 "(int,{0}):(int,1)") && 
+// RUN: echo "Running O0.clamped:" &&
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O0.clamped.ll test_kernel 1 "(int,{0}):(int,1)") &&
+// RUN: echo "Running O0.clamped.O3:" &&
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O0.clamped.O3.ll test_kernel 1 "(int,{0}):(int,1)") &&
 // RUN: echo "Running O3.clamped:" &&
-// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.clamped.ll test_kernel 8 "(int,{0}):(int,1)") &&
-// RUN: echo "Running clamped.O3:" &&
-// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.clamped.O3.ll test_kernel 8 "(int,{0}):(int,1)")
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.clamped.ll test_kernel 1 "(int,{0}):(int,1)") &&
+// RUN: echo "Running O3.clamped.O3:" &&
+// RUN: (BENCHMARK=1 $RUN_KERNEL $OUT_FILE.O3.clamped.O3.ll test_kernel 1 "(int,{0}):(int,1)")
 
 typedef int int32_t;
 typedef short int16_t;

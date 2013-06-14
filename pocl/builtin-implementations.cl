@@ -1,4 +1,4 @@
-#include "pocl_kernel.h"
+#include "spir_kernel.h"
 
 /* from pocl */
 
