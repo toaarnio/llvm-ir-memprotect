@@ -1917,7 +1917,6 @@ int get_image_height (image2d_t image);
   }
 
 #define REFER_FOR_DUMP_ADDRESS_T_Q(T, Q)                                \
-  dumpAddress((Q T*) 0);                                                \
   dumpAddress((Q T*) 0, (Q T*) 0, (Q T*) 0);
 
 #define DECLARE_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)                   \
@@ -1962,26 +1961,6 @@ int get_image_height (image2d_t image);
                                          event_t event);                \
 
 #define REFER_SAFE_ASYNC_COPY_FUNCS_SINGLE(GENTYPE)             \
-  async_work_group_copy ((__local GENTYPE *) 0,                \
-                         (const __global GENTYPE *) 0,          \
-                         0,                                     \
-                         0);                                    \
-                                                                \
-  async_work_group_copy ((__global GENTYPE *) 0,                \
-                         (const __local GENTYPE *) 0,           \
-                         0,                                     \
-                         0);                                    \
-                                                                \
-  async_work_group_strided_copy ((__local GENTYPE *) 0,         \
-                                 (const __global GENTYPE *) 0,  \
-                                 0,                             \
-                                 0);                            \
-                                                                \
-  async_work_group_strided_copy ((__global GENTYPE *) 0,        \
-                                 (const __local GENTYPE *) 0,   \
-                                 0,                             \
-                                 0);                            \
-                                                                \
   async_work_group_copy ((__local GENTYPE *) 0,                \
                          (__local GENTYPE *) 0,                 \
                          (__local GENTYPE *) 0,                 \
@@ -2237,7 +2216,6 @@ int get_image_height (image2d_t image);
   T _cl_overloadable FN(T x, SMARTPTR(Q T));
 
 #define REFER_FOR_T_TYPES_VT_VTVTP(T, V, Q, FN)     \
-  FN(V, (Q T*) 0);                                  \
   FN(V, (Q T*) 0, (Q T*) 0, (Q T*) 0);
 
 #ifndef FAKECL
@@ -2327,7 +2305,6 @@ int get_image_height (image2d_t image);
   T _cl_overloadable FN(T x, SMARTPTR(Q U));
 
 #define REFER_FOR_T_TYPES_VT_VTVUP(T, V, U, Q, FN)       \
-  FN(V, (Q U*) 0);                                       \
   FN(V, (Q U*) 0, (Q U*) 0, (Q U*) 0);
 
 #ifndef FAKECL
@@ -2436,7 +2413,6 @@ int get_image_height (image2d_t image);
   T _cl_overloadable FN(T x, T y, SMARTPTR(Q U));
 
 #define REFER_FOR_T_TYPES_VT_VTVTVUP(V, U, Q, FN)    \
-  FN(V, V, (Q U*) 0);                                \
   FN(V, V, (Q U*) 0, (Q U*) 0, (Q U*) 0);
 
 #ifndef FAKECL
@@ -2543,7 +2519,6 @@ int get_image_height (image2d_t image);
   TYPE##N _cl_overloadable vload##N(long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end);
 
 #define REFER_SAFE_VLOAD(TYPE, Q, N)                    \
-  vload##N(0, (Q TYPE*) 0);                             \
   vload##N(0, (Q TYPE*) 0, (Q TYPE*) 0, (Q TYPE*) 0);
 
 #define IMPLEMENT_SAFE_VSTORE(TYPE, Q, N)                               \
@@ -2558,7 +2533,6 @@ int get_image_height (image2d_t image);
   void _cl_overloadable vstore##N(TYPE##N x, long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end);
 
 #define REFER_SAFE_VSTORE(TYPE, Q, N)                           \
-  vstore##N(*(TYPE*) clamppointers_mkpointer(), 0, (Q TYPE*) 0);        \
   vstore##N(*(TYPE*) clamppointers_mkpointer(), 0, (Q TYPE*) 0, (Q TYPE*) 0, (Q TYPE*) 0);
 
 #define IMPLEMENT_SAFE_VLOAD_N_TYPES(N, Q, DEFAULT)     \
@@ -2726,7 +2700,6 @@ DECLARE_SAFE_VSTORE_N(16)
   _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last);
 
 #define REFER_FOR_T_TYPES_VT_VOLAPT(T, Q, FN)                           \
-  FN((volatile Q T *) 0);                                               \
   FN((volatile Q T *) 0, (Q T *) 0, (Q T *) 0);
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VOLAPTT(T, Q, FN)                      \
@@ -2743,7 +2716,6 @@ DECLARE_SAFE_VSTORE_N(16)
   _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last, T x);
 
 #define REFER_FOR_T_TYPES_VT_VOLAPTT(T, Q, FN)                        \
-  FN((volatile Q T *) 0, *(T*) clamppointers_mkpointer());            \
   FN((volatile Q T *) 0, (Q T *) 0, (Q T *) 0, *(T*) clamppointers_mkpointer());
 
 #define IMPLEMENT_FOR_T_TYPES_VT_VOLAPTTT(T, Q, FN)                     \
@@ -2762,7 +2734,6 @@ DECLARE_SAFE_VSTORE_N(16)
   _cl_overloadable T FN(volatile Q T *current, Q T *first, Q T *last, T x, T y);
 
 #define REFER_FOR_T_TYPES_VT_VOLAPTTT(T, Q, FN)         \
-  FN((volatile Q T *) 0, *(T*) clamppointers_mkpointer(), *(T*) clamppointers_mkpointer()); \
   FN((volatile Q T *) 0, (Q T *) 0, (Q T *) 0, *(T*) clamppointers_mkpointer(), *(T*) clamppointers_mkpointer());
 
 #define IMPLEMENT_SAFE_ATOMIC(T, Q)                             \
