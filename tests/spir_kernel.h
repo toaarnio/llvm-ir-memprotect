@@ -2767,7 +2767,7 @@ char* clamppointers_mkpointer(void);
 void clamppointers_keep_reference(void)
 {
   REFER_FOR_DUMP_ADDRESS();
-  REFER_SAFE_ASYNC_COPY_FUNCS_ALL();
+  //REFER_SAFE_ASYNC_COPY_FUNCS_ALL();
 
 #ifndef FAKECL
   REFER_FOR_FLOAT_TYPES_VF_VFVFP(fract);
