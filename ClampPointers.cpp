@@ -82,35 +82,17 @@ namespace WebCL {
   // address spaces, whose variables are in global scope from global scope
   // and address spaces allocated with alloca in function scope
   
-  // Numbers according to SPIR target (if nvptx constantAddressSpaceNumber will be overrided to be 4)
+  // Numbers according to SPIR target (can be overrided in start of runOnModule for different targets)
   unsigned privateAddressSpaceNumber  = 0;
   unsigned globalAddressSpaceNumber   = 1;
   unsigned constantAddressSpaceNumber = 2;
   unsigned localAddressSpaceNumber    = 3;
 
-  // std::string addressSpaceLabel(unsigned as) {
-  //   switch (as) {
-  //   case 0: return "Private";
-  //   case 1: return "Global";
-  //   case 2: return "Constant";
-  //   case 3: return "Local";
-  //   }
-  //   return "Unknown";
-  // }
-
-  // Numbers of NVPTX backend: http://llvm.org/docs/NVPTXUsage.html
-  //const unsigned privateAddressSpaceNumber  = 0;
-  //const unsigned globalAddressSpaceNumber   = 1;
-  //const unsigned constantAddressSpaceNumber = 4;
-  //const unsigned localAddressSpaceNumber    = 3; // Shared address space
-
   std::string addressSpaceLabel(unsigned as) {
-    switch (as) {
-    case 0: return "Private";
-    case 1: return "Global";
-    case 4: return "Constant";
-    case 3: return "Local";
-    }
+    if (as == privateAddressSpaceNumber) return "Private";
+    if (as == globalAddressSpaceNumber) return "Global";
+    if (as == constantAddressSpaceNumber) return "Constant";
+    if (as == localAddressSpaceNumber) return "Local";
     return "Unknown";
   }
   
@@ -704,7 +686,8 @@ namespace WebCL {
       IRBuilder<> blockBuilder(at);
       Value* min;
       Value* max;
-      getBoundsPointers(F, blockBuilder, min, max);
+      // get start and end address of limit, not pointers where they are stored...
+      getBounds(F, blockBuilder, min, max);
 
       first = BitCastInst::CreatePointerCast(min, type, "", at);
 
@@ -833,16 +816,14 @@ namespace WebCL {
       // nothing
     }
     ~SmartPtrAreaLimit() {}
-      
+    
     void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
-      getBoundsPointers(F, blockBuilder, min, max);
-      min = blockBuilder.CreateLoad(min);
-      max = blockBuilder.CreateLoad(max);
+      min = blockBuilder.CreateExtractValue(smartptr, genVector(1u));
+      max = blockBuilder.CreateExtractValue(smartptr, genVector(2u));
     }
 
     void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
-      min = blockBuilder.CreateExtractValue(smartptr, genVector(1u));
-      max = blockBuilder.CreateExtractValue(smartptr, genVector(2u));
+      fast_assert(false, "Cannot return bound pointers for arguments, smart pointer min and max limits are passed as value arg, not indirectly.");
     }
 
     void print(llvm::raw_ostream& stream) const {
@@ -864,7 +845,7 @@ namespace WebCL {
   // operations, and if the flag is set, the object cannot be mutated.
   class AddressSpaceInfoManager {
   public:
-    typedef void (AddressSpaceInfoManager::*GetLimitsFunc)(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const;
+    typedef void (AddressSpaceInfoManager::*GetLimitsFunc)(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) ;
 
     class ASAreaLimit: public AreaLimitBase {
     public:
@@ -874,10 +855,12 @@ namespace WebCL {
       }
       ~ASAreaLimit() {}
       
+      // returns direct values of bounds min and max limit
       void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
         (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max, true);
       }
 
+      // returns addresses where min and max are stored if indirect limit, asserts with direct limits
       void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
         (infoManager.*limitsFunc)(F, blockBuilder, asIndex, min, max, false);
       }
@@ -1293,15 +1276,22 @@ namespace WebCL {
       value->setName("constantLimits");
       return value;
     }
-    void getConstantLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
+    void getConstantLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues)  {
       LLVMContext& c = M.getContext();
-      Value* paa = getProgramAllocations(*F);
-      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 0));
-      if (finalValues) min = blockBuilder.CreateLoad(min);
-      min->setName("constantLimits.min");
-      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 1));
-      if (finalValues) max = blockBuilder.CreateLoad(max);
-      max->setName("constantLimits.max");
+      if (n == 0) {
+        fast_assert(finalValues, "Trying to get location where address is stored from direct reference. Can't do that.");
+        GlobalVariable* root = getConstantAllocations();
+        min = ConstantExpr::getGetElementPtr(root, genIntVector<Constant*>(c, 0));
+        max = ConstantExpr::getGetElementPtr(root, genIntVector<Constant*>(c, 1));
+      } else {
+        Value* paa = getProgramAllocations(*F);
+        min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 0));
+        if (finalValues) min = blockBuilder.CreateLoad(min);
+        min->setName("constantLimits.min");
+        max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 0, 2 * n + 1));
+        if (finalValues) max = blockBuilder.CreateLoad(max);
+        max->setName("constantLimits.max");
+      }
     }
     GetElementPtrInst* getGlobalLimitsField(Function *F, IRBuilder<> &blockBuilder) const {
       LLVMContext& c = M.getContext();
@@ -1310,7 +1300,7 @@ namespace WebCL {
       value->setName("globalLimits");
       return value;
     }
-    void getGlobalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
+    void getGlobalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues)  {
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 1, 2 * n + 0));
@@ -1327,15 +1317,24 @@ namespace WebCL {
       value->setName("localLimits");
       return value;
     }
-    void getLocalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
+    void getLocalLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues)  {
       LLVMContext& c = M.getContext();
-      Value* paa = getProgramAllocations(*F);
-      min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 0));
-      if (finalValues) min = blockBuilder.CreateLoad(min);
-      min->setName("localLimits.min");
-      max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 1));
-      if (finalValues) max = blockBuilder.CreateLoad(max);
-      max->setName("localLimits.max");
+
+      // if getting local limits of address space struct, get it directly from there
+      if (n == 0) {
+        fast_assert(finalValues, "Trying to get location where address is stored from direct reference. Can't do that.");
+        GlobalVariable* root = getLocalAllocations();
+        min = ConstantExpr::getGetElementPtr(root, genIntVector<Constant*>(c, 0));
+        max = ConstantExpr::getGetElementPtr(root, genIntVector<Constant*>(c, 1));
+      } else {
+        Value* paa = getProgramAllocations(*F);
+        min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 0));
+        if (finalValues) min = blockBuilder.CreateLoad(min);
+        min->setName("localLimits.min");
+        max = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 2, 2 * n + 1));
+        if (finalValues) max = blockBuilder.CreateLoad(max);
+        max->setName("localLimits.max");
+      }
     }
     GetElementPtrInst* getPrivateAllocationsField(Function *F, IRBuilder<> &blockBuilder) const {
       LLVMContext& c = M.getContext();
@@ -1351,7 +1350,7 @@ namespace WebCL {
       value->setName("privateAllocs");
       return value;
     }
-    void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) const {
+    void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) {
       // TODO: is thus correct?
       assert(!finalValues);
       LLVMContext& c = M.getContext();
@@ -2233,7 +2232,7 @@ namespace WebCL {
     ValueVectorByAddressSpaceMap staticAllocations;
     // set of address spaces which we need to allocate from global scope
     UIntSet globalScopeAdressSpaces;
-            
+    
     for (Module::global_iterator g = M.global_begin(); g != M.global_end(); g++) {
       // collect only named linked addresses (for unnamed there cannot be relative references anywhere) externals are allowed only in special case.
       DEBUG( dbgs()  << "Found global: "; g->print(dbgs());
@@ -2242,7 +2241,7 @@ namespace WebCL {
       fast_assert(!g->hasInitializer() || simpleConstant(g->getInitializer()),
                   "Unsupported: Globals cannot have complex initalizers");
 
-      if ( g->hasUnnamedAddr() ) {
+      if ( g->hasUnnamedAddr() && g->getType()->getAddressSpace() == privateAddressSpaceNumber ) {
         DEBUG( dbgs() << " ### Ignored because unnamed address \n"; );
       } else if ( g->hasExternalLinkage() && g->isDeclaration() ) {
         DEBUG( dbgs() << " ### Ignored because extern linkage \n"; );
@@ -2264,7 +2263,8 @@ namespace WebCL {
         AllocaInst *alloca = dyn_cast<AllocaInst>(i);
         if (alloca != NULL) {
           if ( dependenceAnalyser.hasOnlySafeAccesses(alloca) ) {
-            DEBUG( dbgs() << "Skipping alloca from private address space beacuse it does not have any relative / indirect accesses:"; alloca->print(dbgs()); dbgs() << "\n"; );
+            DEBUG( dbgs() << "Skipping alloca from private address space beacuse it does not have any relative / indirect accesses:";
+                   alloca->print(dbgs()); dbgs() << "\n"; );
           } else {
             DEBUG( dbgs() << "Collecting: "; alloca->print(dbgs()); dbgs() << "\n"; );
             staticAllocations[alloca->getType()->getAddressSpace()].push_back(alloca);
@@ -3452,7 +3452,6 @@ namespace WebCL {
         }
         
         DEBUG( dbgs() << "Adding limit checks for:"; (*inst)->print(dbgs()); dbgs() << " op: "; ptrOperand->print(dbgs()); dbgs() << "\n" );
-        //areaLimitManager.getAreaLimits(*inst, ptrOperand);
         createLimitCheck(ptrOperand, areaLimitManager.getAreaLimits(*inst, ptrOperand), *inst);
       }
 
