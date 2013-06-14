@@ -1542,7 +1542,7 @@ namespace WebCL {
     // returns list of all base dependencies of value
     void getAllBaseDependencies(Value* op, ValueSet &retVal, InstrSet *checkedLocations = NULL) {
       
-      dbgs() << "GETTING BASE:"; op->print(dbgs()); dbgs() << "\n";
+      DEBUG( dbgs() << "GETTING BASE:"; op->print(dbgs()); dbgs() << "\n"; );
       if (LoadInst *load = dyn_cast<LoadInst>(op)) {
         op = load->getPointerOperand();
       }
@@ -1550,7 +1550,7 @@ namespace WebCL {
       int indirection = getIndirection(op->getType());
       DepKey key = DepKey(indirection, op);
       
-      dbgs() << "depkey: [" << indirection << ","; op->print(dbgs()); dbgs() << "]\n";
+      DEBUG( dbgs() << "depkey: [" << indirection << ","; op->print(dbgs()); dbgs() << "]\n"; );
       
       DepValueSet deps = dependencies[key];
       
@@ -1562,7 +1562,7 @@ namespace WebCL {
       
       for (DepValueSet::iterator iter = deps.begin(); iter != deps .end(); iter++) {
         const DepValue &dep = *iter;
-        dbgs() << "ITERATING DEP:"; dep.first->print(dbgs()); dbgs() << " OP: "; dep.second->print(dbgs()); dbgs() << "\n";
+        DEBUG( dbgs() << "ITERATING DEP:"; dep.first->print(dbgs()); dbgs() << " OP: "; dep.second->print(dbgs()); dbgs() << "\n"; );
         if (checkedLocations->count(dep.first) == 0) {
           checkedLocations->insert(dep.first);
 
