@@ -1194,14 +1194,15 @@ namespace WebCL {
       return paa;
     }
     
-    // TODO: also needs to get replaced calls I suppose...
     void addAReplacementsToBookkeepping(FunctionManager &functionManager) {
+      DEBUG( dbgs() << "Going through replaced arguments..."; );
       const ArgumentMap& replacedArgs = functionManager.getReplacedArguments();
       for (ArgumentMap::const_iterator a = replacedArgs.begin(); a != replacedArgs.end(); ++a) {
         Argument *original = a->first;
         Argument *replacement = a->second;
         addReplacement(original, replacement);
       }
+      DEBUG( dbgs() << "--- done with replaced arguments..."; );
     }
     
   private:
@@ -1871,7 +1872,8 @@ namespace WebCL {
         if ( i->isDeclaration() && argsHasOriginalSafePointer(i->getArgumentList()) ) {
           ArgumentMap replacedArguments;
           Function* newFunction = transformSafeArguments(*i, replacedArguments);
-          functionManager.replaceArguments(replacedArguments);
+          // TODO: CHECK IF THIS IS ACTUALLY NEEDED FOR SOMETHING... (removed because it causes depanalyser to go through all builtin args...)
+          // functionManager.replaceArguments(replacedArguments);
           functionManager.replaceFunction(&*i, newFunction);
           functionManager.addSafeBuiltinFunction(newFunction);
         } else if ( i->isDeclaration() && argsHasOriginalSafePointer(i->getArgumentList()) ) {
