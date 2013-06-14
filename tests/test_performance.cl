@@ -21,7 +21,7 @@
 // NOTE: for now looks like -O3 cripples safe exception load/store analysis
 // TODO: get times from unclamped versions and compare to clamped ones and expect perf hit to be max 30%
 
-// RUN: clang -target nvptx -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
+// RUN: clang -target spir -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.ll &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
 // RUN: opt -S -O3 $OUT_FILE.ll -o $OUT_FILE.O3.ll &&
 // RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
