@@ -4,22 +4,16 @@
 
 __kernel void dynproc_kernel (int iteration,
                               __global int* gpuWall,
-                              int gpuWallSize,
                               __global int* gpuSrc,
-                              int gpuSrcSize,
                               __global int* gpuResults,
-                              int gpuResultsSize,
                               int cols,
                               int rows,
                               int startStep,
                               int border,
                               int HALO,
                               __local int* prev,
-                              int prevSize,
                               __local int* result,
-                              int resultSize,
-                              __global int* outputBuffer,
-                              int outputBufferSize)
+                              __global int* outputBuffer)
 {
 	int BLOCK_SIZE = get_local_size(0);
 	int bx = get_group_id(0);

@@ -159,19 +159,32 @@ int main(int argc, char** argv)
 		int arg0 = MIN(pyramid_height, rows-t-1);
 		int theHalo = HALO;
 
+                int gpuWallSize = 0;
+                int gpuSrcSize = 0;
+                int gpuResultsSize = 0;
+                int prevSize = 0;
+                int resultSize = 0;
+                int outputBufferSize = 0;
+
 		// Set the kernel arguments.
 		clSetKernelArg(cl.kernel(kn), 0,  sizeof(cl_int), (void*) &arg0);
 		clSetKernelArg(cl.kernel(kn), 1,  sizeof(cl_mem), (void*) &d_gpuWall);
-		clSetKernelArg(cl.kernel(kn), 2,  sizeof(cl_mem), (void*) &d_gpuResult[src]);
-		clSetKernelArg(cl.kernel(kn), 3,  sizeof(cl_mem), (void*) &d_gpuResult[final_ret]);
-		clSetKernelArg(cl.kernel(kn), 4,  sizeof(cl_int), (void*) &cols);
-		clSetKernelArg(cl.kernel(kn), 5,  sizeof(cl_int), (void*) &rows);
-		clSetKernelArg(cl.kernel(kn), 6,  sizeof(cl_int), (void*) &t);
-		clSetKernelArg(cl.kernel(kn), 7,  sizeof(cl_int), (void*) &borderCols);
-		clSetKernelArg(cl.kernel(kn), 8,  sizeof(cl_int), (void*) &theHalo);
-		clSetKernelArg(cl.kernel(kn), 9,  sizeof(cl_int) * (cl.localSize()), 0);
-		clSetKernelArg(cl.kernel(kn), 10, sizeof(cl_int) * (cl.localSize()), 0);
-		clSetKernelArg(cl.kernel(kn), 11, sizeof(cl_mem), (void*) &d_outputBuffer);
+		clSetKernelArg(cl.kernel(kn), 2,  sizeof(cl_int), (void*) &gpuWallSize);
+		clSetKernelArg(cl.kernel(kn), 3,  sizeof(cl_mem), (void*) &d_gpuResult[src]);
+		clSetKernelArg(cl.kernel(kn), 4,  sizeof(cl_int), (void*) &gpuSrcSize);
+		clSetKernelArg(cl.kernel(kn), 5,  sizeof(cl_mem), (void*) &d_gpuResult[final_ret]);
+		clSetKernelArg(cl.kernel(kn), 6,  sizeof(cl_int), (void*) &gpuResultsSize);
+		clSetKernelArg(cl.kernel(kn), 7,  sizeof(cl_int), (void*) &cols);
+		clSetKernelArg(cl.kernel(kn), 8,  sizeof(cl_int), (void*) &rows);
+		clSetKernelArg(cl.kernel(kn), 9,  sizeof(cl_int), (void*) &t);
+		clSetKernelArg(cl.kernel(kn), 10,  sizeof(cl_int), (void*) &borderCols);
+		clSetKernelArg(cl.kernel(kn), 11,  sizeof(cl_int), (void*) &theHalo);
+		clSetKernelArg(cl.kernel(kn), 12,  sizeof(cl_int) * (cl.localSize()), 0);
+		clSetKernelArg(cl.kernel(kn), 13,  sizeof(cl_int), (void*) &prevSize);
+		clSetKernelArg(cl.kernel(kn), 14, sizeof(cl_int) * (cl.localSize()), 0);
+		clSetKernelArg(cl.kernel(kn), 15, sizeof(cl_int), (void*) &resultSize);
+		clSetKernelArg(cl.kernel(kn), 16, sizeof(cl_mem), (void*) &d_outputBuffer);
+		clSetKernelArg(cl.kernel(kn), 17, sizeof(cl_int), (void*) &outputBufferSize);
 		cl.launch(kn);
 	}
 
