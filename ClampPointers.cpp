@@ -244,6 +244,10 @@ namespace WebCL {
   StructType* getSmartStructType( LLVMContext& c, Type* t ) {
     return StructType::get( c, genVector<Type*>(t,t,t) );
   }
+  // This return the actual type of the argument
+  PointerType* getSmartStructTypePtr( LLVMContext& c, Type* t ) {
+    return PointerType::get( getSmartStructType(c, t), privateAddressSpaceNumber );
+  }
  
 
   template<typename T>
@@ -337,8 +341,9 @@ namespace WebCL {
 
   bool isGeneratedSafePointerType( Type* arg ) {
     bool result = false;
-    StructType* st = dyn_cast<StructType>(arg);
-    if (st && st->indexValid(2ul)) {
+    PointerType* pt = dyn_cast<PointerType>(arg);
+    StructType* st = pt ? dyn_cast<StructType>(pt->getTypeAtIndex(0u)) : 0;
+    if (pt && st->indexValid(2ul)) {
       llvm::PointerType* pt1 = dyn_cast<PointerType>(st->getTypeAtIndex(0u));
       llvm::PointerType* pt2 = dyn_cast<PointerType>(st->getTypeAtIndex(1u));
       llvm::PointerType* pt3 = dyn_cast<PointerType>(st->getTypeAtIndex(2u));
@@ -405,7 +410,7 @@ namespace WebCL {
         // TODO: assert not supported arguments (e.g. some int**, struct etc... or at least verify cases we can allow)
         
         if( !dontTouchArguments && t->isPointerTy() ) {
-          Type* smart_array_struct = getSmartStructType( c, t );
+          Type* smart_array_struct = getSmartStructTypePtr( c, t );
           argTypes.push_back( smart_array_struct );
           safeArgNos.insert( argNo );
         } else {
@@ -818,8 +823,12 @@ namespace WebCL {
     ~SmartPtrAreaLimit() {}
     
     void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
-      min = blockBuilder.CreateExtractValue(smartptr, genVector(1u));
-      max = blockBuilder.CreateExtractValue(smartptr, genVector(2u));
+      LLVMContext& c = F->getContext();
+      Value* v;
+      v = blockBuilder.CreateGEP(smartptr, genIntVector<Value*>(c, 0, 1));
+      min = blockBuilder.CreateLoad(v);
+      v = blockBuilder.CreateGEP(smartptr, genIntVector<Value*>(c, 0, 2));
+      max = blockBuilder.CreateLoad(v);
     }
 
     void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min, Value *&max) {
@@ -1937,7 +1946,7 @@ namespace WebCL {
           PointerType* pt2 = dyn_cast<PointerType>( origArgIt->getType() );
           fast_assert( pt0 == pt1, "Types 0 and 1 are not the same" );
           fast_assert( pt1 == pt2, "Types 1 and 2 are not the same" );
-          newTypes.push_back( getSmartStructType( c, pt0 ) );
+          newTypes.push_back( getSmartStructTypePtr( c, pt0 ) );
           origArgIdx += 2;
         } else {
           newTypes.push_back( origArgIt->getType() );
@@ -2571,8 +2580,8 @@ namespace WebCL {
     new StoreInst(origArg, curGEP, location);
     new StoreInst(castedMinAddress, minGEP, location);
     new StoreInst(castedMaxAddress, maxGEP, location);
-    LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", location);
-    return smartArgVal;
+    //LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", location);
+    return smartArgStructAlloca;
   }
 
   /**
@@ -3096,10 +3105,10 @@ namespace WebCL {
             newArg->setName(paramName);
 
             // get value of passed smart_pointer.cur and replace all uses of original argument with it
-            ExtractValueInst* newArgCur = ExtractValueInst::Create(newArg,
-                                                                   genVector<unsigned int>(0),
-                                                                   Twine("") + newArg->getName() + ".Cur",
-                                                                   entryBlock.begin());
+            Instruction* instr = entryBlock.begin();
+            LLVMContext& c = newFun->getContext();
+            GetElementPtrInst* gep = GetElementPtrInst::Create(newArg, genIntVector<Value*>(c, 0, 0), "", instr);
+            LoadInst* newArgCur = new LoadInst(gep, Twine("") + newArg->getName() + ".Cur", instr);
 
             // this potentially will not work if there is store to arg... probably that case is impossible to happen and smart pointer arguments are read-only
             DEBUG( dbgs() << "Replacing old arg: "; oldArg->getType()->print(dbgs()); dbgs() << " with: "; newArgCur->getType()->print(dbgs()); dbgs() << "\n"; );
