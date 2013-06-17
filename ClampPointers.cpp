@@ -347,27 +347,6 @@ namespace WebCL {
     return result;
   }
 
-  /** returns true if an argument list looks like it might contain a
-   * transformed safe pointer; it searches for a record with three
-   * sequential pointers of the same type. It is by no means a certain
-   * indicator, you should use it only for builtins where there is no
-   * chance of mistake . */
-  bool argsHasTransformedSafePointer( llvm::Function::ArgumentListType& args ) {
-    bool result = false;
-    for ( llvm::Function::ArgumentListType::const_iterator argIt = args.begin();
-          !result && argIt != args.end();
-          ++argIt ) {
-      if ( llvm::StructType* st = dyn_cast<StructType>(argIt->getType()) ) {
-        const llvm::StructType::element_iterator firstEl = st->element_begin();
-        result = (st->element_end() - firstEl == 3 &&
-                  firstEl[0]->isPointerTy() &&  
-                  firstEl[1]->isPointerTy() &&  
-                  firstEl[2]->isPointerTy());
-      }
-    }
-    return result;
-  }
-
   /* **SafeArgTypes** is the operation for making a smartptrized
    * version of a function signature. Look at the constructor 
    * for more documentation.
