@@ -109,7 +109,67 @@ void OpenCL::createKernel(string kernelName)
 	}
 }
 
-void OpenCL::saveKernel(const char* filename)
+namespace {
+	void outputBuildLog(cl_program program, cl_device_id device)
+	{
+		cout << "\n*************************************************" << endl;
+		cout << "***   OUTPUT FROM COMPILING THE KERNEL FILE   ***" << endl;
+		cout << "*************************************************" << endl;
+		// Shows the log
+		char*  build_log;
+		size_t log_size;
+		// First call to know the proper size
+		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
+		build_log = new char[log_size + 1];
+		// Second call to get the log
+		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, log_size, build_log, NULL);
+		build_log[log_size] = '\0';
+		cout << build_log << endl;
+		delete[] build_log;
+		cout << "\n*************************************************" << endl;
+		cout << "*** END OUTPUT FROM COMPILING THE KERNEL FILE ***" << endl;
+		cout << "*************************************************\n\n" << endl;
+	}
+}
+
+bool OpenCL::loadProgram(const char* filename)
+{
+	// lifted from https://devtalk.nvidia.com/default/topic/468400/pre-compiling-opencl-kernels-tutorial/
+	FILE* fp = fopen(filename, "r");
+	if (!fp) {
+		std::cout << "Cannot find pre-built kernel " << filename << ", skipping load" << std::endl;
+		return false;
+	}
+	std::cout << "Loading pre-built kernel" << std::endl;
+	fseek(fp, 0, SEEK_END);
+	const size_t lSize = ftell(fp);
+	rewind(fp);
+	unsigned char* buffer;
+	buffer = (unsigned char*) malloc (lSize);
+	fread(buffer, 1, lSize, fp);
+	fclose(fp);
+
+	cl_int status;
+	cl_int err;
+	program = clCreateProgramWithBinary(context, 1, &device_id[0],
+																			&lSize, (const unsigned char**)&buffer,
+																			&status, &err);
+
+	if (err != CL_SUCCESS) {
+		cerr << "Error in clCreateProgramWithBinary, Line " << __LINE__ << " in file " << __FILE__ << " " << endl;
+		exit(EXIT_FAILURE);
+	}
+
+	err = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
+	if (err != CL_SUCCESS) {
+		cerr << "Error while building pre-compiled program";
+		outputBuildLog(program, device_id[0]);
+		exit(EXIT_FAILURE);
+	}
+	return true;
+}
+
+void OpenCL::saveProgram(const char* filename)
 {
 	// lifted from https://devtalk.nvidia.com/default/topic/468400/pre-compiling-opencl-kernels-tutorial/
 	ofstream kernelFile(filename);
@@ -147,6 +207,7 @@ void OpenCL::saveKernel(const char* filename)
 
 void OpenCL::buildKernel()
 {
+	std::cout << "Building kernel" << std::endl;
 	/* Load the source code for all of the kernels into the array source_str */
 	FILE*  theFile;
 	char*  source_str;
@@ -189,47 +250,14 @@ void OpenCL::buildKernel()
 	if (ret != CL_SUCCESS)
 	{
 		printf("\nError at clBuildProgram! Error code %i\n\n", ret);
-		cout << "\n*************************************************" << endl;
-		cout << "***   OUTPUT FROM COMPILING THE KERNEL FILE   ***" << endl;
-		cout << "*************************************************" << endl;
-		// Shows the log
-		char*  build_log;
-		size_t log_size;
-		// First call to know the proper size
-		clGetProgramBuildInfo(program, device_id[0], CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
-		build_log = new char[log_size + 1];
-		// Second call to get the log
-		clGetProgramBuildInfo(program, device_id[0], CL_PROGRAM_BUILD_LOG, log_size, build_log, NULL);
-		build_log[log_size] = '\0';
-		cout << build_log << endl;
-		delete[] build_log;
-		cout << "\n*************************************************" << endl;
-		cout << "*** END OUTPUT FROM COMPILING THE KERNEL FILE ***" << endl;
-		cout << "*************************************************\n\n" << endl;
+		outputBuildLog(program, device_id[0]);
 		exit(1);
 	}
-
 
 	/* Show error info from building the program. */
 	if (VERBOSE)
 	{
-		cout << "\n*************************************************" << endl;
-		cout << "***   OUTPUT FROM COMPILING THE KERNEL FILE   ***" << endl;
-		cout << "*************************************************" << endl;
-		// Shows the log
-		char*  build_log;
-		size_t log_size;
-		// First call to know the proper size
-		clGetProgramBuildInfo(program, device_id[0], CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
-		build_log = new char[log_size + 1];
-		// Second call to get the log
-		clGetProgramBuildInfo(program, device_id[0], CL_PROGRAM_BUILD_LOG, log_size, build_log, NULL);
-		build_log[log_size] = '\0';
-		cout << build_log << endl;
-		delete[] build_log;
-		cout << "\n*************************************************" << endl;
-		cout << "*** END OUTPUT FROM COMPILING THE KERNEL FILE ***" << endl;
-		cout << "*************************************************\n\n" << endl;
+		outputBuildLog(program, device_id[0]);
 	}
 }
 
@@ -330,5 +358,7 @@ void OpenCL::init(int isGPU)
 	else
 		getDevices(CL_DEVICE_TYPE_CPU);
 
-	buildKernel();
+	if (!loadProgram("kernel.ptx")) {
+		buildKernel();
+	}
 }

@@ -53,4 +53,5 @@ private:
 	
 	void getDevices(cl_device_type deviceType);
 	void buildKernel();
+	bool loadProgram(const char* filename);
 };
