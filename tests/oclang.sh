@@ -15,7 +15,7 @@ if [ "x$USE_CLC" = "x1" ]; then
       TOPDIR="`echo $TOPDIR | sed 's,/[^/]*$,,'`"
     done
     if [ -z "$TOPDIR" ]; then
-	echo "Cannot find libclc. Set environment variable LIBCLC to point to its source directory."
+	echo "Cannot find libclc. Set environment variable LIBCLC to point to its source directory." >&2
 	exit 1
     fi
     LIBCLC=$TOPDIR/libclc

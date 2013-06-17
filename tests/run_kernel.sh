@@ -8,7 +8,7 @@
 # setup required variables if not set
 if [ ! -f "$OCLANG" ]; then
 OCLANG="$(dirname $0)/oclang.sh"
-echo "OCLANG was not set, setting default to $OCLANG"
+echo "OCLANG was not set, setting default to $OCLANG" >&2
 fi
 
 function show_usage {
@@ -64,24 +64,24 @@ for arg in $arg_list; do
     # parse initializer from the first comma until arg separator ":"
     initializer=$(echo $arg | sed -E 's@[^,]+,([^\:]+)\).*@\1@');
     not_table=$(echo $initializer | grep -q "{"; echo $?);
-    echo "Parameter: $type $initializer"
+    echo "Parameter: $type $initializer" >&2
     if [ "$not_table" == "0" ]; then 
         echo "  $type arg${arg_index}[] = $initializer;"  >> $KRUNNER_C;
     else
-        echo "  $type arg${arg_index} = $initializer;"  >>$KRUNNER_C;
+        echo "  $type arg${arg_index} = $initializer;"  >> $KRUNNER_C;
     fi
     kernel_argument_list="$kernel_argument_list,arg$arg_index";
     arg_index=$(expr $arg_index + 1);
 done
 # cut first comma from call
 kernel_argument_list=$(echo $kernel_argument_list|cut -c2-);
-echo "  for (int i = 0; i < workitem_count; i++) {" >>$KRUNNER_C
+echo "  for (int i = 0; i < workitem_count; i++) {" >> $KRUNNER_C
 echo "    current_global_id = i;" >> $KRUNNER_C
 echo "    $kernel_function($kernel_argument_list);" >> $KRUNNER_C
 echo "  }" >> $KRUNNER_C
 echo "}" >> $KRUNNER_C
 
-BUILDING_RUNKERNEL=1 $OCLANG -o $KRUNNER_BC $KRUNNER_C &&
+BUILDING_RUNKERNEL=1 $OCLANG -o $KRUNNER_BC $KRUNNER_C >&2 &&
 llvm-link $LIBRARY_BC  $KRUNNER_BC $kernel_path -o $KRUNNER_LINKED_BC &&
 if [ "x$BENCHMARK" = "x1" ]; then
     time lli $KRUNNER_LINKED_BC

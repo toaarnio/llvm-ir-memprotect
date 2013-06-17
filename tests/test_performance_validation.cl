@@ -21,10 +21,10 @@
 // RUN: $OCLANG -c $TEST_SRC -O0 -o $OUT_FILE.bc &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
 // RUN: opt -O3 $OUT_FILE.bc -o $OUT_FILE.O3.bc &&
-// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.bc -o $OUT_FILE.clamped.bc &&
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions $OUT_FILE.bc -o $OUT_FILE.clamped.bc &&
 // RUN: opt -O3 $OUT_FILE.clamped.bc -o $OUT_FILE.clamped.optimized.bc &&
 // RUN: echo "Running original and clamped and comparing outputs:" &&
-// RUN: [ $($RUN_KERNEL $OUT_FILE.O3.bc test_kernel 1 "(int,{0}):(int,1)") == $($RUN_KERNEL $OUT_FILE.clamped.optimized.bc test_kernel 1 "(int,{0}):(int,1)") ] &&
+// RUN: [ $($RUN_KERNEL $OUT_FILE.O3.bc test_kernel 1 "(int,{0})") == $($RUN_KERNEL $OUT_FILE.clamped.optimized.bc test_kernel 1 "(int,{0}):(int,1)") ] &&
 // RUN: echo "outputs were equal" 
 
 typedef int int32_t;
