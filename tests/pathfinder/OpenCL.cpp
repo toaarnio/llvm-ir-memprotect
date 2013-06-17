@@ -1,6 +1,9 @@
 #include <cstdlib>
 #include "OpenCL.h"
+
+#ifdef USE_FAKECL
 #include "FakeCL.h"
+#endif
 
 OpenCL::OpenCL(int displayOutput)
 {

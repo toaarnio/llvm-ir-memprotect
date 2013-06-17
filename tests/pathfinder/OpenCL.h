@@ -4,20 +4,22 @@
 #include <string>
 #include <cstring>
 
-/* // OpenCL header files */
-/* #ifdef __APPLE__ */
-/* #include <OpenCL/cl.h> */
-/* #include <OpenCL/cl_gl.h> */
-/* #include <OpenCL/cl_gl_ext.h> */
-/* #include <OpenCL/cl_ext.h> */
-/* #else */
-/* #include <CL/cl.h> */
-/* #include <CL/cl_gl.h> */
-/* #include <CL/cl_gl_ext.h> */
-/* #include <CL/cl_ext.h> */
-/* #endif */
-
+#ifdef USE_FAKECL
 #include "FakeCL.h"
+#else
+/* OpenCL header files */
+#ifdef __APPLE__
+#include <OpenCL/cl.h>
+#include <OpenCL/cl_gl.h>
+#include <OpenCL/cl_gl_ext.h>
+#include <OpenCL/cl_ext.h>
+#else
+#include <CL/cl.h>
+#include <CL/cl_gl.h>
+#include <CL/cl_gl_ext.h>
+#include <CL/cl_ext.h>
+#endif
+#endif
 
 using namespace std;
 

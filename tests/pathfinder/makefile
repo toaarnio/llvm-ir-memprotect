@@ -6,6 +6,14 @@ DEBUGFLAGS = -g
 CXXFLAGS = -I.. -g -O0
 LDFLAGS = -lm -lpthread
 
+ifndef USE_FAKECL
+LDFLAGS += -lOpenCL
+endif
+
+ifdef USE_FAKECL
+CXXFLAGS += -DUSE_FAKECL
+endif
+
 CL_LIBRARY = ../../pocl/library-fakecl.o
 
 ifdef SAFE
@@ -37,7 +45,11 @@ KERNEL=kernels.o
 		-c $< -o $@
 endif
 
+ifdef USE_FAKECL
 pathfinder: main.o ../FakeCL.o OpenCL.o $(CL_LIBRARY) $(KERNEL)
+else
+pathfinder: main.o OpenCL.o
+endif
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
 
 clean:

@@ -41,7 +41,9 @@ extern "C" void dynproc_kernel(...);
 
 void init(int argc, char** argv)
 {
+#ifdef USE_FAKECL
 	fakeclSetKernelFunc("dynproc_kernel", dynproc_kernel);
+#endif
 	if (argc == 4)
 	{
 		cols = atoi(argv[1]);
