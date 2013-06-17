@@ -2363,6 +2363,7 @@ namespace WebCL {
                                AddressSpaceInfoManager &infoManager) {
 
     NamedMDNode* oclKernels = M.getNamedMetadata("opencl.kernels");
+    NamedMDNode* nvvmAnnotations = M.getNamedMetadata("nvvm.annotations");
     if (oclKernels != NULL) {
       for (unsigned int op = 0; op < oclKernels->getNumOperands(); op++) {
         MDNode* md = oclKernels->getOperand(op);
@@ -2379,6 +2380,15 @@ namespace WebCL {
           smartKernel->setLinkage(GlobalValue::InternalLinkage);
           // TODO: if found nvptx_kernel attribute, move it to new kernel
           md->replaceOperandWith(0, newKernelEntryFunction);
+
+          if (nvvmAnnotations) {
+            for (unsigned int nvvmOp = 0; nvvmOp < nvvmAnnotations->getNumOperands(); nvvmOp++) {
+              MDNode* nvvmMd = nvvmAnnotations->getOperand(nvvmOp);
+              if (dyn_cast<Function>(nvvmMd->getOperand(0)) == oldFun) {
+                nvvmMd->replaceOperandWith(0, newKernelEntryFunction);
+              }
+            }
+          }
         }
 
         DEBUG( md->print(dbgs()); dbgs() << "\n" );
