@@ -5,6 +5,7 @@ DEBUGFLAGS = -g
 # lib and inc directories.
 CXXFLAGS = -I.. -g -O0
 LDFLAGS = -lm -lpthread
+LIBCLC ?= ../../.././../../libclc/
 
 ifndef USE_FAKECL
 LDFLAGS += -lOpenCL
@@ -16,6 +17,7 @@ endif
 
 CL_LIBRARY = ../../pocl/library-fakecl.o
 
+ifdef USE_FAKECL
 ifdef SAFE
 KERNEL=kernels.clamped.o
 
@@ -43,6 +45,17 @@ KERNEL=kernels.o
 		-include ../pocl_kernel.h \
 		-Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 \
 		-c $< -o $@
+endif
+else # ifdef USE_FAKECL
+%.ll: %.cl
+	clang \
+		-target nvptx--nvidiacl -I$(LIBCLC)/ptx-nvidiacl/include -I$(LIBCLC)/generic/include \
+		-Xclang -mlink-bitcode-file -Xclang $(LIBCLC)/nvptx--nvidiacl/lib/builtins.bc \
+		-include clc/clc.h -Dcl_clang_storage_class_specifiers -Dcl_khr_fp64 \
+		-S -c $< -emit-llvm -o $@
+
+%.ptx: %.ll
+	llc -march=nvptx -mcpu=sm_21 $< -o $@
 endif
 
 ifdef USE_FAKECL
