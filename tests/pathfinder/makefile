@@ -54,6 +54,9 @@ else # ifdef USE_FAKECL
 		-include clc/clc.h -Dcl_clang_storage_class_specifiers -Dcl_khr_fp64 \
 		-S -c $< -emit-llvm -o $@
 
+%.clamped.ll: %-orig.ll
+	opt -load $(CLAMP_PLUGIN) -clamp-pointers -S -o $@ $<
+
 %.ptx: %.ll
 	llc -march=nvptx -mcpu=sm_21 $< -o $@
 endif
