@@ -114,6 +114,7 @@ int main(int argc, char** argv)
 	// Create and build the kernel.
 	string kn = "dynproc_kernel";  // the kernel name, for future use.
 	cl.createKernel(kn);
+        cl.saveProgram("kernel.ptx");
 
 	// Allocate device memory.
 	cl_mem d_gpuWall = clCreateBuffer(cl.ctxt(),

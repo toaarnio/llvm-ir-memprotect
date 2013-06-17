@@ -36,6 +36,8 @@ public:
 	cl_command_queue q();
 	void launch(string toLaunch);
 	size_t localSize();
+
+	void saveProgram(const char* filename);
 	
 private:
 	int                     VERBOSE;           // Display output text from various functions?

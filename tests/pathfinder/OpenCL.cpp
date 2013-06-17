@@ -5,6 +5,8 @@
 #include "FakeCL.h"
 #endif
 
+#include <fstream>
+
 OpenCL::OpenCL(int displayOutput)
 {
 	VERBOSE = displayOutput;
@@ -105,6 +107,42 @@ void OpenCL::createKernel(string kernelName)
 
 		this->lwsize = howManyThreads;
 	}
+}
+
+void OpenCL::saveKernel(const char* filename)
+{
+	// lifted from https://devtalk.nvidia.com/default/topic/468400/pre-compiling-opencl-kernels-tutorial/
+	ofstream kernelFile(filename);
+	cl_uint programNumDevices;
+	clGetProgramInfo(program, CL_PROGRAM_NUM_DEVICES, sizeof(cl_uint), &programNumDevices, NULL);
+	if (programNumDevices == 0) {
+		cerr << "no valid binary was found" << std::endl;
+		exit(1);
+	}
+
+	size_t binariesSizes[programNumDevices];
+
+	clGetProgramInfo(program, CL_PROGRAM_BINARY_SIZES, programNumDevices*sizeof(size_t), binariesSizes, NULL);
+
+	char **binaries = new char*[programNumDevices];
+
+	for (size_t i = 0; i < programNumDevices; i++)
+		binaries[i] = new char[binariesSizes[i]+1];
+
+	clGetProgramInfo(program, CL_PROGRAM_BINARIES, programNumDevices*sizeof(size_t), binaries, NULL);
+
+	if(kernelFile.is_open()) {
+		for (size_t i = 0; i < programNumDevices; ++i) {
+			kernelFile << std::string(binaries[i], binaries[i] + binariesSizes[i]);
+		}
+	}
+	kernelFile.close();
+
+	for (size_t i = 0; i < programNumDevices; ++i) {
+		delete [] binaries[i];
+	}
+
+	delete [] binaries;
 }
 
 void OpenCL::buildKernel()
