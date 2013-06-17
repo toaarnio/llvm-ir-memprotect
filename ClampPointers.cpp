@@ -1352,8 +1352,7 @@ namespace WebCL {
       return value;
     }
     void getPrivateLimits(Function *F, IRBuilder<> &blockBuilder, int n, Value*& min, Value*& max, bool finalValues) {
-      // TODO: is thus correct?
-      assert(!finalValues);
+      assert(finalValues);
       LLVMContext& c = M.getContext();
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
