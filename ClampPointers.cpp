@@ -793,7 +793,6 @@ namespace WebCL {
  
     // returns final values that require no loading
     void getBounds(Function *F, IRBuilder<> &blockBuilder, Value *&min_, Value *&max_) {
-      assert(indirect);
       min_ = min;
       max_ = max;
       if (indirect) {
@@ -804,6 +803,7 @@ namespace WebCL {
     
     // returns pointers to bounds
     void getBoundsPointers(Function *F, IRBuilder<> &blockBuilder, Value *&min_, Value *&max_) {
+      fast_assert(indirect, "Cannot get pointers for direct limits.");
       min_ = min;
       max_ = max;
     }
@@ -2904,7 +2904,6 @@ namespace WebCL {
     // this argument type has been changed to smart pointer, find out corresponding smart
     if (oldArg->getType() != newArg->getType()) {
       //DEBUG( dbgs() << "- op #" << op << " needs fixing: "; operand->print(dbgs()); dbgs() << "\n" );
-
       AreaLimitSet limits = areaLimitManager.getAreaLimits(call, operand);
       fast_assert(limits.size() == 1, "Call operands have to be able to resolved to single limits.");
       AreaLimitBase *limit = *limits.begin();
@@ -2912,7 +2911,7 @@ namespace WebCL {
       Value* min;
       Value* max;
       IRBuilder<> blockBuilder(call);
-      limit->getBoundsPointers(call->getParent()->getParent(), blockBuilder, min, max);
+      limit->getBounds(call->getParent()->getParent(), blockBuilder, min, max);
       retArg = convertArgumentToSmartStruct(operand, min, max, call);
       removeAttribute = true;
 
