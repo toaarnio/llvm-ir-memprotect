@@ -358,7 +358,15 @@ void OpenCL::init(int isGPU)
 	else
 		getDevices(CL_DEVICE_TYPE_CPU);
 
-	if (!loadProgram("kernel.ptx")) {
-		buildKernel();
+	const char* loadKernelName = getenv("LOAD_KERNEL");
+	if (loadKernelName) {
+		if (!loadProgram(loadKernelName)) {
+			std::cerr << "Cannot load kernel " << loadKernelName << std::endl;
+			exit(1);
+		}
+	} else {
+		if (!loadProgram("kernel.ptx")) {
+			buildKernel();
+		}
 	}
 }
