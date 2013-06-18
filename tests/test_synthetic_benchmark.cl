@@ -1,5 +1,16 @@
-// RUN: echo "Requires test scripts. And clamp seems to fail if input is compiled with O0." && false &&
-// RUN: clang -Dcl_clang_storage_class_specifiers -isystem ../../../../libclc/generic/include -include clc/clc.h -target nvptx -xcl test_synthetic_benchmark.cl -emit-llvm -S -O3 -o synthetic_case.ll; llvm-link ../../../../libclc/nvptx--nvidiacl/lib/builtins.bc synthetic_case.ll -o synthetic_case.linked.bc; clang -target nvptx -O3 synthetic_case.linked.bc -S -o synthetic_case.nvptx.s
+// RUN: $OCLANG -DOUTPUT_RESULTS -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.O0.ll &&
+// RUN: echo "Running and verifying: synthetic test case on spir target." &&
+// RUN: opt -S -O3 $OUT_FILE.O0.ll -o $OUT_FILE.O3.ll &&
+// RUN: opt -S -load $CLAMP_PLUGIN -clamp-pointers $OUT_FILE.O0.ll -o $OUT_FILE.O0.clamped.ll &&
+// RUN: opt -S -load $CLAMP_PLUGIN -clamp-pointers $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
+// RUN: opt -S -O3 $OUT_FILE.O0.clamped.ll -o $OUT_FILE.O0.clamped.O3.ll &&
+// RUN: opt -S -O3 $OUT_FILE.O3.clamped.ll -o $OUT_FILE.O3.clamped.O3.ll &&
+// RUN: echo "Validating output:" &&
+// RUN: [ $($RUN_KERNEL $OUT_FILE.O0.ll square 1 "(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64):(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64)") == $($RUN_KERNEL $OUT_FILE.O0.clamped.ll square 1 "(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64):(int,64):(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64):(int,64)") ] &&
+// RUN: echo "Outputs matched." 
+
+// COMPILE TO PTX: 
+// clang -Dcl_clang_storage_class_specifiers -isystem ../../../../libclc/generic/include -include clc/clc.h -target nvptx -xcl test_synthetic_benchmark.cl -emit-llvm -S -O3 -o synthetic_case.ll; llvm-link ../../../../libclc/nvptx--nvidiacl/lib/builtins.bc synthetic_case.ll -o synthetic_case.linked.bc; clang -target nvptx -O3 synthetic_case.linked.bc -S -o synthetic_case.nvptx.s
 
 #define KERNEL_LOOP_COUNT 64
 
@@ -40,5 +51,8 @@ __kernel void square(__global float* input, const unsigned int input_size,
         result = (float)((int)(result > 0 ? result : -result));
         result += orig_input;
         output[i] = result*result;
+#ifdef OUTPUT_RESULTS
+        printf("%f,", output[i]);
+#endif
     }
 }
