@@ -15,6 +15,7 @@
 #include <time.h>
 #include <assert.h>
 #include <iostream>
+#include <sys/time.h>
 #include "OpenCL.h"
 
 using namespace std;
@@ -91,6 +92,13 @@ void fatal(char *s)
 	fprintf(stderr, "error: %s\n", s);
 }
 
+double now(void)
+{
+  struct timeval t;
+	gettimeofday(&t, NULL);
+	return t.tv_sec + double(t.tv_usec) / 1000000.0;
+}
+
 int main(int argc, char** argv)
 {
 	init(argc, argv);
@@ -147,6 +155,8 @@ int main(int argc, char** argv)
 	                                       sizeof(cl_int)*16384,
 	                                       h_outputBuffer,
 	                                       NULL);
+
+	double t0 = now();
 
 	int src = 1, final_ret = 0;
 	for (int t = 0; t < rows - 1; t += pyramid_height)
@@ -211,6 +221,11 @@ int main(int argc, char** argv)
 	                    NULL,                     // Event wait list. Not used.
 	                    NULL);                    // Event object for determining status. Not used.
 	
+
+	double t1 = now();
+
+	printf("time %f\n", t1 - t0);
+
 	// Tack a null terminator at the end of the string.
 	h_outputBuffer[16383] = '\0';
 	
