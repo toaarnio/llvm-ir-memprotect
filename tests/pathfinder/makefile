@@ -57,6 +57,9 @@ else # ifdef USE_FAKECL
 %.clamped.ll: %-orig.ll
 	opt -load $(CLAMP_PLUGIN) -clamp-pointers -S -o $@ $<
 
+%.optimized.ll: %.ll
+	opt -internalize -internalize-public-api-list=dynproc_kernel -O3 -S -o $@ $<
+
 %.ptx: %.ll
 	llc -march=nvptx -mcpu=sm_21 $< -o $@
 endif
