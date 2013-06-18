@@ -25,7 +25,7 @@ using namespace std;
 #define STR_SIZE 256
 #define DEVICE   0
 #define M_SEED   9
-#define BENCH_PRINT
+//#define BENCH_PRINT
 #define IN_RANGE(x, min, max)	((x)>=(min) && (x)<=(max))
 #define CLAMP_RANGE(x, min, max) x = (x<(min)) ? min : ((x>(max)) ? max : x )
 #define MIN(a, b) ((a)<=(b) ? (a) : (b))
