@@ -1,6 +1,6 @@
-#include "pocl_kernel.h"
+#include "spir_kernel.h"
 
-IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_ALL()
+/* //IMPLEMENT_SAFE_ASYNC_COPY_FUNCS_ALL() */
 IMPLEMENT_FOR_DUMP_ADDRESS()
 
 #ifndef FAKECL
@@ -11,8 +11,8 @@ IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVFP(sincos)
 
 // Tn frexp(T x, int *exp)
 // Tn frexp(T x, intn *exp)
-// T remquo(T x, int T *iptr) 
-// T remquo(T x, intn T *iptr) 
+// T remquo(T x, int T *iptr)
+// T remquo(T x, intn T *iptr)
 #ifndef FAKECL
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(frexp)
 IMPLEMENT_FOR_FLOAT_TYPES_VF_VFVIP(remquo)

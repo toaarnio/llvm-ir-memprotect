@@ -1868,14 +1868,14 @@ namespace WebCL {
     // just skip it. If function is unknown external call compilation will fail.
     for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
       if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
-        if ( i->isDeclaration() && argsHasOriginalSafePointer(i->getArgumentList()) ) {
+        if ( argsHasOriginalSafePointer(i->getArgumentList()) ) {
           ArgumentMap replacedArguments;
           Function* newFunction = transformSafeArguments(*i, replacedArguments);
-          // TODO: CHECK IF THIS IS ACTUALLY NEEDED FOR SOMETHING... (removed because it causes depanalyser to go through all builtin args...)
-          // functionManager.replaceArguments(replacedArguments);
+          // replacedArguments are used for fixing safe builtin implementation signatures
+          functionManager.replaceArguments(replacedArguments);
           functionManager.replaceFunction(&*i, newFunction);
           functionManager.addSafeBuiltinFunction(newFunction);
-        } else if ( i->isDeclaration() && argsHasOriginalSafePointer(i->getArgumentList()) ) {
+        } else if ( i->isDeclaration() && argsHasTransformedSafePointer(i->getArgumentList()) ) {
           functionManager.addSafeBuiltinFunction(i);
 
         } else if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
@@ -2841,7 +2841,7 @@ namespace WebCL {
         // if not supported yet assert
         fast_assert( unsupportedUnsafeBuiltins.count(demangledName) == 0, 
                      "Tried to call unsupported builtin: " + oldFun->getName() + " " + demangledName);
-          
+
         // if unsafe fix call
         if ( unsafeBuiltins.count(demangledName) > 0 ) {
             
@@ -3040,8 +3040,9 @@ namespace WebCL {
  
       DEBUG( dbgs() << "Moved BBs to " << newFun->getName() << "( .... ) and took the final function name.\n" );
 
-      // TODO: hmm.. why do we need isBuiltin check here? is this part of code deprecated?
       if ( isBuiltin ) {
+        // unsafe builtins are specially mapped from having argument float* arg, float* begin, float* end -> {
+        // float*, float*, float* } smartptr; fix arguments here
         const llvm::AttributeSet& oldAttributes = oldFun->getAttributes();
         // we need to do special operations to fold three safe arguments into one struct
         for( Function::arg_iterator
@@ -3056,7 +3057,8 @@ namespace WebCL {
             Argument*   argBegin = oldArgIt;
             ++oldArgIt; assert(oldArgIt != oldFun->arg_end());
             Argument*   argEnd   = oldArgIt;
-            Argument*   oldArg  = replacedArguments.find(oldArgIt)->second;
+            assert(replacedArguments.count(oldArgIt));
+            Argument*   oldArg   = replacedArguments.find(oldArgIt)->second;
             std::string name     = argCur->getName();
 
             BasicBlock::iterator instAt = entryBlock.begin();
@@ -3510,11 +3512,14 @@ namespace WebCL {
             deleteMe->eraseFromParent();
             F = M.begin();
           }
+          // make note of the calls in this function so we can transform those builtins
+          sortInstructions( F,  functionManager );
           continue;
         }
         
         if ( F->isIntrinsic() || F->isDeclaration() ||
-             unsupportedUnsafeBuiltins.count(functionName) ) {
+             unsupportedUnsafeBuiltins.count(functionName) ||
+             unsafeBuiltins.count(functionName) ) {
           continue;
         }
         

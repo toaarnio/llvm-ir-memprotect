@@ -25,7 +25,7 @@ safe-implementations-fakecl.bc: safe-implementations.cl ../tests/spir_kernel.h
 builtin-declarations.ll: safe-implementations.clamped.ll
 	grep '^define.*\*.*\*.*\*' $< | sed 's/^define /declare /;s/ {$$//' > $@
 
-library.bc: builtin-implementations.bc
+library.bc: builtin-implementations.bc safe-implementations.clamped.bc
 	llvm-link $^ -o $@
 
 library-fakecl.bc: builtin-implementations-fakecl.bc
