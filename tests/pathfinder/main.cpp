@@ -159,12 +159,12 @@ int main(int argc, char** argv)
 		int arg0 = MIN(pyramid_height, rows-t-1);
 		int theHalo = HALO;
 
-                int gpuWallSize = 0;
-                int gpuSrcSize = 0;
-                int gpuResultsSize = 0;
-                int prevSize = 0;
-                int resultSize = 0;
-                int outputBufferSize = 0;
+                int gpuWallSize      = (size-cols);
+                int gpuSrcSize       = cols;
+                int gpuResultsSize   = cols;
+                int prevSize         = cl.localSize();
+                int resultSize       = cl.localSize();
+                int outputBufferSize = 16384;
 
 		// Set the kernel arguments.
 		clSetKernelArg(cl.kernel(kn), 0,  sizeof(cl_int), (void*) &arg0);
