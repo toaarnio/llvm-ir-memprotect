@@ -24,8 +24,8 @@
 // RUN: clang -target spir -S -c $TEST_SRC -O0 -emit-llvm -S -o $OUT_FILE.O0.ll &&
 // RUN: echo "Running and verifying 'Formantic Synthesis by Double Amplitude Modulation' case" &&
 // RUN: opt -S -O3 $OUT_FILE.O0.ll -o $OUT_FILE.O3.ll &&
-// RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers $OUT_FILE.O0.ll -o $OUT_FILE.O0.clamped.ll &&
-// RUN: opt -debug -S -load $CLAMP_PLUGIN -clamp-pointers $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
+// RUN: opt -S -load $CLAMP_PLUGIN -clamp-pointers $OUT_FILE.O0.ll -o $OUT_FILE.O0.clamped.ll &&
+// RUN: opt -S -load $CLAMP_PLUGIN -clamp-pointers $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
 // RUN: opt -S -O3 $OUT_FILE.O0.clamped.ll -o $OUT_FILE.O0.clamped.O3.ll &&
 // RUN: opt -S -O3 $OUT_FILE.O3.clamped.ll -o $OUT_FILE.O3.clamped.O3.ll &&
 // RUN: echo "Running original.O0:" &&

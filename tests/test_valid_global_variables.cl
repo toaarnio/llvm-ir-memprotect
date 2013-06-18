@@ -1,5 +1,5 @@
 // RUN: $OCLANG $TEST_SRC -S -O3 -o $OUT_FILE.ll &&
-// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
+// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: echo "Testing that when run with global work group size 6 only 1,2,3 and maybe 4 should print non-zero" &&
 // RUN: RESULT=`$RUN_KERNEL $OUT_FILE.clamped.ll test 6 "(float,{1,2,3,4,10,20}):(int,4):(float,{1,2,3,4,10,20}):(int,4)"` &&
 // ORIG KERNEL RUN: RESULT=`$RUN_KERNEL $OUT_FILE.ll test 6 "(float,{1,2,3,4,10,20}):(float,{1,2,3,4,10,20})"` &&
