@@ -9,8 +9,30 @@
 // RUN: [ $($RUN_KERNEL $OUT_FILE.O0.ll square 1 "(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64):(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64)") == $($RUN_KERNEL $OUT_FILE.O0.clamped.ll square 1 "(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64):(int,64):(float,{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64}):(int,64):(int,64)") ] &&
 // RUN: echo "Outputs matched." 
 
-// COMPILE TO PTX: 
-// clang -Dcl_clang_storage_class_specifiers -isystem ../../../../libclc/generic/include -include clc/clc.h -target nvptx -xcl test_synthetic_benchmark.cl -emit-llvm -S -O3 -o synthetic_case.ll; llvm-link ../../../../libclc/nvptx--nvidiacl/lib/builtins.bc synthetic_case.ll -o synthetic_case.linked.bc; clang -target nvptx -O3 synthetic_case.linked.bc -S -o synthetic_case.nvptx.s
+// COMPILE TO PTX with different settings:
+
+// clang -target nvptx--nvidiacl -I$LIBCLC/generic/include -Xclang -mlink-bitcode-file -Xclang $LIBCLC/nvptx--nvidiacl/lib/builtins.link.bc -include clc/clc.h -Dcl_clang_storage_class_specifiers -Dcl_khr_fp64 test_synthetic_benchmark.cl -S -emit-llvm -c -O0 -o synthetic_case.O0.ll
+// clang -target nvptx--nvidiacl -I$LIBCLC/generic/include -Xclang -mlink-bitcode-file -Xclang $LIBCLC/nvptx--nvidiacl/lib/builtins.link.bc -include clc/clc.h -Dcl_clang_storage_class_specifiers -Dcl_khr_fp64 test_synthetic_benchmark.cl -S -emit-llvm -c -O3 -o synthetic_case.O3.ll
+// opt -internalize -internalize-public-api-list=square -globaldce synthetic_case.O0.ll -S -o synthetic_case.O0.dce.ll
+// opt -internalize -internalize-public-api-list=square -globaldce synthetic_case.O3.ll -S -o synthetic_case.O3.dce.ll
+// opt -S -load $CLAMP_PLUGIN -clamp-pointers synthetic_case.O0.dce.ll -o synthetic_case.O0.clamped.ll
+// opt -S -load $CLAMP_PLUGIN -clamp-pointers synthetic_case.O3.dce.ll -o synthetic_case.O3.clamped.ll
+// opt -internalize -internalize-public-api-list=square -globaldce -inline synthetic_case.O0.clamped.ll -S -o synthetic_case.O0.clamped.dce.ll
+// opt -internalize -internalize-public-api-list=square -globaldce -inline synthetic_case.O3.clamped.ll -S -o synthetic_case.O3.clamped.dce.ll
+// opt -O3 synthetic_case.O0.clamped.dce.ll -S -o synthetic_case.O0.clamped.O3.ll
+// opt -O3 synthetic_case.O3.clamped.dce.ll -S -o synthetic_case.O3.clamped.O3.ll
+// llc -march=nvptx -mcpu=sm_21 synthetic_case.O0.dce.ll -o synthetic_case.O0.sm_21.ptx
+// llc -march=nvptx -mcpu=sm_30 synthetic_case.O3.dce.ll -o synthetic_case.O3.sm_30.ptx
+// llc -march=nvptx -mcpu=sm_21 synthetic_case.O0.clamped.dce.ll -o synthetic_case.O0.clamped.sm_21.ptx
+// llc -march=nvptx -mcpu=sm_30 synthetic_case.O0.clamped.dce.ll -o synthetic_case.O0.clamped.sm_30.ptx
+// llc -march=nvptx -mcpu=sm_21 synthetic_case.O3.clamped.dce.ll -o synthetic_case.O3.clamped.sm_21.ptx
+// llc -march=nvptx -mcpu=sm_30 synthetic_case.O3.clamped.dce.ll -o synthetic_case.O3.clamped.sm_30.ptx
+// llc -march=nvptx -mcpu=sm_21 synthetic_case.O0.clamped.O3.ll -o synthetic_case.O0.clamped.O3.sm_21.ptx
+// llc -march=nvptx -mcpu=sm_30 synthetic_case.O0.clamped.O3.ll -o synthetic_case.O0.clamped.O3.sm_30.ptx
+// llc -march=nvptx -mcpu=sm_21 synthetic_case.O3.clamped.O3.ll -o synthetic_case.O3.clamped.O3.sm_21.ptx
+// llc -march=nvptx -mcpu=sm_30 synthetic_case.O3.clamped.O3.ll -o synthetic_case.O3.clamped.O3.sm_30.ptx
+
+
 
 #define KERNEL_LOOP_COUNT 64
 
