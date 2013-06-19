@@ -22,6 +22,8 @@
 // opt -O3 synthetic_case.O0.clamped.dce.ll -S -o synthetic_case.O0.clamped.O3.ll
 // opt -O3 synthetic_case.O3.clamped.dce.ll -S -o synthetic_case.O3.clamped.O3.ll
 // llc -march=nvptx -mcpu=sm_21 synthetic_case.O0.dce.ll -o synthetic_case.O0.sm_21.ptx
+// llc -march=nvptx -mcpu=sm_30 synthetic_case.O0.dce.ll -o synthetic_case.O0.sm_30.ptx
+// llc -march=nvptx -mcpu=sm_21 synthetic_case.O3.dce.ll -o synthetic_case.O3.sm_21.ptx
 // llc -march=nvptx -mcpu=sm_30 synthetic_case.O3.dce.ll -o synthetic_case.O3.sm_30.ptx
 // llc -march=nvptx -mcpu=sm_21 synthetic_case.O0.clamped.dce.ll -o synthetic_case.O0.clamped.sm_21.ptx
 // llc -march=nvptx -mcpu=sm_30 synthetic_case.O0.clamped.dce.ll -o synthetic_case.O0.clamped.sm_30.ptx
