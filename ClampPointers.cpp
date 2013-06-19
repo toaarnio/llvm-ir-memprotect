@@ -1875,6 +1875,7 @@ namespace WebCL {
           functionManager.replaceArguments(replacedArguments);
           functionManager.replaceFunction(&*i, newFunction);
           functionManager.addSafeBuiltinFunction(newFunction);
+        
         } else if ( i->isDeclaration() && argsHasTransformedSafePointer(i->getArgumentList()) ) {
           functionManager.addSafeBuiltinFunction(i);
 
@@ -2621,20 +2622,11 @@ namespace WebCL {
       DEBUG( dbgs() << "not inbounds\n"; );
       return false;
     }
-
-    // TODO: try validity of this check... naive case where one clearly overindexes types with constant indices
-    if ( GlobalValue *baseVal = dyn_cast<GlobalValue>(gep->getPointerOperand()) ) {
-      DEBUG( dbgs() << "hasExternalLinkage: " << baseVal->hasExternalLinkage() << "\n"; );
-      return ( !(baseVal->hasExternalLinkage() && baseVal->isDeclaration()) || RunUnsafeMode);
-    }
-      
-    // check recursively if safe based on safe value....
-    if ( !isSafeAddressToLoad(gep->getPointerOperand()) ) {
-      DEBUG( dbgs() << ".. unknown baseval type, some general resolving method would be nice"; );
-      return false;
-    }
-      
-    return true;
+    
+    // TODO: get limiting dependency of operand
+    //       if allocation is static we can then check if GEP is in bounds
+    
+    return false;
   }
     
   /** 
