@@ -1554,7 +1554,7 @@ namespace WebCL {
       
       while (true) {
         next = getDependency(current);
-        if (current == next) break;
+        if (next == NULL || current == next) break;
         current = next;
       }
       return next;
@@ -1682,7 +1682,7 @@ namespace WebCL {
     Value* getDependency(Value *value) {
       ValueSet baseSet;
       getAllBaseDependencies(value, baseSet);
-      fast_assert( baseSet.size() != 0, "No dependencies were found? Maybe we should add some more deps to bookkeeping.");
+      if (baseSet.size() == 0) return NULL;
       fast_assert( baseSet.size() == 1, "More than 1 possible dependencies. Add here some more algorithm to resolve which one is the correct.");
       return (*baseSet.begin());
     }

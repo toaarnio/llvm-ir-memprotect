@@ -1,6 +1,6 @@
-// RUN: $OCLANG -c $TEST_SRC -O0 -emit-llvm -o $OUT_FILE.bc &&
+// RUN: $OCLANG -c $TEST_SRC -S -O0 -emit-llvm -o $OUT_FILE.ll &&
 // RUN: echo "Check that supported types compile fine." &&
-// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.bc -o $OUT_FILE.clamped.ll &&
+// RUN: opt -debug -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: $RUN_KERNEL $OUT_FILE.clamped.ll test_kernel 1 "(char,{10,10,10,10,10,10,10,10}):(int,8):(short,{20,20,20,20,20,20,20,20}):(int,8):(int,{30,30,30,30,30,30,30,30}):(int,8):(long,{40,40,40,40,40,40,40,40}):(int,8):(float,{50.0,50.0,50.0,50.0,50.0,50.0,50.0,50.0}):(int,8):(double,{70.0,70.0,70.0,70.0,70.0,70.0,70.0,70.0}):(int,8):(char,1):(short,2):(int,3):(long,4):(float,10.5):(double,100.01)" &&
 // RUN: echo "TEST THAT RESULT IS 48 OR SOMETHING LIKE THAT..." && false
 
