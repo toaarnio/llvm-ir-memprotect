@@ -1,5 +1,4 @@
 
-
 __constant float4 baseFactor = (float4)(1.0f,2.0f,3.0f,4.0f);
 
 void init_scratch(
@@ -71,8 +70,8 @@ typedef struct {
 } GlobalLimits;
 
 typedef struct {
-    __constant LocalAllocations *localAllocations_min, *localAllocations_max;
-    __constant float4 *scratch_min, *scratch_max;
+    __local LocalAllocations *localAllocations_min, *localAllocations_max;
+    __local float4 *scratch_min, *scratch_max;
 } LocalLimits;
  
 typedef struct {
@@ -203,7 +202,7 @@ typedef struct {
 } GlobalLimits;
 
 typedef struct {
-    __constant float4 *scratch_min, *scratch_max;
+    __local float4 *scratch_min, *scratch_max;
 } LocalLimits;
  
 typedef struct {
