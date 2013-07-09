@@ -1357,7 +1357,7 @@ namespace WebCL {
       Value* paa = getProgramAllocations(*F);
       min = blockBuilder.CreateGEP(paa, genIntVector<Value*>(c, 0, 3));
       min->setName("privateLimits.min");
-      Value* castedMinPtr = blockBuilder.CreateBitCast(min, PointerType::get(getASAllocationsType(privateAddressSpaceNumber), localAddressSpaceNumber),
+      Value* castedMinPtr = blockBuilder.CreateBitCast(min, PointerType::get(getASAllocationsType(privateAddressSpaceNumber), privateAddressSpaceNumber),
                                                        "privateLimits.min.casted");
       max = blockBuilder.CreateGEP(castedMinPtr, genIntVector<Value*>(c, 1));
       max->setName("privateLimits.max");
@@ -3152,7 +3152,6 @@ namespace WebCL {
     // convert function signature to use pointer structs instead of direct pointers
     SafeArgTypes args(c, typesOfArgumentList(F->getArgumentList()), dontTouchArguments, programAllocationsType);
     TypeVector& param_types = args.argTypes;
-    IntSet& safeTypeArgNos = args.safeArgNos; // argument numbers of safe parameters we have generated; used later for deciding when to not remove ByVal attribute
 
     // creating new function with different prototype 
     FunctionType *function_type = F->getFunctionType();
@@ -3160,11 +3159,13 @@ namespace WebCL {
 
     Function *new_function = Function::Create( new_function_type, F->getLinkage() );
     new_function->copyAttributesFrom( F );
+ 
+    new_function->removeAttributes(AttributeSet::FunctionIndex,
+                                   AttributeSet::get(c, AttributeSet::FunctionIndex, genVector(llvm::Attribute::NoInline)));
     new_function->arg_begin()->setName("ProgramAllocations");
  
     F->getParent()->getFunctionList().insert( F, new_function );
     new_function->setName( F->getName() + "__smart_ptrs__" );
-
 
     // add new function to book keepig to show what was replaced
     *functionMappingInserter++ = std::make_pair(F, new_function);
@@ -3173,21 +3174,46 @@ namespace WebCL {
     DEBUG( dbgs() << "\nnew signature: " << new_function->getName() << " "; new_function->getType()->print(dbgs()); dbgs() << "\n" );
 
     Function::arg_iterator a_new = skipPaa(new_function->arg_begin());
-
+    
+    // remove all attributes from first arg (ProgramAllocations)
+    AttributeSet currentAttrs = new_function->getAttributes().getParamAttributes(1);
+    new_function->removeAttributes(1, currentAttrs);
+    
     // map arguments of original function to new replacements
     for( Function::arg_iterator 
            a = F->arg_begin(), 
            E = F->arg_end();
          a != E;
          ++a, ++a_new ) {             
-      // remove attribute which does not make sense for non-pointer argument
+
       // getArgNo() starts from 0, but removeAttribute assumes them starting from 1 ( arg index 0 is the return value ).
       int argIdx = a_new->getArgNo()+1;
+
+      // move arguments one step forward to get all attributes back in correct position
+      if (argIdx > 1) {
+        AttributeSet currentAttrs = new_function->getAttributes().getParamAttributes(argIdx);
+        AttributeSet correctAttrs = F->getAttributes().getParamAttributes(argIdx-1);
+
+        DEBUG( dbgs() << "-- For argId: " << argIdx
+              << " oldAttrs: " << currentAttrs.getAsString(argIdx)
+              << " new attrs: " << correctAttrs.getAsString(argIdx-1) << "\n"; );
+        
+        new_function->removeAttributes(argIdx, currentAttrs.getParamAttributes(argIdx));
+
+        // Directly adding whole set for argument index just does not work on 3.3: new_function->addAttributes(argIdx, correctAttrs);
+        for (unsigned i = 0; i < correctAttrs.getNumSlots(); i++) {
+          for (AttributeSet::iterator iter = correctAttrs.begin(i); iter != correctAttrs.end(i); iter++) {
+            new_function->addAttribute(argIdx, iter->getKindAsEnum());
+          }
+        }
+      }
+  
+      // remove attribute which does not make sense for non-pointer argument
       new_function->removeAttributes(argIdx, AttributeSet::get(c, argIdx, genVector(llvm::Attribute::NoCapture)));
-      if (safeTypeArgNos.count(a_new->getArgNo())) {
+      if (!a_new->getType()->isPointerTy()) {
         new_function->removeAttributes(argIdx, AttributeSet::get(c, argIdx, genVector(llvm::Attribute::ByVal)));
       }
-        
+
       *argumentMappingInserter++ = std::make_pair(a, a_new);
       DEBUG( dbgs() << "Mapped orig arg: "; a->print(dbgs()); dbgs() << " -----> "; a_new->print(dbgs()); dbgs() << "\n" );
         

@@ -1,4 +1,4 @@
-// RUN: echo "Compiling with nvptx target to get IR with proper address spaces. With llvm 3.3 maybe could be changed to SPIR." &&
+// RUN: echo "Testing that different address spaces are created expectedly." &&
 // RUN: TARGET_FLAGS="-target spir" $OCLANG $TEST_SRC -S -O0 -o $OUT_FILE.ll &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -allow-unsafe-exceptions -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
 // RUN: if ! grep "%PrivateAllocationsType = type" $OUT_FILE.clamped.ll > /dev/null; then echo "Private address space was not found." && false; fi &&

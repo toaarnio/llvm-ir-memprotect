@@ -1,12 +1,7 @@
 // RUN: $OCLANG -c $TEST_SRC -O0 -S -o $OUT_FILE.ll &&
-// RUN: opt -O3 $OUT_FILE.ll -S -o $OUT_FILE.O3.ll &&
 // RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.ll -o $OUT_FILE.clamped.ll &&
-// RUN: opt -load $CLAMP_PLUGIN -clamp-pointers -S $OUT_FILE.O3.ll -o $OUT_FILE.O3.clamped.ll &&
-// RUN: echo "Check passing struct in function argument as value." &&
-// RUN: $RUN_KERNEL $OUT_FILE.clamped.ll test_kernel 1 "(int,{0}):(int,1):(int,{0}):(int,1)" &&
-// RUN: echo "Add check that kernel prints out 3" && false &&
-// RUN: $RUN_KERNEL $OUT_FILE.O3.clamped.ll test_kernel 1 "(int,{0}):(int,1):(int,{0}):(int,1)" &&
-// RUN: echo "Add check that kernel prints out 3" && false
+// RUN: echo "Check passing struct in function argument as value. Should count 3." &&
+// RUN: [ $($RUN_KERNEL $OUT_FILE.ll test_kernel 1 "(int,{0}):(int,{0})") == $($RUN_KERNEL $OUT_FILE.clamped.ll test_kernel 1 "(int,{0}):(int,1):(int,{0}):(int,1)") ]
 struct OkStruct {
   int first;
   float second;
