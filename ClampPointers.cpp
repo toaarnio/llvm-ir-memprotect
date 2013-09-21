@@ -42,6 +42,7 @@ RunUnsafeMode("allow-unsafe-exceptions",
         cl::desc("Will not change main() function signature allowing program to be ran. Adds main function arguments to safe exceptions list and allows calling external functions / extern variables."),
         cl::init(false), cl::Hidden);
 
+
 // Fast assert macro, which will not dump stack-trace to make tests run faster.
 #define fast_assert( condition, message ) do {                       \
     if ( (condition) == false ) {                                    \
@@ -652,7 +653,7 @@ namespace WebCL {
     // Add safe builtin implementation to bookkeeping
     void addSafeBuiltinFunction(Function* function) {
       Signature sig(function);
-      dbgs() << "Adding safe builtin: " << sig << " builtin count:" << safeBuiltinFunctionsBySig.size() << "\n";
+      DEBUG( dbgs() << "Adding safe builtin: " << sig << " builtin count:" << safeBuiltinFunctionsBySig.size() << "\n"; );
       safeBuiltinFunctionsBySig[sig] = function;
       safeBuiltinFunctions.insert(function);
     }
@@ -660,14 +661,14 @@ namespace WebCL {
     // Add original builtin implementation to bookkeeping
     void addUnsafeBuiltinFunction(Function* function) {
       Signature sig(function);
-      dbgs() << "Adding unsafe builtin: " << sig << " builtin count:" << unsafeBuiltinFunctionsBySig.size() << "\n";
+      DEBUG( dbgs() << "Adding unsafe builtin: " << sig << " builtin count:" << unsafeBuiltinFunctionsBySig.size() << "\n"; );
       unsafeBuiltinFunctionsBySig[sig] = function;
       unsafeBuiltinFunctions.insert(function);
     }
 
     Function* getSafeBuiltin(Function* unsafeFunc) {
       Signature sig(unsafeFunc);
-      dbgs() << "Getting safe builtin for: " << sig << "\n";
+      DEBUG( dbgs() << "Getting safe builtin for: " << sig << "\n"; );
       if (safeBuiltinFunctionsBySig.count(sig) > 0) {
         dbgs() << "Found: " << Signature(safeBuiltinFunctionsBySig[sig]) << "\n";
         return safeBuiltinFunctionsBySig[sig];
@@ -678,7 +679,7 @@ namespace WebCL {
 
     Function* getUnsafeBuiltin(Function* safeFunc) {
       Signature sig(safeFunc);
-      dbgs() << "Getting unsafe builtin for: " << sig << "\n";
+      DEBUG( dbgs() << "Getting unsafe builtin for: " << sig << "\n"; );
       if (safeBuiltinFunctionsBySig.count(sig) > 0)
         return unsafeBuiltinFunctionsBySig[sig];
       else
@@ -1878,7 +1879,7 @@ namespace WebCL {
 
     // does not exist
     void operator=(const AreaLimitManager&);
-        
+    
   };
 
   // Function signatures (where needed)
@@ -1887,7 +1888,8 @@ namespace WebCL {
   Function* createWebClKernel(Module &M, Function *origKernel, Function *smartKernel,
                               AddressSpaceInfoManager &infoManager);
 
-  template <typename Location> Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, Location* location);
+  template <typename Location> Value* convertArgumentToSmartStruct(
+      Value* origArg, Value* minLimit, Value* maxLimit, Location* location, Type* resultType = NULL);
 
   bool isSafeAddressToLoad(Value *operand);
 
@@ -2590,7 +2592,7 @@ namespace WebCL {
    * TODO: or just maybe we could create unnamed global variable and pass it to prevent polluting entry block too much
    */
   template <typename Location>
-  Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, Location* location) {
+  Value* convertArgumentToSmartStruct(Value* origArg, Value* minLimit, Value* maxLimit, Location* location, Type* resultType) {
     typedef LocationKind<Location> LK;
 
     DEBUG( dbgs() << (LK::initAtEnd ? "2" : "1") << "-Converting arg: "; origArg->print(dbgs());
@@ -2617,8 +2619,14 @@ namespace WebCL {
     new StoreInst(origArg, curGEP, location);
     new StoreInst(castedMinAddress, minGEP, location);
     new StoreInst(castedMaxAddress, maxGEP, location);
-    //LoadInst *smartArgVal = new LoadInst(smartArgStructAlloca, "", location);
-    return smartArgStructAlloca;
+    
+    // we could remove all smart struct creations and directly use ones from headers
+    if (resultType) {
+      CastInst *castedSmartStructPtr = BitCastInst::CreatePointerCast(smartArgStructAlloca, resultType, "", location);
+      return castedSmartStructPtr;
+    } else {
+      return smartArgStructAlloca;
+    }
   }
 
   /**
@@ -2870,38 +2878,18 @@ namespace WebCL {
       
       if ( safeBuiltin ) {
         ArgumentMap dummyArg;
-        // TODO: in case of found builtin safe builtin, just fix calling with correct arguments new function
-        fast_assert(false, "Implement calling dafe builtin version.");
         convertCallToUseSmartPointerArgs( call, safeBuiltin, dummyArg, areaLimitManager, false, infoManager, postponedInstrDeletes );
 
       } else if ( isWebClBuiltin(oldFun) ) {
-
         // if called function is webCLBuiltin and safe already
         std::string demangledName = extractItaniumDemangledFunctionName(oldFun->getName().str());
 
         // if not supported yet assert
         fast_assert( unsupportedUnsafeBuiltins.count(demangledName) == 0, 
                      "Tried to call unsupported builtin: " + oldFun->getName() + " " + demangledName);
-/*
-        // if unsafe fix call
-        if ( unsafeBuiltins.count(demangledName) > 0 ) {
-            
-          // if safe version is not yet generated do it first..
-          if ( safeBuiltins.count(oldFun) == 0 ) {
-            Function *newFun = createNewFunctionSignature(oldFun,
-                                                          std::inserter(safeBuiltins, safeBuiltins.begin()),
-                                                          std::inserter(dummyArgMap, dummyArgMap.begin()),
-                                                          programAllocationsType);
-            // simple name mangler to be able to select, which implementation to call (couldn't find easy way to do Itanium C++ mangling here)
-            // luckily the cases that needs mangling are pretty limited so we can keep it simple
-            newFun->setName(customMangle(oldFun, demangledName + "__safe__"));
-          }
-            
-          Function *newFun = safeBuiltins[oldFun];
-          ArgumentMap dummyArg;
-          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, areaLimitManager, false, infoManager, postponedInstrDeletes);
-        }
-*/
+
+        fast_assert( unsafeBuiltins.count(demangledName) == 0, "This builtin is dangerous to call and safe version was not found." );
+
       } else {
         if ( RunUnsafeMode ) {
           dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; 
@@ -2962,7 +2950,7 @@ namespace WebCL {
       Value* max;
       IRBuilder<> blockBuilder(call);
       limit->getBounds(call->getParent()->getParent(), blockBuilder, min, max);
-      retArg = convertArgumentToSmartStruct(operand, min, max, call);
+      retArg = convertArgumentToSmartStruct(operand, min, max, call, newArg->getType());
       removeAttribute = true;
 
     } else {
@@ -3028,16 +3016,11 @@ namespace WebCL {
     } else {
       int op = 0;
       newArgIter = newArgIter;
-      // pitää tehdä niin että newCallArguments (esim.) rakennetaan allaolevassa luupissa oikein ja sitten vasta
-      //   lopuksi korvataan - jos korvataan? muuten menee smartpointer-kutsut kätöseen.
       for( Function::arg_iterator a = oldFun->arg_begin(); a != oldFun->arg_end(); ++a ) {
         Argument* oldArg = a;
         Argument* newArg = newArgIter;
         newArgIter++;
         
-        // NOTE: If we would first expand smart pointer map, we might be able to resolve smart pointer for parameter
-        //       a lot easier... if there is need to add more and more special cases here, consider the option...
-
         bool removeAttribute;
         call->setOperand(op, replaceCallArgument(call, call->getOperand(op), oldArg, newArg, replacedArguments, removeAttribute, areaLimitManager));
         if (removeAttribute) {
@@ -3546,6 +3529,8 @@ namespace WebCL {
            ++it) {
         delete *it;
       }
+      
+      DEBUG( dbgs() << "------------- FINISHED TRANSFORMATION -----------\n"; );
 
       // Helps to print out resulted LLVM IR code if pass fails before writing results
       // on pass output validation
