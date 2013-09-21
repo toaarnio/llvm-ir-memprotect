@@ -90,7 +90,7 @@ else
 fi
 
 ret_val=$?
-
+ 
 if [ $ret_val -eq 0 ]; then
     rm -f $KRUNNER_C $KRUNNER_BC $KRUNNER_LINKED_BC
     rmdir $TEMP_DIR

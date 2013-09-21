@@ -22,10 +22,13 @@ safe-implementations-fakecl.bc: safe-implementations.cl ../tests/spir_kernel.h
 %.bc: %.cl
 	clang $(CLANGFLAGS) -I ../tests -x cl -target spir -Dcles_khr_int64 -Dcl_khr_fp16 -Dcl_khr_fp64 -emit-llvm -c $< -o $@
 
-builtin-declarations.ll: safe-implementations.clamped.ll
-	grep '^define.*\*.*\*.*\*' $< | sed 's/^define /declare /;s/ {$$//' > $@
+#builtin-declarations.ll: safe-implementations.clamped.ll
+#	grep '^define.*\*.*\*.*\*' $< | sed 's/^define /declare /;s/ {$$//' > $@
 
-library.bc: builtin-implementations.bc safe-implementations.clamped.bc
+#library.bc: builtin-implementations.bc safe-implementations.clamped.bc
+#	llvm-link $^ -o $@
+
+library.bc: builtin-implementations.bc safe-implementations.bc
 	llvm-link $^ -o $@
 
 library-fakecl.bc: builtin-implementations-fakecl.bc

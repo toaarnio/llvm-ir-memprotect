@@ -2483,33 +2483,61 @@ int get_image_height (image2d_t image);
 
 #endif
 
+#define DECLARE_SAFE_STRUCT_TYPE_Q(TYPE, Q)                       \
+  typedef struct { Q TYPE* cur; Q TYPE* begin; Q TYPE* end; } SafeStructType_##Q##_##TYPE;
+
+#define DECLARE_SAFE_STRUCT_TYPE_Q_N(TYPE, Q, N)                       \
+  typedef struct { Q TYPE##N* cur; Q TYPE##N* begin; Q TYPE##N* end; } SafeStructType_##Q##_##TYPE##N;
+
 #define IMPLEMENT_SAFE_VLOAD(TYPE, Q, N, DEFAULT)                       \
-  TYPE##N _cl_overloadable vload##N(long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end) { \
-    Q TYPE *ptr = cur + i * N;                                          \
-    if (ptr < begin) return (TYPE##N) DEFAULT;                          \
-    if (ptr + N > end) return (TYPE##N) DEFAULT;                        \
-    return vload##N(i, cur);                                            \
+  TYPE##N _cl_overloadable vload##N(long i, SafeStructType_##Q##_##TYPE* safe) { \
+    Q TYPE *ptr = safe->cur + i * N;                                          \
+    if (ptr < safe->begin) return (TYPE##N) DEFAULT;                          \
+    if (ptr + N > safe->end) return (TYPE##N) DEFAULT;                        \
+    return vload##N(i, safe->cur);                                            \
   }
 
 #define DECLARE_SAFE_VLOAD(TYPE, Q, N, DEFAULT)                       \
-  TYPE##N _cl_overloadable vload##N(long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end);
+  TYPE##N _cl_overloadable vload##N(long i, SafeStructType_##Q##_##TYPE* safe);
 
 #define REFER_SAFE_VLOAD(TYPE, Q, N)                    \
-  vload##N(0, (Q TYPE*) 0, (Q TYPE*) 0, (Q TYPE*) 0);
+  vload##N(0, (SafeStructType_##Q##_##TYPE*) 0);
 
 #define IMPLEMENT_SAFE_VSTORE(TYPE, Q, N)                               \
-  void _cl_overloadable vstore##N(TYPE##N x, long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end) { \
-    Q TYPE *ptr = cur + i * N;                                          \
-    if (ptr < begin) return;                                            \
-    if (ptr + N > end) return;                                          \
-    return vstore##N(x, i, cur);                                        \
+  void _cl_overloadable vstore##N(TYPE##N x, long i, SafeStructType_##Q##_##TYPE* safe) { \
+    Q TYPE *ptr = safe->cur + i * N;                                          \
+    if (ptr < safe->begin) return;                                            \
+    if (ptr + N > safe->end) return;                                          \
+    return vstore##N(x, i, safe->cur);                                        \
   }
 
 #define DECLARE_SAFE_VSTORE(TYPE, Q, N)                               \
-  void _cl_overloadable vstore##N(TYPE##N x, long i, Q TYPE* cur, Q TYPE* begin, Q TYPE* end);
+  void _cl_overloadable vstore##N(TYPE##N x, long i, SafeStructType_##Q##_##TYPE* safe);
 
 #define REFER_SAFE_VSTORE(TYPE, Q, N)                           \
-  vstore##N(*(TYPE*) clamppointers_mkpointer(), 0, (Q TYPE*) 0, (Q TYPE*) 0, (Q TYPE*) 0);
+  vstore##N(*(TYPE*) clamppointers_mkpointer(), 0, (SafeStructType_##Q##_##TYPE*) 0);
+
+#define DECLARE_SAFE_STRUCT_Q(Q)               \
+  DECLARE_SAFE_STRUCT_TYPE_Q(char, Q);             \
+  DECLARE_SAFE_STRUCT_TYPE_Q(uchar, Q);            \
+  DECLARE_SAFE_STRUCT_TYPE_Q(short, Q);            \
+  DECLARE_SAFE_STRUCT_TYPE_Q(ushort, Q);           \
+  DECLARE_SAFE_STRUCT_TYPE_Q(int, Q);              \
+  DECLARE_SAFE_STRUCT_TYPE_Q(uint, Q);             \
+  DECLARE_SAFE_STRUCT_TYPE_Q(long, Q);             \
+  DECLARE_SAFE_STRUCT_TYPE_Q(ulong, Q);            \
+  DECLARE_SAFE_STRUCT_TYPE_Q(float, Q);            \
+
+#define DECLARE_SAFE_STRUCT_Q_N(Q, N)               \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(char, Q, N);             \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(uchar, Q, N);            \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(short, Q, N);            \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(ushort, Q, N);           \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(int, Q, N);              \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(uint, Q, N);             \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(long, Q, N);             \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(ulong, Q, N);            \
+  DECLARE_SAFE_STRUCT_TYPE_Q_N(float, Q, N);            \
 
 #define IMPLEMENT_SAFE_VLOAD_N_TYPES(N, Q, DEFAULT)     \
   IMPLEMENT_SAFE_VLOAD(char, Q, N, DEFAULT);            \
@@ -2543,6 +2571,26 @@ int get_image_height (image2d_t image);
   REFER_SAFE_VLOAD(long, Q, N);                 \
   REFER_SAFE_VLOAD(ulong, Q, N);                \
   REFER_SAFE_VLOAD(float, Q, N);                   
+
+#define DECLARE_SAFE_STRUCT_N(N) \
+  DECLARE_SAFE_STRUCT_Q_N(__private, N); \
+  DECLARE_SAFE_STRUCT_Q_N(__global, N);  \
+  DECLARE_SAFE_STRUCT_Q_N(__const, N);   \
+  DECLARE_SAFE_STRUCT_Q_N(__local, N);   \
+
+#define DECLARE_SAFE_STRUCT() \
+  DECLARE_SAFE_STRUCT_Q(__private); \
+  DECLARE_SAFE_STRUCT_Q(__global);  \
+  DECLARE_SAFE_STRUCT_Q(__const);   \
+  DECLARE_SAFE_STRUCT_Q(__local);   \
+
+#define DECLARE_SAFE_STRUCT_ALL() \
+  DECLARE_SAFE_STRUCT();            \
+  DECLARE_SAFE_STRUCT_N(2);         \
+  DECLARE_SAFE_STRUCT_N(3);         \
+  DECLARE_SAFE_STRUCT_N(4);         \
+  DECLARE_SAFE_STRUCT_N(8);         \
+  DECLARE_SAFE_STRUCT_N(16);        \
 
 #define IMPLEMENT_SAFE_VLOAD_N(N, DEFAULT)             \
   IMPLEMENT_SAFE_VLOAD_N_TYPES(N, __private, DEFAULT); \
@@ -2609,6 +2657,9 @@ int get_image_height (image2d_t image);
   REFER_SAFE_VSTORE_N_TYPES(N, __private);  \
   REFER_SAFE_VSTORE_N_TYPES(N, __global);   \
   REFER_SAFE_VSTORE_N_TYPES(N, __local);
+
+
+DECLARE_SAFE_STRUCT_ALL()
 
 DECLARE_SAFE_ASYNC_COPY_FUNCS_ALL()
 

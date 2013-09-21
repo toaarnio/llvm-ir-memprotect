@@ -373,6 +373,30 @@ namespace WebCL {
     return result;
   }
 
+  /** Returns true if in function there is pointer which is pointer to struct
+   * that contains 3 similair pointers and there is only that kind of pointer
+   * arguments in functions.
+   */
+  bool argsHasSafePointer( llvm::Function::ArgumentListType& args ) {
+    bool result = false;
+    for ( llvm::Function::ArgumentListType::const_iterator argIt = args.begin();
+         !result && argIt != args.end();
+         ++argIt ) {
+      
+      PointerType *structPtr = dyn_cast<PointerType>(argIt->getType());
+      if (structPtr) {
+        if ( llvm::StructType* st = dyn_cast<StructType>(structPtr->getElementType()) ) {
+          const llvm::StructType::element_iterator firstEl = st->element_begin();
+          result = (st->element_end() - firstEl == 3 &&
+                    firstEl[0]->isPointerTy() &&
+                    firstEl[1]->isPointerTy() &&
+                    firstEl[2]->isPointerTy());
+        }
+      }
+    }
+    return result;
+  }
+  
   /* **SafeArgTypes** is the operation for making a smartptrized
    * version of a function signature. Look at the constructor 
    * for more documentation.
@@ -443,9 +467,14 @@ namespace WebCL {
   /** **Signature** class contains the part of the function
    * signature that identifies it: its demangled name and its
    * argument list. This is used for associating unsafe functions
-   * with their safe corresponding functions.  It can also be copied
+   * with their safe corresponding functions. It can also be copied
    * and it provides a comparison operator so it can be put into a
    * std::set or a std::map.
+   *
+   * Signature will compare to be equal for equal safe and unsafe
+   * builtin. e.g. 
+   * test_builtin(int4*, int) is equal with
+   * test_builtin({int4 *, int4*, int4*}*, int)
    *
    * This class needs to be defined outside the ClampPointers struct 
    * so that operator<< can be defined for it.
@@ -453,13 +482,15 @@ namespace WebCL {
   struct Signature {
     std::string       name;
     TypeVector        argTypes;
+    bool              isSafeSignature;
 
     Signature() {}
 
     Signature( llvm::Function* f ) :
       name( extractItaniumDemangledFunctionName(f->getName().str()) ),
-      argTypes( typesOfArgumentList(f->getArgumentList()) ) {
-      // nothing        
+      argTypes( typesOfArgumentList(f->getArgumentList()) ),
+      isSafeSignature(argsHasSafePointer(f->getArgumentList())) {
+        // nothing
     }
 
     bool operator<( const Signature& other ) const {
@@ -468,19 +499,36 @@ namespace WebCL {
       } else if ( name > other.name ) {
         return false;
       } else {
-        return argTypes < other.argTypes;
+        return compareArgs(argTypes, isSafeSignature, other.argTypes, other.isSafeSignature);
       }
     }
 
-    Signature safe( LLVMContext& c, Type* programAllocationsType ) {
-      SafeArgTypes safeAt( c, argTypes, false, programAllocationsType );
-      Signature s;
-      s.name = name;
-      s.argTypes = safeAt.argTypes;
-      return s;
+    // compares arguments
+    bool compareArgs(const TypeVector& me, bool meSafe,
+                     const TypeVector& other, bool otherSafe) const {
+      
+      if (me.size() < other.size()) return true;
+      for (unsigned aIdx=0; aIdx < me.size(); aIdx++) {
+        if (me[aIdx]->isPointerTy()) {
+          // extract actual pointer type to compare from safe pointer struct
+          const llvm::PointerType *mePtr = llvm::dyn_cast<const llvm::PointerType>(me[aIdx]);
+          const llvm::PointerType *otherPtr = llvm::dyn_cast<const llvm::PointerType>(other[aIdx]);
+          if (meSafe) mePtr = extractSafePtrInnerType(mePtr);
+          if (otherSafe) otherPtr = extractSafePtrInnerType(otherPtr);
+          return mePtr < otherPtr;
+        } else {
+          return me[aIdx] < other[aIdx];
+        }
+      }
+      return false;
     }
+    
+    const llvm::PointerType* extractSafePtrInnerType(const llvm::PointerType *safePrt) const {
+      return llvm::dyn_cast<const llvm::PointerType>(llvm::dyn_cast<llvm::StructType>(safePrt->getElementType())->getElementType(0));
+    }
+    
   };
-
+  
   llvm::raw_ostream& operator<<(llvm::raw_ostream& stream, const Signature& sig) {
     stream << sig.name << "(";
     bool first = true;
@@ -522,7 +570,6 @@ namespace WebCL {
   typedef std::map< Value*, AreaLimitBase* > AreaLimitByValueMap;
 
   class FunctionManager;
-  FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, const FunctionManager& functionManager );
 
   // keeps track of function replacements and builtin functions
   class FunctionManager {
@@ -591,7 +638,7 @@ namespace WebCL {
     }
 
     const AllocaInstrSet &getAllocas() const {
-      return allocas;
+      return allocas;		
     }
 
     const StoreInstrSet &getStores() const {
@@ -602,12 +649,40 @@ namespace WebCL {
       return loads;
     }
 
+    // Add safe builtin implementation to bookkeeping
     void addSafeBuiltinFunction(Function* function) {
+      Signature sig(function);
+      dbgs() << "Adding safe builtin: " << sig << " builtin count:" << safeBuiltinFunctionsBySig.size() << "\n";
+      safeBuiltinFunctionsBySig[sig] = function;
       safeBuiltinFunctions.insert(function);
     }
 
+    // Add original builtin implementation to bookkeeping
     void addUnsafeBuiltinFunction(Function* function) {
+      Signature sig(function);
+      dbgs() << "Adding unsafe builtin: " << sig << " builtin count:" << unsafeBuiltinFunctionsBySig.size() << "\n";
+      unsafeBuiltinFunctionsBySig[sig] = function;
       unsafeBuiltinFunctions.insert(function);
+    }
+
+    Function* getSafeBuiltin(Function* unsafeFunc) {
+      Signature sig(unsafeFunc);
+      dbgs() << "Getting safe builtin for: " << sig << "\n";
+      if (safeBuiltinFunctionsBySig.count(sig) > 0) {
+        dbgs() << "Found: " << Signature(safeBuiltinFunctionsBySig[sig]) << "\n";
+        return safeBuiltinFunctionsBySig[sig];
+      } else {
+        return NULL;
+      }
+    }
+
+    Function* getUnsafeBuiltin(Function* safeFunc) {
+      Signature sig(safeFunc);
+      dbgs() << "Getting unsafe builtin for: " << sig << "\n";
+      if (safeBuiltinFunctionsBySig.count(sig) > 0)
+        return unsafeBuiltinFunctionsBySig[sig];
+      else
+        return NULL;
     }
 
     const FunctionSet& getSafeBuiltinFunctions() const {
@@ -618,14 +693,12 @@ namespace WebCL {
       return unsafeBuiltinFunctions;
     }
 
-    const FunctionMap getUnsafeToSafeBuiltin() const {
-      return makeUnsafeToSafeMapping(M.getContext(), *this);
-    }
-
   private:
     // doesn't exist: the class is not copyable
     void operator=(FunctionManager& other);
 
+    typedef std::map<Signature, Function*> FunctionsBySafeSignature;
+        
     Module&         M;
 
     // Functions which has been replaced with new ones when signatures are modified.
@@ -642,43 +715,10 @@ namespace WebCL {
 
     FunctionSet    unsafeBuiltinFunctions;
     FunctionSet    safeBuiltinFunctions;
+    FunctionsBySafeSignature    unsafeBuiltinFunctionsBySig;
+    FunctionsBySafeSignature    safeBuiltinFunctionsBySig;
+    
   };
-
-  /** Given a list of unsafe builtin functions and safe builtin
-   * functions returns an association from the unsafe functions to
-   * matching safe functions. Matching is implemented by generating
-   * a safe version of the unsafe signature and checking if a
-   * matching signature can be found from the list of safe builtin
-   * functions.
-   */
-  FunctionMap makeUnsafeToSafeMapping( LLVMContext& c, 
-                                       const FunctionManager& functionManager ) {
-    FunctionMap mapping;
-    std::map<Signature, Function*> safeSignatureMap;
-      
-    const FunctionSet& safeBuiltinFunctions = functionManager.getSafeBuiltinFunctions();
-    for ( FunctionSet::const_iterator safeIt = safeBuiltinFunctions.begin();
-          safeIt != safeBuiltinFunctions.end();
-          ++safeIt ) {
-      safeSignatureMap[Signature(*safeIt)] = *safeIt;
-    }
-
-    const FunctionSet& unsafeBuiltinFunctions = functionManager.getUnsafeBuiltinFunctions();
-    for ( FunctionSet::const_iterator unsafeIt = unsafeBuiltinFunctions.begin();
-          unsafeIt != unsafeBuiltinFunctions.end();
-          ++unsafeIt ) {
-      Signature origSig = Signature(*unsafeIt);
-      Signature safeSig = origSig.safe(c, 0);
-      std::map<Signature, Function*>::const_iterator safeSigIt = 
-        safeSignatureMap.find(safeSig);
-      if ( safeSigIt != safeSignatureMap.end() ) {
-        mapping[*unsafeIt] = safeSigIt->second;
-        DEBUG( dbgs() << "Mapped " << origSig << " => " << safeSig << "\n"; );
-      }
-    }
-      
-    return mapping;
-  }
 
   class AreaLimitBase {
   public:
@@ -1860,7 +1900,7 @@ namespace WebCL {
                                         AreaLimitManager &areaLimitManager,
                                         bool useProgramAllocationsArgument,
                                         AddressSpaceInfoManager& infoManager,
-                                        InstrSet& postbonedInstrDeletes);
+                                        InstrSet& postponedInstrDeletes);
 
   Function* createNewFunctionSignature(Function *F,  
                                        std::insert_iterator<FunctionMap> functionMappingInserter,
@@ -1870,28 +1910,26 @@ namespace WebCL {
   // Function implementations
   void collectBuiltinFunctions(Module& M, 
                                FunctionManager& functionManager) {
-    // **Analyze all original functions.** Goes through all functions in module
-    // and creates new function signature for them and collects information of instructions
-    // that we will need in later transformations.
-    // If function is intrinsic or WebCL builtin declaration (we know how it will behave) we
-    // just skip it. If function is unknown external call compilation will fail.
-    for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
-      if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
-        if ( argsHasOriginalSafePointer(i->getArgumentList()) ) {
-          ArgumentMap replacedArguments;
-          Function* newFunction = transformSafeArguments(*i, replacedArguments);
-          // replacedArguments are used for fixing safe builtin implementation signatures
-          functionManager.replaceArguments(replacedArguments);
-          functionManager.replaceFunction(&*i, newFunction);
-          functionManager.addSafeBuiltinFunction(newFunction);
-        
-        } else if ( i->isDeclaration() && argsHasTransformedSafePointer(i->getArgumentList()) ) {
-          functionManager.addSafeBuiltinFunction(i);
 
-        } else if ( i->isDeclaration() && argsHasPointer(i->getArgumentList()) ) {
+    for( Module::iterator i = M.begin(); i != M.end(); ++i ) {
+      
+      if ( unsafeBuiltins.count(extractItaniumDemangledFunctionName(i->getName().str())) ) {
+        
+        // if not declaration wtf assert, we cannot give own implementations to builtins
+        fast_assert(i->isDeclaration(), "Builtin function name must be declaration, we cannot redefine builtin implemenatations.");
+        
+        if ( argsHasSafePointer((i->getArgumentList())) ) {
+          // if name is one of the known unsafe builtin and arg list has safe pointers already
+          // register to function manager as safe implementation (cannot be called direclty but is safe to run)
+          // also get arg list of corresponding original implementation and create two direction mapping to
+          // function manager.
+          functionManager.addSafeBuiltinFunction(i);
+          DEBUG( dbgs() << "Found safe builtin decl: " << i->getName() << "\n"; );
+        } else if (argsHasPointer(i->getArgumentList())) {
+          // if name is one of the known unsafe builtin register to function manager
+          // as unsafe implementation (which does not have safe pointers and can be called from input code)
           functionManager.addUnsafeBuiltinFunction(i);
-        } else {
-          // skip this case, just some other function
+          DEBUG( dbgs() << "Found original unsafe builtin decl: " << i->getName() << "\n"; );
         }
       }
     }
@@ -2478,7 +2516,6 @@ namespace WebCL {
     std::vector<Value*> args;
     args.push_back(programAllocationsArgument);
 
-      
     //TODO: fix calling smart kernel.. probably one can ask limits or even safe pointer directly from manager... 
 
     Function::arg_iterator origArg = origKernel->arg_begin();
@@ -2815,9 +2852,9 @@ namespace WebCL {
    * Goes through external function externalCalls and if call is unsafe opencl call convert it to safe webcl
    * implementation which operates with smart pointers
    */
-  void makeBuiltinCallsSafe(const CallInstrSet &externalCalls, const FunctionMap& unsafeToSafeBuiltin,
+  void makeBuiltinCallsSafe(const CallInstrSet &externalCalls, FunctionManager& functionManager,
                             Type* programAllocationsType, AddressSpaceInfoManager& infoManager, AreaLimitManager& areaLimitManager,
-                            InstrSet& postbonedInstrDeletes ) {
+                            InstrSet& postponedInstrDeletes ) {
     // if mapping is needed outside export this to be reference parameter instead of local 
     FunctionMap safeBuiltins;
     ArgumentMap dummyArgMap;
@@ -2828,21 +2865,24 @@ namespace WebCL {
       DEBUG( dbgs() << "---- Checking builtin call:"; call->print(dbgs()); dbgs() << "\n" );
         
       Function* oldFun = call->getCalledFunction();
+      Function* safeBuiltin = functionManager.getSafeBuiltin(oldFun);
 
-      FunctionMap::const_iterator unsafeToSafeBuiltinIt = unsafeToSafeBuiltin.find( oldFun );
-
-      if ( unsafeToSafeBuiltinIt != unsafeToSafeBuiltin.end() ) {
-        Function *newFun = unsafeToSafeBuiltinIt->second;
+      
+      if ( safeBuiltin ) {
         ArgumentMap dummyArg;
-        convertCallToUseSmartPointerArgs( call, newFun, dummyArg, areaLimitManager, false, infoManager, postbonedInstrDeletes );
+        // TODO: in case of found builtin safe builtin, just fix calling with correct arguments new function
+        fast_assert(false, "Implement calling dafe builtin version.");
+        convertCallToUseSmartPointerArgs( call, safeBuiltin, dummyArg, areaLimitManager, false, infoManager, postponedInstrDeletes );
+
       } else if ( isWebClBuiltin(oldFun) ) {
 
+        // if called function is webCLBuiltin and safe already
         std::string demangledName = extractItaniumDemangledFunctionName(oldFun->getName().str());
 
         // if not supported yet assert
         fast_assert( unsupportedUnsafeBuiltins.count(demangledName) == 0, 
                      "Tried to call unsupported builtin: " + oldFun->getName() + " " + demangledName);
-
+/*
         // if unsafe fix call
         if ( unsafeBuiltins.count(demangledName) > 0 ) {
             
@@ -2859,9 +2899,9 @@ namespace WebCL {
             
           Function *newFun = safeBuiltins[oldFun];
           ArgumentMap dummyArg;
-          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, areaLimitManager, false, infoManager, postbonedInstrDeletes);
+          convertCallToUseSmartPointerArgs(call, newFun, dummyArg, areaLimitManager, false, infoManager, postponedInstrDeletes);
         }
-
+*/
       } else {
         if ( RunUnsafeMode ) {
           dbgs() << "WARNING: Calling external function, which we cannot guarantee to be safe: "; 
@@ -2885,7 +2925,7 @@ namespace WebCL {
                                       const CallInstrSet &internalCalls,
                                       AddressSpaceInfoManager& infoManager,
                                       AreaLimitManager& areaLimitManager,
-                                      InstrSet& postbonedInstrDeletes) {
+                                      InstrSet& postponedInstrDeletes) {
     DUMP(iteratorDistance(internalCalls.begin(), internalCalls.end()));
     for (CallInstrSet::const_iterator i = internalCalls.begin(); i != internalCalls.end(); i++) {
       CallInst *call = *i;
@@ -2900,7 +2940,7 @@ namespace WebCL {
       }
 
       Function* newFun = replacedFunctions.find(oldFun)->second;
-      convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, areaLimitManager, true, infoManager, postbonedInstrDeletes);
+      convertCallToUseSmartPointerArgs(call, newFun, replacedArguments, areaLimitManager, true, infoManager, postponedInstrDeletes);
     }
   }
 
@@ -2941,7 +2981,7 @@ namespace WebCL {
                                         AreaLimitManager &areaLimitManager,
                                         bool useProgramAllocationsArgument,
                                         AddressSpaceInfoManager& infoManager,
-                                        InstrSet& postbonedInstrDeletes) {
+                                        InstrSet& postponedInstrDeletes) {
 
     Function* oldFun = call->getCalledFunction();
     call->setCalledFunction(newFun);
@@ -2982,7 +3022,7 @@ namespace WebCL {
       CallInst* newCall = CallInst::Create(newFun, newCallArguments, "", call);
       call->replaceAllUsesWith(newCall);
       call->removeFromParent();
-      postbonedInstrDeletes.insert(call);
+      postponedInstrDeletes.insert(call);
       infoManager.addReplacement(call, newCall);
       call = newCall;
     } else {
@@ -3328,7 +3368,7 @@ namespace WebCL {
       AreaLimitSetByAddressSpaceMap addressSpaceLimits;
       AddressSpaceStructByAddressSpaceMap addressSpaceStructs;
       GlobalValueMap addressSpaceEndPtrs;
-      InstrSet postbonedInstrDeletes;
+      InstrSet postponedInstrDeletes;
 
       // Set where is collected all values, which will not require boundary checks to
       // memory accesses. These have been resolved to be safe accesses in compile time.
@@ -3473,7 +3513,7 @@ namespace WebCL {
                                      functionManager.getInternalCalls(),
                                      addressSpaceInfoManager,
                                      areaLimitManager,
-                                     postbonedInstrDeletes);
+                                     postponedInstrDeletes);
       
       // Goes through all memory accesses and creates instrumentation to prevent any invalid accesses. NOTE: if opecl frontend actually
       // creates some memory intrinsics we might need to take care of checking their operands as well.
@@ -3498,11 +3538,11 @@ namespace WebCL {
       // version of it instead. Value limits are required to be able to resolve which limit to pass to safe builtin call.
       // [makeBuiltinCallsSafe( ... )](#makeBuiltinCallsSafe)
       DEBUG( dbgs() << "\n --------------- FIX BUILTIN CALLS TO CALL SAFE VERSIONS IF NECESSARY --------------\n" );
-      makeBuiltinCallsSafe(functionManager.getExternalCalls(), functionManager.getUnsafeToSafeBuiltin(),
-                           programAllocationsType, addressSpaceInfoManager, areaLimitManager, postbonedInstrDeletes);
+      makeBuiltinCallsSafe(functionManager.getExternalCalls(), functionManager,
+                           programAllocationsType, addressSpaceInfoManager, areaLimitManager, postponedInstrDeletes);
 
-      for (InstrSet::iterator it = postbonedInstrDeletes.begin();
-           it != postbonedInstrDeletes.end();
+      for (InstrSet::iterator it = postponedInstrDeletes.begin();
+           it != postponedInstrDeletes.end();
            ++it) {
         delete *it;
       }
